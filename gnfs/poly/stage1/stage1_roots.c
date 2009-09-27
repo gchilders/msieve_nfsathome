@@ -17,7 +17,7 @@ $Id$
 #define SIEVE_SIZE 16384
 #define LOG_SCALE 3.5
 
-#if 1
+#if 0
 #define CHECK
 #endif
 

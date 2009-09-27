@@ -14,7 +14,7 @@ $Id$
 
 #include "stage2.h"
 
-#if 1
+#if 0
 #define CHECK
 #endif
 
