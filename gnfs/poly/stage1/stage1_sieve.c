@@ -134,12 +134,15 @@ sieve_lattice_batch(lattice_fb_t *L)
 	p_batch_t *qbatch = L->q_array;
 	uint32 num_p = pbatch->num_p;
 	uint32 num_q = qbatch->num_p;
+	uint32 num_tests;
 
 	uint32 lattice_size[P_BATCH_SIZE];
 	uint64 inv[P_BATCH_SIZE];
 
-	for (i = 0; i < num_p; i++) {
+	for (i = num_tests = 0; i < num_p; i++) {
 		uint32 p = pbatch->p[i];
+
+		num_tests += pbatch->num_roots[i];
 		lattice_size[i] = sieve_size / ((double)p * p);
 	}
 
@@ -188,6 +191,17 @@ sieve_lattice_batch(lattice_fb_t *L)
 					}
 				}
 			}
+		}
+
+		L->num_tests += num_qroots * num_tests;
+		if (L->num_tests >= 4000000) {
+
+			double curr_time = get_cpu_time();
+			double elapsed = curr_time - L->start_time;
+
+			if (elapsed > L->deadline)
+				return 1;
+			L->num_tests = 0;
 		}
 	}
 

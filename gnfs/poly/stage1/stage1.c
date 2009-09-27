@@ -142,22 +142,22 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly,
 	double dn = mpz_get_d(poly->N);
 	uint32 digits = mpz_sizeinbase(poly->N, 10);
 	double start_time = get_cpu_time();
-	uint32 deadline_per_coeff = 800;
+	uint32 deadline_per_coeff = 1600;
 
 	if (digits <= 100)
-		deadline_per_coeff = 5;
+		deadline_per_coeff = 10;
 	else if (digits <= 105)
-		deadline_per_coeff = 20;
+		deadline_per_coeff = 40;
 	else if (digits <= 110)
-		deadline_per_coeff = 30;
+		deadline_per_coeff = 60;
 	else if (digits <= 120)
-		deadline_per_coeff = 50;
-	else if (digits <= 130)
 		deadline_per_coeff = 100;
-	else if (digits <= 140)
+	else if (digits <= 130)
 		deadline_per_coeff = 200;
-	else if (digits <= 150)
+	else if (digits <= 140)
 		deadline_per_coeff = 400;
+	else if (digits <= 150)
+		deadline_per_coeff = 800;
 	printf("deadline: %u seconds per coefficient\n", deadline_per_coeff);
 
 	mpz_init(curr_high_coeff);
