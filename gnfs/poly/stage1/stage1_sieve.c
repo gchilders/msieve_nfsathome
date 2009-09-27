@@ -151,6 +151,7 @@ sieve_lattice_batch(lattice_fb_t *L)
 		uint64 q2 = (uint64)q * q;
 		uint32 num_qroots = qbatch->num_roots[i];
 		uint64 qroots[MAX_ROOTS];
+		uint64 invprod;
 
 		for (j = 0; j < num_qroots; j++) {
 			uint32 qr0 = qbatch->roots[2*j][i];
@@ -158,11 +159,24 @@ sieve_lattice_batch(lattice_fb_t *L)
 			qroots[j] = (uint64)qr1 << 32 | qr0;
 		}
 
-		for (j = 0; j < num_p; j++) {
+		/* Montgomery's batch inverse algorithm */
+
+		inv[0] = invprod = (uint64)pbatch->p[0] * pbatch->p[0];
+		for (j = 1; j < num_p; j++) {
 			uint32 p = pbatch->p[j];
-			uint64 p2 = (uint64)p * p;
-			inv[j] = mp_modinv_2(p2, q2);
+			inv[j] = invprod = mp_modmul_2(invprod, 
+						(uint64)p * p, q2);
 		}
+
+		invprod = mp_modinv_2(invprod, q2);
+		for (j = num_p - 1; j; j--) {
+			uint32 p = pbatch->p[j];
+			inv[j] = mp_modmul_2(invprod, inv[j-1], q2);
+			invprod = mp_modmul_2(invprod, (uint64)p * p, q2);
+		}
+		inv[0] = invprod;
+
+		/* do the tests */
 
 		for (j = 0; j < num_p; j++) {
 			uint32 num_proots = pbatch->num_roots[j];
