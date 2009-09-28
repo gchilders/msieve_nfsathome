@@ -125,6 +125,107 @@ handle_collision(poly_search_t *poly,
 }
 
 /*------------------------------------------------------------------------*/
+static uint32 montmul_w(uint32 n) {
+
+	uint32 res = 2 + n;
+	res = res * (2 + n * res);
+	res = res * (2 + n * res);
+	res = res * (2 + n * res);
+	return res * (2 + n * res);
+}
+
+static uint64 montmul(uint64 a, uint64 b,
+			uint64 n, uint32 w) {
+
+	uint32 a0 = (uint32)a;
+	uint32 a1 = (uint32)(a >> 32);
+	uint32 b0 = (uint32)b;
+	uint32 b1 = (uint32)(b >> 32);
+	uint32 n0 = (uint32)n;
+	uint32 n1 = (uint32)(n >> 32);
+	uint64 prod;
+	uint32 acc0, acc1, acc2, nmult;
+
+	prod = (uint64)a0 * b0;
+	acc0 = (uint32)prod;
+	prod = (prod >> 32) + (uint64)a1 * b0;
+	acc1 = (uint32)prod;
+	acc2 = (uint32)(prod >> 32);
+
+	nmult = acc0 * w;
+	prod = acc0 + (uint64)nmult * n0;
+	prod = (prod >> 32) + (uint64)acc1 + (uint64)nmult * n1;
+	acc0 = (uint32)prod;
+	prod = (prod >> 32) + (uint64)acc2;
+	acc1 = (uint32)prod;
+	acc2 = (uint32)(prod >> 32);
+
+	prod = (uint64)acc0 + (uint64)a0 * b1;
+	acc0 = (uint32)prod;
+	prod = (prod >> 32) + (uint64)acc1 + (uint64)a1 * b1;
+	acc1 = (uint32)prod;
+	acc2 = (uint32)(prod >> 32) + acc2;
+
+	nmult = acc0 * w;
+	prod = acc0 + (uint64)nmult * n0;
+	prod = (prod >> 32) + (uint64)acc1 + (uint64)nmult * n1;
+	acc0 = (uint32)prod;
+	prod = (prod >> 32) + (uint64)acc2;
+	acc1 = (uint32)prod;
+	acc2 = (uint32)(prod >> 32);
+
+	prod = (uint64)acc1 << 32 | acc0;
+	if (acc2 || prod >= n)
+		return prod - n;
+	else
+		return prod;
+}
+
+static uint64 montmul_r(uint64 n, uint32 w) {
+
+	uint32 n1 = (uint32)(n >> 32);
+	uint32 shift;
+	uint32 i;
+	uint64 shifted_n;
+	uint64 res;
+
+#if defined(GCC_ASM32X) || defined(GCC_ASM64X) 
+	ASM_G("bsrl %1, %0": "=r"(shift) : "rm"(n1) : "cc");
+#else
+	uint32 mask = 0x80000000;
+	shift = 31;
+	if ((n1 >> 16) == 0) {
+		mask = 0x8000;
+		shift -= 16;
+	}
+
+	while ( !(n1 & mask) ) {
+		shift--;
+		mask >>= 1;
+	}
+#endif
+
+	shift = 31 - shift;
+	shifted_n = n << shift;
+	res = -shifted_n;
+
+	for (i = 64 - shift; i < 72; i++) {
+		if (res >> 63)
+			res = res + res - shifted_n;
+		else
+			res = res + res;
+
+		if (res >= shifted_n)
+			res -= shifted_n;
+	}
+
+	res = res >> shift;
+	res = montmul(res, res, n, w);
+	res = montmul(res, res, n, w);
+	return montmul(res, res, n, w);
+}
+
+/*------------------------------------------------------------------------*/
 static uint32
 sieve_lattice_batch(lattice_fb_t *L)
 {
@@ -138,6 +239,7 @@ sieve_lattice_batch(lattice_fb_t *L)
 
 	uint32 lattice_size[P_BATCH_SIZE];
 	uint64 inv[P_BATCH_SIZE];
+	uint64 p2[P_BATCH_SIZE];
 
 	for (i = num_tests = 0; i < num_p; i++) {
 		uint32 p = pbatch->p[i];
@@ -152,6 +254,8 @@ sieve_lattice_batch(lattice_fb_t *L)
 		uint32 num_qroots = qbatch->num_roots[i];
 		uint64 qroots[MAX_ROOTS];
 		uint64 invprod;
+		uint32 q2_w = montmul_w((uint32)q2);
+		uint64 q2_r = montmul_r(q2, q2_w);
 
 		for (j = 0; j < num_qroots; j++) {
 			uint32 qr0 = qbatch->roots[2*j][i];
@@ -161,18 +265,22 @@ sieve_lattice_batch(lattice_fb_t *L)
 
 		/* Montgomery's batch inverse algorithm */
 
-		inv[0] = invprod = (uint64)pbatch->p[0] * pbatch->p[0];
-		for (j = 1; j < num_p; j++) {
+		for (j = 0; j < num_p; j++) {
 			uint32 p = pbatch->p[j];
-			inv[j] = invprod = mp_modmul_2(invprod, 
-						(uint64)p * p, q2);
+			p2[j] = montmul((uint64)p * p, q2_r, q2, q2_w);
+		}
+
+		inv[0] = invprod = p2[0];
+		for (j = 1; j < num_p; j++) {
+			inv[j] = invprod = montmul(invprod, p2[j], q2, q2_w);
 		}
 
 		invprod = mp_modinv_2(invprod, q2);
+		invprod = montmul(invprod, q2_r, q2, q2_w);
+		invprod = montmul(invprod, q2_r, q2, q2_w);
 		for (j = num_p - 1; j; j--) {
-			uint32 p = pbatch->p[j];
-			inv[j] = mp_modmul_2(invprod, inv[j-1], q2);
-			invprod = mp_modmul_2(invprod, (uint64)p * p, q2);
+			inv[j] = montmul(invprod, inv[j-1], q2, q2_w);
+			invprod = montmul(invprod, p2[j], q2, q2_w);
 		}
 		inv[0] = invprod;
 
@@ -191,11 +299,11 @@ sieve_lattice_batch(lattice_fb_t *L)
 						
 				for (m = 0; m < num_qroots; m++) {
 	
-					uint64 res = mp_modmul_2(pinv,
+					uint64 res = montmul(pinv,
 								mp_modsub_2(
 								   qroots[m],
 								   proot, q2),
-								q2);
+								q2, q2_w);
 
 					if (res < plattice ||
 					    res >= q2 - plattice) {
