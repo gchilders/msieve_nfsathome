@@ -27,27 +27,46 @@ $Id$
 #define MAX_P_BITS 32
 #define MAX_P ((uint64)1 << MAX_P_BITS)
 
-#define P_BATCH_SIZE 1024
+/* structure to store batches of p values that are small on
+average, containing few factors on average */
+
+#define P_SMALL_BATCH_SIZE 4096
+#define MAX_SMALL_ROOTS 8
 
 typedef struct {
 	uint32 num_p;
 	uint32 pad[15];
 
-	uint32 num_roots[P_BATCH_SIZE];
-	uint32 p[P_BATCH_SIZE];
-	uint32 roots[2*MAX_ROOTS][P_BATCH_SIZE];
-} p_batch_t;
+	uint32 num_roots[P_SMALL_BATCH_SIZE];
+	uint32 p[P_SMALL_BATCH_SIZE];
+	uint32 roots[2*MAX_SMALL_ROOTS][P_SMALL_BATCH_SIZE];
+} p_small_batch_t;
+
+/* structure to store batches of p values that are large on
+average, containing many factors on average */
+
+#define P_LARGE_BATCH_SIZE 512
+#define MAX_LARGE_ROOTS MAX_ROOTS
 
 typedef struct {
-	p_batch_t *p_array;
-	p_batch_t *q_array;
+	uint32 num_p;
+	uint32 pad[15];
+
+	uint32 num_roots[P_LARGE_BATCH_SIZE];
+	uint32 p[P_LARGE_BATCH_SIZE];
+	uint32 roots[2*MAX_LARGE_ROOTS][P_LARGE_BATCH_SIZE];
+} p_large_batch_t;
+
+
+typedef struct {
+	p_small_batch_t *p_array;
+	p_large_batch_t *q_array;
 
 	poly_search_t *poly;
 
 	double start_time;
 	uint32 deadline;
 	uint32 num_tests;
-	uint32 fill_p_array;
 } lattice_fb_t;
 
 /*------------------------------------------------------------------------*/
@@ -68,8 +87,10 @@ lattice_fb_init(lattice_fb_t *L, poly_search_t *poly,
 	L->deadline = deadline;
 	L->num_tests = 0;
 
-	L->p_array = (p_batch_t *)aligned_malloc(sizeof(p_batch_t), 64);
-	L->q_array = (p_batch_t *)aligned_malloc(sizeof(p_batch_t), 64);
+	L->p_array = (p_small_batch_t *)aligned_malloc(
+				sizeof(p_small_batch_t), 64);
+	L->q_array = (p_large_batch_t *)aligned_malloc(
+				sizeof(p_large_batch_t), 64);
 }
 
 /*------------------------------------------------------------------------*/
@@ -231,15 +252,15 @@ sieve_lattice_batch(lattice_fb_t *L)
 {
 	uint32 i, j, k, m;
 	double sieve_size = L->poly->sieve_size;
-	p_batch_t *pbatch = L->p_array;
-	p_batch_t *qbatch = L->q_array;
+	p_small_batch_t *pbatch = L->p_array;
+	p_large_batch_t *qbatch = L->q_array;
 	uint32 num_p = pbatch->num_p;
 	uint32 num_q = qbatch->num_p;
 	uint32 num_tests;
 
-	uint32 lattice_size[P_BATCH_SIZE];
-	uint64 inv[P_BATCH_SIZE];
-	uint64 p2[P_BATCH_SIZE];
+	uint32 lattice_size[P_SMALL_BATCH_SIZE];
+	uint64 inv[P_SMALL_BATCH_SIZE];
+	uint64 p2[P_SMALL_BATCH_SIZE];
 
 	for (i = num_tests = 0; i < num_p; i++) {
 		uint32 p = pbatch->p[i];
@@ -316,7 +337,7 @@ sieve_lattice_batch(lattice_fb_t *L)
 		}
 
 		L->num_tests += num_qroots * num_tests;
-		if (L->num_tests >= 4000000) {
+		if (L->num_tests >= 8000000) {
 
 			double curr_time = get_cpu_time();
 			double elapsed = curr_time - L->start_time;
@@ -332,17 +353,36 @@ sieve_lattice_batch(lattice_fb_t *L)
 
 /*------------------------------------------------------------------------*/
 static void 
-store_progression(uint64 p, uint32 num_roots,
+store_small_p(uint64 p, uint32 num_roots,
 		mpz_t *roots, void *extra)
 {
 	lattice_fb_t *L = (lattice_fb_t *)extra;
-	p_batch_t *batch;
+	p_small_batch_t *batch = L->p_array;
 	uint32 num;
 	uint32 i;
 
-	batch = L->q_array;
-	if (L->fill_p_array)
-		batch = L->p_array;
+	num = batch->num_p;
+	batch->p[num] = (uint32)p;
+	batch->num_roots[num] = num_roots;
+
+	for (i = 0; i < num_roots; i++) {
+		uint64 root = gmp2uint64(roots[i]);
+
+		batch->roots[2*i][num] = (uint32)root;
+		batch->roots[2*i+1][num] = (uint32)(root >> 32);
+	}
+	batch->num_p++;
+}
+
+/*------------------------------------------------------------------------*/
+static void 
+store_large_p(uint64 p, uint32 num_roots,
+		mpz_t *roots, void *extra)
+{
+	lattice_fb_t *L = (lattice_fb_t *)extra;
+	p_large_batch_t *batch = L->q_array;
+	uint32 num;
+	uint32 i;
 
 	num = batch->num_p;
 	batch->p[num] = (uint32)p;
@@ -366,6 +406,7 @@ sieve_lattice_core(msieve_obj *obj, lattice_fb_t *L,
 {
 	uint32 i;
 	uint32 min_small, min_large;
+	uint32 degree = L->poly->degree;
 
 	printf("p %u %u %u %u\n",
 			small_p_min, small_p_max,
@@ -374,16 +415,15 @@ sieve_lattice_core(msieve_obj *obj, lattice_fb_t *L,
 	min_small = small_p_min;
 	sieve_fb_reset(sieve_small, 
 			(uint64)small_p_min, (uint64)small_p_max,
-			1, MAX_ROOTS);
+			1, degree);
 
 	while (min_small < small_p_max) {
 
-		L->fill_p_array = 1;
 		L->p_array->num_p = 0;
-		for (i = 0; i < P_BATCH_SIZE && 
+		for (i = 0; i < P_SMALL_BATCH_SIZE && 
 				min_small < small_p_max; i++) {
 			min_small = sieve_fb_next(sieve_small, L->poly,
-						store_progression, L);
+						store_small_p, L);
 		}
 		if (L->p_array->num_p == 0)
 			return 0;
@@ -393,16 +433,15 @@ sieve_lattice_core(msieve_obj *obj, lattice_fb_t *L,
 		min_large = large_p_min;
 		sieve_fb_reset(sieve_large, 
 				(uint64)large_p_min, (uint64)large_p_max,
-				1, MAX_ROOTS);
+				degree, MAX_ROOTS);
 
 		while (min_large <= large_p_max) {
 
-			L->fill_p_array = 0;
 			L->q_array->num_p = 0;
-			for (i = 0; i < P_BATCH_SIZE && 
+			for (i = 0; i < P_LARGE_BATCH_SIZE && 
 					min_large < large_p_max; i++) {
 				min_large = sieve_fb_next(sieve_large, L->poly,
-							store_progression, L);
+							store_large_p, L);
 			}
 			if (L->q_array->num_p == 0)
 				break;
