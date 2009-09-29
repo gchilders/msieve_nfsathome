@@ -80,11 +80,7 @@ void poly_search_free(poly_search_t *poly);
    can be up to 64 bits in size and the product of (powers 
    of) up to MAX_P_FACTORS distinct primes */
 
-#define MAX_P_FACTORS 4
-
-#define MAX_ROOTS 8
-
-/*-----------------------------------------------------------------------*/
+#define MAX_ROOTS 36
 
 typedef struct {
 	uint32 p;

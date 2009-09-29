@@ -21,9 +21,7 @@ $Id$
 #define CHECK
 #endif
 
-#if MAX_P_FACTORS > 4
-#error "too many factors"
-#endif
+#define MAX_P_FACTORS 5
 
 #define PRIME_P_LIMIT 0xfffff000
 
@@ -357,7 +355,7 @@ get_composite_roots_core(sieve_fb_t *s, poly_search_t *poly,
 			uint64 p, uint32 num_factors, 
 			uint32 *factors)
 {
-	uint32 i, j, k, i0, i1, i2, i3;
+	uint32 i, j, k, i0, i1, i2, i3, i4;
 	uint32 crt_p[MAX_P_FACTORS];
 	uint32 num_roots[MAX_P_FACTORS];
 	uint64 prod[MAX_P_FACTORS];
@@ -414,8 +412,14 @@ get_composite_roots_core(sieve_fb_t *s, poly_search_t *poly,
 	mpz_set_ui(s->accum[i], (mp_limb_t)0);
 	uint64_2gmp(p, s->p);
 
-	i0 = i1 = i2 = i3 = i = 0;
+	i0 = i1 = i2 = i3 = i4 = i = 0;
 	switch (num_factors) {
+	case 5:
+		for (i4 = num_roots[4] - 1; (int32)i4 >= 0; i4--) {
+			uint64_2gmp(prod[4], s->accum[4]);
+			mpz_mul_ui(s->accum[4], s->accum[4], 
+						(mp_limb_t)roots[4][i4]);
+			mpz_add(s->accum[4], s->accum[4], s->accum[5]);
 	case 4:
 		for (i3 = num_roots[3] - 1; (int32)i3 >= 0; i3--) {
 			uint64_2gmp(prod[3], s->accum[3]);
@@ -443,7 +447,7 @@ get_composite_roots_core(sieve_fb_t *s, poly_search_t *poly,
 
 			mpz_tdiv_r(s->accum[0], s->accum[0], s->p);
 			mpz_set(s->roots[i++], s->accum[0]);
-		}}}}
+		}}}}}
 	}
 
 	return i;
