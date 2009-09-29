@@ -417,8 +417,6 @@ sieve_lattice_core(msieve_obj *obj, lattice_fb_t *L,
 }
 
 /*------------------------------------------------------------------------*/
-#define P_SCALE 1.1
-
 void
 sieve_lattice(msieve_obj *obj, poly_search_t *poly, 
 		uint32 small_fb_max, uint32 large_fb_min, 
@@ -428,18 +426,42 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 	sieve_fb_t sieve_small, sieve_large;
 	uint32 small_p_min, small_p_max;
 	uint32 large_p_min, large_p_max;
+	uint32 bits;
+	double p_scale = 1.1;
 
 	if (poly->p_size_max >= (double)MAX_P * MAX_P) {
 		printf("error: rational leading coefficient is too large\n");
 		exit(-1);
 	}
+
+	bits = mpz_sizeinbase(poly->N, 2);
+	switch(poly->degree) {
+	case 4:
+		if (bits < 306)
+			p_scale = 1.3;
+		else if (bits < 323)
+			p_scale = 1.2;
+		break;
+
+	case 5:
+		if (bits < 363)
+			p_scale = 1.3;
+		else if (bits < 396)
+			p_scale = 1.2;
+		else if (bits < 420)
+			p_scale = 1.1;
+		else
+			p_scale = 1.03;
+		break;
+	}
+
 	large_p_min = sqrt(poly->p_size_max);
-	if (large_p_min >= MAX_P / P_SCALE)
+	if (large_p_min >= MAX_P / p_scale)
 		large_p_max = MAX_P - 1;
 	else
-		large_p_max = P_SCALE * large_p_min;
+		large_p_max = p_scale * large_p_min;
 
-	small_p_min = large_p_min / P_SCALE;
+	small_p_min = large_p_min / p_scale;
 	small_p_max = large_p_min - 1;
 
 	gmp_printf("coeff %Zd"
@@ -461,7 +483,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 		}
 
 		small_p_max = small_p_min - 1;
-		small_p_min = small_p_min / P_SCALE;
+		small_p_min = small_p_min / p_scale;
 
 		if (poly->p_size_max / small_p_max >= MAX_P)
 			break;
