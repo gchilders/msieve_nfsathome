@@ -136,7 +136,31 @@ uint64 sieve_fb_next(sieve_fb_t *s,
 
 /*-----------------------------------------------------------------------*/
 
-/* main search routines */
+typedef struct {
+	void *p_array;
+	void *q_array;
+
+	poly_search_t *poly;
+
+	double start_time;
+	uint32 deadline;
+	uint32 num_tests;
+} lattice_fb_t;
+
+
+/* lower-level sieve routines */
+
+uint32
+sieve_lattice_generic(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
+		uint32 small_p_min, uint32 small_p_max, 
+		uint32 large_p_min, uint32 large_p_max);
+
+void
+handle_collision(poly_search_t *poly,
+		uint64 p, uint64 proot, uint64 res, uint64 q);
+
+/* main search routine */
 
 void sieve_lattice(msieve_obj *obj, poly_search_t *poly, 
 			uint32 small_fb_max, uint32 large_fb_min, 
