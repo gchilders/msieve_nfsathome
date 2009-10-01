@@ -18,25 +18,19 @@ $Id$
 #define MAX_SMALL_ROOTS 1
 
 typedef struct {
-	uint32 num_p;
-	uint32 pad[15];
-
 	uint32 num_roots[P_SMALL_BATCH_SIZE];
 	uint32 lattice_size[P_SMALL_BATCH_SIZE];
 	uint32 p[P_SMALL_BATCH_SIZE];
-	uint32 roots[2*MAX_SMALL_ROOTS][P_SMALL_BATCH_SIZE];
+	uint64 roots[MAX_SMALL_ROOTS][P_SMALL_BATCH_SIZE];
 } p_small_batch_t;
 
 #define P_LARGE_BATCH_SIZE 1024
 #define MAX_LARGE_ROOTS 1
 
 typedef struct {
-	uint32 num_p;
-	uint32 pad[15];
-
 	uint32 num_roots[P_LARGE_BATCH_SIZE];
 	uint32 p[P_LARGE_BATCH_SIZE];
-	uint32 roots[2*MAX_LARGE_ROOTS][P_LARGE_BATCH_SIZE];
+	uint64 roots[MAX_LARGE_ROOTS][P_LARGE_BATCH_SIZE];
 } p_large_batch_t;
 
 /*------------------------------------------------------------------------*/
@@ -149,8 +143,8 @@ sieve_lattice_batch(lattice_fb_t *L)
 	uint32 i, j, k, m;
 	p_small_batch_t *pbatch = (p_small_batch_t *)L->p_array;
 	p_large_batch_t *qbatch = (p_large_batch_t *)L->q_array;
-	uint32 num_p = pbatch->num_p;
-	uint32 num_q = qbatch->num_p;
+	uint32 num_p = L->num_p;
+	uint32 num_q = L->num_q;
 
 	uint64 inv[P_SMALL_BATCH_SIZE];
 	uint64 p2[P_SMALL_BATCH_SIZE];
@@ -159,16 +153,9 @@ sieve_lattice_batch(lattice_fb_t *L)
 		uint32 q = qbatch->p[i];
 		uint64 q2 = (uint64)q * q;
 		uint32 num_qroots = qbatch->num_roots[i];
-		uint64 qroots[MAX_ROOTS];
 		uint64 invprod;
 		uint32 q2_w = montmul_w((uint32)q2);
 		uint64 q2_r = montmul_r(q2, q2_w);
-
-		for (j = 0; j < num_qroots; j++) {
-			uint32 qr0 = qbatch->roots[2*j][i];
-			uint32 qr1 = qbatch->roots[2*j+1][i];
-			qroots[j] = (uint64)qr1 << 32 | qr0;
-		}
 
 		/* Montgomery's batch inverse algorithm */
 
@@ -200,15 +187,14 @@ sieve_lattice_batch(lattice_fb_t *L)
 
 			for (k = 0; k < num_proots; k++) {
 
-				uint32 pr0 = pbatch->roots[2*k][j];
-				uint32 pr1 = pbatch->roots[2*k+1][j];
-				uint64 proot = (uint64)pr1 << 32 | pr0;
+				uint32 proot = pbatch->roots[k][j];
 						
 				for (m = 0; m < num_qroots; m++) {
 	
+					uint32 qroot = qbatch->roots[m][i];
 					uint64 res = montmul(pinv,
 								mp_modsub_2(
-								   qroots[m],
+								   qroot,
 								   proot, q2),
 								q2, q2_w);
 
@@ -247,19 +233,15 @@ store_small_p(uint64 p, uint32 num_roots,
 	uint32 num;
 	uint32 i;
 
-	num = batch->num_p;
+	num = L->num_p;
 	batch->p[num] = (uint32)p;
 	batch->num_roots[num] = num_roots;
 	batch->lattice_size[num] = L->poly->sieve_size / 
 					((double)p * p);
 
-	for (i = 0; i < num_roots; i++) {
-		uint64 root = gmp2uint64(roots[i]);
-
-		batch->roots[2*i][num] = (uint32)root;
-		batch->roots[2*i+1][num] = (uint32)(root >> 32);
-	}
-	batch->num_p++;
+	for (i = 0; i < num_roots; i++)
+		batch->roots[i][num] = gmp2uint64(roots[i]);
+	L->num_p++;
 }
 
 /*------------------------------------------------------------------------*/
@@ -272,17 +254,13 @@ store_large_p(uint64 p, uint32 num_roots,
 	uint32 num;
 	uint32 i;
 
-	num = batch->num_p;
+	num = L->num_q;
 	batch->p[num] = (uint32)p;
 	batch->num_roots[num] = num_roots;
 
-	for (i = 0; i < num_roots; i++) {
-		uint64 root = gmp2uint64(roots[i]);
-
-		batch->roots[2*i][num] = (uint32)root;
-		batch->roots[2*i+1][num] = (uint32)(root >> 32);
-	}
-	batch->num_p++;
+	for (i = 0; i < num_roots; i++)
+		batch->roots[i][num] = gmp2uint64(roots[i]);
+	L->num_q++;
 }
 
 /*------------------------------------------------------------------------*/
@@ -314,18 +292,18 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 
 	while (min_small < small_p_max) {
 
-		p_array->num_p = 0;
+		L->num_p = 0;
 		for (i = 0; i < P_SMALL_BATCH_SIZE && 
 				min_small < small_p_max; i++) {
 			min_small = sieve_fb_next(sieve_small, L->poly,
 						store_small_p, L);
 		}
 		L->num_tests = 0;
-		L->tests_per_block = p_array->num_p;
-		if (p_array->num_p == 0)
+		L->tests_per_block = L->num_p;
+		if (L->num_p == 0)
 			break;
 
-		printf("batch %u %u\n", p_array->num_p, min_small);
+		printf("batch %u %u\n", L->num_p, min_small);
 
 		min_large = large_p_min;
 		sieve_fb_reset(sieve_large, 
@@ -334,13 +312,13 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 
 		while (min_large <= large_p_max) {
 
-			q_array->num_p = 0;
+			L->num_q = 0;
 			for (i = 0; i < P_LARGE_BATCH_SIZE && 
 					min_large < large_p_max; i++) {
 				min_large = sieve_fb_next(sieve_large, L->poly,
 							store_large_p, L);
 			}
-			if (q_array->num_p == 0)
+			if (L->num_q == 0)
 				break;
 
 			if (sieve_lattice_batch(L) ||

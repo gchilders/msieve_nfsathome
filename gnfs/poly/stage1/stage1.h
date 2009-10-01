@@ -137,7 +137,9 @@ uint64 sieve_fb_next(sieve_fb_t *s,
 /*-----------------------------------------------------------------------*/
 
 typedef struct {
+	uint32 num_p;
 	void *p_array;
+	uint32 num_q;
 	void *q_array;
 
 	poly_search_t *poly;
