@@ -9,7 +9,7 @@ useful. Again optionally, if you add to the functionality present here
 please consider making those additions public too, so that others may 
 benefit from your work.	
 
-$Id: stage1_sieve_generic.c 79 2009-09-30 02:45:19Z jasonp_sf $
+$Id$
 --------------------------------------------------------------------*/
 
 #include "stage1.h"
