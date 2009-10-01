@@ -545,6 +545,11 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 			p = s->next_prime_p;
 			s->next_prime_p = 0;
 			num_roots = get_prime_roots(poly, (uint32)p, roots);
+
+	    		if (num_roots < s->num_roots_min ||
+			    num_roots > s->num_roots_max)
+				continue;
+
 			for (i = 0; i < num_roots; i++)
 				mpz_set_ui(s->roots[i], (mp_limb_t)roots[i]);
 		}
