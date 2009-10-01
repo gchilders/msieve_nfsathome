@@ -145,13 +145,20 @@ typedef struct {
 	double start_time;
 	uint32 deadline;
 	uint32 num_tests;
+	uint32 tests_per_block;
 } lattice_fb_t;
 
 
 /* lower-level sieve routines */
 
 uint32
-sieve_lattice_generic(msieve_obj *obj, lattice_fb_t *L, 
+sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
+		uint32 small_p_min, uint32 small_p_max, 
+		uint32 large_p_min, uint32 large_p_max);
+
+uint32
+sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
 		uint32 small_p_min, uint32 small_p_max, 
 		uint32 large_p_min, uint32 large_p_max);

@@ -150,12 +150,19 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 	lattice_fb_init(&L, poly, deadline);
 
 	while (1) {
-		if (sieve_lattice_generic(obj, &L, &sieve_small, &sieve_large,
+#if 1
+		if (sieve_lattice_gpu(obj, &L, &sieve_small, &sieve_large,
 					small_p_min, small_p_max,
 					large_p_min, large_p_max)) {
 			break;
 		}
-
+#else
+		if (sieve_lattice_cpu(obj, &L, &sieve_small, &sieve_large,
+					small_p_min, small_p_max,
+					large_p_min, large_p_max)) {
+			break;
+		}
+#endif
 		small_p_max = small_p_min - 1;
 		small_p_min = small_p_min / p_scale;
 
