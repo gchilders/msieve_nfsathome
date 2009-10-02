@@ -209,6 +209,13 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 					found_array_size * sizeof(found_t) / 
 					sizeof(uint32)))
 
+			num_blocks = gpu_info->num_compute_units;
+			if (L->num_q < found_array_size) {
+				num_blocks = (L->num_q + 
+					threads_per_block - 1) /
+					threads_per_block;
+			}
+
 			CUDA_TRY(cuLaunchGrid(gpu_kernel, num_blocks, 1))
 
 			CUDA_TRY(cuCtxSynchronize())
