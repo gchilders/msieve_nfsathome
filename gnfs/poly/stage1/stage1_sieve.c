@@ -134,7 +134,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 		break;
 	}
 
-	CUDA_TRY(cuCtxCreate(&gpu_context, 0, 
+	CUDA_TRY(cuCtxCreate(&gpu_context, CU_CTX_SCHED_YIELD,
 			gpu_info->device_handle))
 
 	CUDA_TRY(cuModuleLoad(&gpu_module, "stage1_core.ptx"))
@@ -179,6 +179,8 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 #endif
 		small_p_max = small_p_min - 1;
 		small_p_min = small_p_min / p_scale;
+		if (small_p_min < 2000)
+			break;
 
 		if (poly->p_size_max / small_p_max >= MAX_P)
 			break;
