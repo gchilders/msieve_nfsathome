@@ -211,7 +211,7 @@ sieve_kernel_p1xq1(p_small_batch_t *pbatch,
 			uint64 p2 = (uint64)p * p;
 			uint32 lattice_size = pbatch->lattice_size[j];
 			uint64 pinv = modinv(p2, q2);
-			uint64 proot = pbatch->roots[i];
+			uint64 proot = pbatch->roots[j];
 			uint64 res;
 
 			pinv = montmul(pinv, q2_r, q2, q2_w);
