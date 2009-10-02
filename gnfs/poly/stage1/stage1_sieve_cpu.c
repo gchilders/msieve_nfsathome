@@ -24,7 +24,7 @@ typedef struct {
 	uint64 roots[MAX_SMALL_ROOTS][P_SMALL_BATCH_SIZE];
 } p_small_batch_t;
 
-#define P_LARGE_BATCH_SIZE 1024
+#define P_LARGE_BATCH_SIZE 16384
 #define MAX_LARGE_ROOTS 1
 
 typedef struct {
@@ -187,11 +187,11 @@ sieve_lattice_batch(lattice_fb_t *L)
 
 			for (k = 0; k < num_proots; k++) {
 
-				uint32 proot = pbatch->roots[k][j];
+				uint64 proot = pbatch->roots[k][j];
 						
 				for (m = 0; m < num_qroots; m++) {
 	
-					uint32 qroot = qbatch->roots[m][i];
+					uint64 qroot = qbatch->roots[m][i];
 					uint64 res = montmul(pinv,
 								mp_modsub_2(
 								   qroot,
@@ -301,7 +301,7 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L,
 		L->num_tests = 0;
 		L->tests_per_block = L->num_p;
 		if (L->num_p == 0)
-			break;
+			goto finished;
 
 		printf("batch %u %u\n", L->num_p, min_small);
 
@@ -319,16 +319,17 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L,
 							store_large_p, L);
 			}
 			if (L->num_q == 0)
-				break;
+				goto finished;
 
 			if (sieve_lattice_batch(L) ||
 			    obj->flags & MSIEVE_FLAG_STOP_SIEVING) {
 				quit = 1;
-				break;
+				goto finished;
 			}
 		}
 	}
 
+finished:
 	aligned_free(p_array);
 	aligned_free(q_array);
 	return quit;
