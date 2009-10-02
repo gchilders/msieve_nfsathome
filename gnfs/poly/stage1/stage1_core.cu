@@ -23,7 +23,7 @@ typedef struct {
 	uint64 roots[P_SMALL_BATCH_SIZE];
 } p_small_batch_t;
 
-#define P_LARGE_BATCH_SIZE 1024
+#define P_LARGE_BATCH_SIZE 16384
 
 typedef struct {
 	uint32 p[P_LARGE_BATCH_SIZE];
@@ -179,6 +179,10 @@ montmul_r(uint64 n, uint32 w) {
 }
 
 /*------------------------------------------------------------------------*/
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 __global__ void
 sieve_kernel_p1xq1(p_small_batch_t *pbatch, 
                  uint32 num_p,
@@ -228,3 +232,7 @@ sieve_kernel_p1xq1(p_small_batch_t *pbatch,
 	if (my_found.p > 0)
 		found_array[my_threadid] = my_found;
 }
+
+#ifdef __cplusplus
+}
+#endif

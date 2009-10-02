@@ -12,28 +12,18 @@
 #  $Id$
 # --------------------------------------------------------------------
 
-# xlc on AIX; note that apparently a 64-bit binary crashes
-# CC = xlc -D_FILE_OFFSET_BITS=64
-# OPT_FLAGS = -O2 -DNDEBUG
-# MACHINE_FLAGS = -DRS6K -qmaxmem=8192 -q32
-
-# gcc on Apple G5; for 64-bit mode, add '-m64'
-# CC = gcc -D_FILE_OFFSET_BITS=64
-# OPT_FLAGS = -O3 -mcpu=970 -mtune=970 \
-#		-fomit-frame-pointer -DNDEBUG
-# OPT_FLAGS = -O3 -mcpu=7450 -mtune=7450 \
-#		-fomit-frame-pointer -DNDEBUG
-# WARN_FLAGS = -Wall -W -Wconversion
-
 # gcc with basic optimization (-march flag could
 # get overridden by architecture-specific builds)
 CC = gcc -D_FILE_OFFSET_BITS=64
-WARN_FLAGS = -Wall -W -Wconversion
 WARN_FLAGS = -Wall -W
 OPT_FLAGS = -O3 -fomit-frame-pointer -march=athlon-xp -DNDEBUG
 #OPT_FLAGS = -O3 -fomit-frame-pointer -march=k8 -DNDEBUG
 
-CFLAGS = $(OPT_FLAGS) $(MACHINE_FLAGS) $(WARN_FLAGS) -I. -Iinclude -Ignfs/poly
+CUDA_INC_DIR = $(shell echo $$CUDA_INC_PATH)
+CUDA_LIB_DIR = $(shell echo $$CUDA_LIB_PATH)
+
+CFLAGS = $(OPT_FLAGS) $(MACHINE_FLAGS) $(WARN_FLAGS) \
+		-I. -Iinclude -Ignfs -Ignfs/poly -I$(CUDA_INC_DIR)
 
 # tweak the compile flags
 ifeq ($(ECM),1)
@@ -47,7 +37,10 @@ endif
 # Note to MinGW users: the library does not use pthread calls in
 # win32 or win64, so it's safe to pull libpthread into the link line.
 # Of course this does mean you have to install the minGW pthreads bundle...
-LIBS += -lgmp -lm -lpthread
+#
+# Also, the CUDA driver library has a different name in linux
+LIBS += -lgmp -lm -lpthread $(CUDA_LIB_DIR)/cuda.lib
+# LIBS += -lgmp -lm -lpthread -lcuda
 
 #---------------------------------- Generic file lists -------------------
 
@@ -58,6 +51,7 @@ COMMON_HDR = \
 	common/filter/merge_util.h \
 	include/batch_factor.h \
 	include/common.h \
+	include/cuda_xface.h \
 	include/dd.h \
 	include/ddcomplex.h \
 	include/gmp_xface.h \
@@ -86,6 +80,7 @@ COMMON_SRCS = \
 	common/smallfact/squfof.c \
 	common/smallfact/tinyqs.c \
 	common/batch_factor.c \
+	common/cuda_xface.c \
 	common/dickman.c \
 	common/driver.c \
 	common/expr_eval.c \
@@ -183,6 +178,11 @@ NFS_SRCS = \
 
 NFS_OBJS = $(NFS_SRCS:.c=.no)
 
+#---------------------------------- GPU file lists -------------------------
+
+GPU_OBJS = \
+	stage1_core.ptx
+
 #---------------------------------- make targets -------------------------
 
 all:
@@ -193,7 +193,7 @@ all:
 	@echo "add 'ECM=1' if GMP-ECM is available (enables ECM)"
 
 x86: $(COMMON_OBJS) $(QS_OBJS) $(QS_CORE_OBJS) \
-		$(QS_CORE_OBJS_X86) $(NFS_OBJS)
+		$(QS_CORE_OBJS_X86) $(NFS_OBJS) $(GPU_OBJS)
 	rm -f libmsieve.a
 	ar r libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
 			$(QS_CORE_OBJS) $(QS_CORE_OBJS_X86) \
@@ -223,7 +223,7 @@ generic: $(COMMON_OBJS) $(QS_OBJS) $(QS_CORE_OBJS) $(NFS_OBJS)
 clean:
 	rm -f msieve msieve.exe libmsieve.a $(COMMON_OBJS) 	\
 		$(QS_OBJS) $(QS_CORE_OBJS) $(QS_CORE_OBJS_X86) \
-		$(QS_CORE_OBJS_X86_64) $(NFS_OBJS)
+		$(QS_CORE_OBJS_X86_64) $(NFS_OBJS) $(GPU_OBJS)
 
 #----------------------------------------- build rules ----------------------
 
@@ -306,3 +306,8 @@ mpqs/sieve_core_k8_64_64k.qo: mpqs/sieve_core.c $(COMMON_HDR) $(QS_HDR)
 
 %.no: %.c $(COMMON_HDR) $(NFS_HDR)
 	$(CC) $(CFLAGS) -Ignfs -c -o $@ $<
+
+# GPU build rules
+
+stage1_core.ptx: gnfs/poly/stage1/stage1_core.cu
+	nvcc -ptx -o $@ gnfs/poly/stage1/stage1_core.cu

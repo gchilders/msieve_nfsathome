@@ -13,215 +13,31 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include "stage1.h"
+#include <cuda_xface.h>
 
 #define P_SMALL_BATCH_SIZE 1024
-#define MAX_SMALL_ROOTS 1
 
 typedef struct {
 	uint32 num_roots[P_SMALL_BATCH_SIZE];
 	uint32 lattice_size[P_SMALL_BATCH_SIZE];
 	uint32 p[P_SMALL_BATCH_SIZE];
-	uint64 roots[MAX_SMALL_ROOTS][P_SMALL_BATCH_SIZE];
+	uint64 roots[P_SMALL_BATCH_SIZE];
 } p_small_batch_t;
 
-#define P_LARGE_BATCH_SIZE 1024
-#define MAX_LARGE_ROOTS 1
+#define P_LARGE_BATCH_SIZE 16384
 
 typedef struct {
 	uint32 num_roots[P_LARGE_BATCH_SIZE];
 	uint32 p[P_LARGE_BATCH_SIZE];
-	uint64 roots[MAX_LARGE_ROOTS][P_LARGE_BATCH_SIZE];
+	uint64 roots[P_LARGE_BATCH_SIZE];
 } p_large_batch_t;
 
-/*------------------------------------------------------------------------*/
-static uint32 montmul_w(uint32 n) {
-
-	uint32 res = 2 + n;
-	res = res * (2 + n * res);
-	res = res * (2 + n * res);
-	res = res * (2 + n * res);
-	return res * (2 + n * res);
-}
-
-static uint64 montmul(uint64 a, uint64 b,
-			uint64 n, uint32 w) {
-
-	uint32 a0 = (uint32)a;
-	uint32 a1 = (uint32)(a >> 32);
-	uint32 b0 = (uint32)b;
-	uint32 b1 = (uint32)(b >> 32);
-	uint32 n0 = (uint32)n;
-	uint32 n1 = (uint32)(n >> 32);
-	uint64 prod;
-	uint32 acc0, acc1, acc2, nmult;
-
-	prod = (uint64)a0 * b0;
-	acc0 = (uint32)prod;
-	prod = (prod >> 32) + (uint64)a1 * b0;
-	acc1 = (uint32)prod;
-	acc2 = (uint32)(prod >> 32);
-
-	nmult = acc0 * w;
-	prod = acc0 + (uint64)nmult * n0;
-	prod = (prod >> 32) + (uint64)acc1 + (uint64)nmult * n1;
-	acc0 = (uint32)prod;
-	prod = (prod >> 32) + (uint64)acc2;
-	acc1 = (uint32)prod;
-	acc2 = (uint32)(prod >> 32);
-
-	prod = (uint64)acc0 + (uint64)a0 * b1;
-	acc0 = (uint32)prod;
-	prod = (prod >> 32) + (uint64)acc1 + (uint64)a1 * b1;
-	acc1 = (uint32)prod;
-	acc2 = (uint32)(prod >> 32) + acc2;
-
-	nmult = acc0 * w;
-	prod = acc0 + (uint64)nmult * n0;
-	prod = (prod >> 32) + (uint64)acc1 + (uint64)nmult * n1;
-	acc0 = (uint32)prod;
-	prod = (prod >> 32) + (uint64)acc2;
-	acc1 = (uint32)prod;
-	acc2 = (uint32)(prod >> 32);
-
-	prod = (uint64)acc1 << 32 | acc0;
-	if (acc2 || prod >= n)
-		return prod - n;
-	else
-		return prod;
-}
-
-/*------------------------------------------------------------------------*/
-static uint64 
-montmul_r(uint64 n, uint32 w) {
-
-	uint32 n1 = (uint32)(n >> 32);
-	uint32 shift;
-	uint32 i;
-	uint64 shifted_n;
-	uint64 res;
-
-#if defined(GCC_ASM32X) || defined(GCC_ASM64X) 
-	ASM_G("bsrl %1, %0": "=r"(shift) : "rm"(n1) : "cc");
-#else
-	uint32 mask = 0x80000000;
-	shift = 31;
-	if ((n1 >> 16) == 0) {
-		mask = 0x8000;
-		shift -= 16;
-	}
-
-	while ( !(n1 & mask) ) {
-		shift--;
-		mask >>= 1;
-	}
-#endif
-
-	shift = 31 - shift;
-	shifted_n = n << shift;
-	res = -shifted_n;
-
-	for (i = 64 - shift; i < 72; i++) {
-		if (res >> 63)
-			res = res + res - shifted_n;
-		else
-			res = res + res;
-
-		if (res >= shifted_n)
-			res -= shifted_n;
-	}
-
-	res = res >> shift;
-	res = montmul(res, res, n, w);
-	res = montmul(res, res, n, w);
-	return montmul(res, res, n, w);
-}
-
-/*------------------------------------------------------------------------*/
-static uint32
-sieve_lattice_batch(lattice_fb_t *L)
-{
-	uint32 i, j, k, m;
-	p_small_batch_t *pbatch = (p_small_batch_t *)L->p_array;
-	p_large_batch_t *qbatch = (p_large_batch_t *)L->q_array;
-	uint32 num_p = L->num_p;
-	uint32 num_q = L->num_q;
-
-	uint64 inv[P_SMALL_BATCH_SIZE];
-	uint64 p2[P_SMALL_BATCH_SIZE];
-
-	for (i = 0; i < num_q; i++) {
-		uint32 q = qbatch->p[i];
-		uint64 q2 = (uint64)q * q;
-		uint32 num_qroots = qbatch->num_roots[i];
-		uint64 invprod;
-		uint32 q2_w = montmul_w((uint32)q2);
-		uint64 q2_r = montmul_r(q2, q2_w);
-
-		/* Montgomery's batch inverse algorithm */
-
-		for (j = 0; j < num_p; j++) {
-			uint32 p = pbatch->p[j];
-			p2[j] = montmul((uint64)p * p, q2_r, q2, q2_w);
-		}
-
-		inv[0] = invprod = p2[0];
-		for (j = 1; j < num_p; j++) {
-			inv[j] = invprod = montmul(invprod, p2[j], q2, q2_w);
-		}
-
-		invprod = mp_modinv_2(invprod, q2);
-		invprod = montmul(invprod, q2_r, q2, q2_w);
-		invprod = montmul(invprod, q2_r, q2, q2_w);
-		for (j = num_p - 1; j; j--) {
-			inv[j] = montmul(invprod, inv[j-1], q2, q2_w);
-			invprod = montmul(invprod, p2[j], q2, q2_w);
-		}
-		inv[0] = invprod;
-
-		/* do the tests */
-
-		for (j = 0; j < num_p; j++) {
-			uint32 num_proots = pbatch->num_roots[j];
-			uint32 plattice = pbatch->lattice_size[j];
-			uint64 pinv = inv[j];
-
-			for (k = 0; k < num_proots; k++) {
-
-				uint32 proot = pbatch->roots[k][j];
-						
-				for (m = 0; m < num_qroots; m++) {
-	
-					uint32 qroot = qbatch->roots[m][i];
-					uint64 res = montmul(pinv,
-								mp_modsub_2(
-								   qroot,
-								   proot, q2),
-								q2, q2_w);
-
-					if (res < plattice ||
-					    res >= q2 - plattice) {
-						handle_collision(L->poly,
-							(uint64)pbatch->p[j],
-							proot, res, (uint64)q);
-					}
-				}
-			}
-		}
-
-		L->num_tests += num_qroots * L->tests_per_block;
-		if (L->num_tests >= 1000000) {
-
-			double curr_time = get_cpu_time();
-			double elapsed = curr_time - L->start_time;
-
-			if (elapsed > L->deadline)
-				return 1;
-			L->num_tests = 0;
-		}
-	}
-
-	return 0;
-}
+typedef struct {
+	uint32 p;
+	uint32 q;
+	uint64 offset;
+	uint64 proot;
+} found_t;
 
 /*------------------------------------------------------------------------*/
 static void 
@@ -231,16 +47,15 @@ store_small_p(uint64 p, uint32 num_roots,
 	lattice_fb_t *L = (lattice_fb_t *)extra;
 	p_small_batch_t *batch = (p_small_batch_t *)L->p_array;
 	uint32 num;
-	uint32 i;
 
+	if (num_roots != 1) {
+		printf("error: too many q roots\n");
+		exit(-1);
+	}
 	num = L->num_p;
 	batch->p[num] = (uint32)p;
-	batch->num_roots[num] = num_roots;
-	batch->lattice_size[num] = L->poly->sieve_size / 
-					((double)p * p);
-
-	for (i = 0; i < num_roots; i++)
-		batch->roots[i][num] = gmp2uint64(roots[i]);
+	batch->lattice_size[num] = L->poly->sieve_size / ((double)p * p);
+	batch->roots[num] = gmp2uint64(roots[0]);
 	L->num_p++;
 }
 
@@ -252,14 +67,14 @@ store_large_p(uint64 p, uint32 num_roots,
 	lattice_fb_t *L = (lattice_fb_t *)extra;
 	p_large_batch_t *batch = (p_large_batch_t *)L->q_array;
 	uint32 num;
-	uint32 i;
 
+	if (num_roots != 1) {
+		printf("error: too many q roots\n");
+		exit(-1);
+	}
 	num = L->num_q;
 	batch->p[num] = (uint32)p;
-	batch->num_roots[num] = num_roots;
-
-	for (i = 0; i < num_roots; i++)
-		batch->roots[i][num] = gmp2uint64(roots[i]);
+	batch->roots[num] = gmp2uint64(roots[0]);
 	L->num_q++;
 }
 
@@ -275,20 +90,70 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 	uint32 quit = 0;
 	p_small_batch_t * p_array;
 	p_large_batch_t * q_array;
+	found_t *found_array;
+	uint32 found_array_size;
 
-	p_array = L->p_array = (p_small_batch_t *)aligned_malloc(
-					sizeof(p_small_batch_t), 64);
-	q_array = L->q_array = (p_large_batch_t *)aligned_malloc(
-					sizeof(p_large_batch_t), 64);
+	gpu_info_t *gpu_info;
+	gpu_config_t gpu_config;
+	CUcontext gpu_context;
+	CUmodule gpu_module;
+	CUfunction gpu_kernel;
+
+	CUdeviceptr gpu_p_array;
+	CUdeviceptr gpu_q_array;
+	CUdeviceptr gpu_found_array;
+	void *gpu_ptr;
+	uint32 threads_per_block;
+	uint32 num_blocks;
+
+	gpu_init(&gpu_config);
+	if (gpu_config.num_gpu == 0) {
+		printf("error: no CUDA-enabled GPUs found\n");
+		exit(-1);
+	}
+
+	/* choose the first GPU in the list */
+	gpu_info = &gpu_config.info[0];
+	logprintf(obj, "choosing GPU 0 (%s)\n", gpu_info->name);
+	CUDA_TRY(cuCtxCreate(&gpu_context, 0, 
+			gpu_info->device_handle))
+
+	CUDA_TRY(cuModuleLoad(&gpu_module, "stage1_core.ptx"))
+
+	CUDA_TRY(cuModuleGetFunction(&gpu_kernel, gpu_module, 
+				"sieve_kernel_p1xq1"))
+
+	p_array = L->p_array = (p_small_batch_t *)xmalloc(
+					sizeof(p_small_batch_t));
+	q_array = L->q_array = (p_large_batch_t *)xmalloc(
+					sizeof(p_large_batch_t));
+
+	CUDA_TRY(cuMemAlloc(&gpu_p_array, 
+			sizeof(p_small_batch_t)))
+	CUDA_TRY(cuMemAlloc(&gpu_q_array, 
+			sizeof(p_large_batch_t))) 
+
+	num_blocks = gpu_info->num_compute_units;
+	threads_per_block = 128;
+	if (gpu_info->registers_per_block == 16384)
+		threads_per_block = 256;
+
+	CUDA_TRY(cuFuncSetBlockShape(gpu_kernel, 
+				threads_per_block, 1, 1))
+
+	found_array_size = num_blocks * threads_per_block;
+	found_array = (found_t *)xmalloc(found_array_size *
+					sizeof(found_t));
+	CUDA_TRY(cuMemAlloc(&gpu_found_array, 
+			found_array_size * sizeof(found_t)))
 
 	printf("------- %u-%u %u-%u\n",
 			small_p_min, small_p_max,
 			large_p_min, large_p_max);
 
 	min_small = small_p_min;
-	sieve_fb_reset(sieve_small, 
-			(uint64)small_p_min, (uint64)small_p_max,
-			1, 1);
+	sieve_fb_reset(sieve_small, (uint64)small_p_min, 
+			(uint64)small_p_max, 1, 1);
 
 	while (min_small < small_p_max) {
 
@@ -298,12 +163,13 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 			min_small = sieve_fb_next(sieve_small, L->poly,
 						store_small_p, L);
 		}
-		L->num_tests = 0;
-		L->tests_per_block = L->num_p;
 		if (L->num_p == 0)
-			break;
+			goto finished;
 
-		printf("batch %u %u\n", L->num_p, min_small);
+		printf("p batch %u %u\n", L->num_p, min_small);
+
+		CUDA_TRY(cuMemcpyHtoD(gpu_p_array, p_array,
+				sizeof(p_small_batch_t)))
 
 		min_large = large_p_min;
 		sieve_fb_reset(sieve_large, 
@@ -312,6 +178,9 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 
 		while (min_large <= large_p_max) {
 
+			double curr_time;
+			double elapsed;
+
 			L->num_q = 0;
 			for (i = 0; i < P_LARGE_BATCH_SIZE && 
 					min_large < large_p_max; i++) {
@@ -319,17 +188,78 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 							store_large_p, L);
 			}
 			if (L->num_q == 0)
-				break;
+				goto finished;
 
-			if (sieve_lattice_batch(L) ||
-			    obj->flags & MSIEVE_FLAG_STOP_SIEVING) {
+			printf("q batch %u %u\n", L->num_q, min_large);
+
+			CUDA_TRY(cuMemcpyHtoD(gpu_q_array, q_array,
+					sizeof(p_large_batch_t)))
+
+			CUDA_TRY(cuMemsetD32(gpu_found_array, 0, 
+					found_array_size * sizeof(found_t) / 
+					sizeof(uint32)))
+
+			i = 0;
+			gpu_ptr = (void *)(size_t)gpu_p_array;
+			CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
+			CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
+					&gpu_ptr, sizeof(gpu_ptr)))
+			i += sizeof(gpu_ptr);
+
+			CUDA_ALIGN_PARAM(i, __alignof(uint32));
+			CUDA_TRY(cuParamSeti(gpu_kernel, (int)i, L->num_p))
+			i += sizeof(uint32);
+
+			gpu_ptr = (void *)(size_t)gpu_q_array;
+			CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
+			CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
+					&gpu_ptr, sizeof(gpu_ptr)))
+			i += sizeof(gpu_ptr);
+
+			CUDA_ALIGN_PARAM(i, __alignof(uint32));
+			CUDA_TRY(cuParamSeti(gpu_kernel, (int)i, L->num_q))
+			i += sizeof(uint32);
+
+			gpu_ptr = (void *)(size_t)gpu_found_array;
+			CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
+			CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
+					&gpu_ptr, sizeof(gpu_ptr)))
+
+			CUDA_TRY(cuLaunchGrid(gpu_kernel, num_blocks, 1))
+
+			CUDA_TRY(cuCtxSynchronize())
+
+			CUDA_TRY(cuMemcpyDtoH(found_array, gpu_found_array, 
+				found_array_size * sizeof(found_t)))
+
+			for (i = 0; i < found_array_size; i++) {
+				found_t *f = found_array + i;
+				if (f->p > 0) {
+					handle_collision(L->poly, f->p,
+						f->proot, f->offset, f->q);
+				}
+			}
+
+			if (obj->flags & MSIEVE_FLAG_STOP_SIEVING) {
 				quit = 1;
-				break;
+				goto finished;
+			}
+			curr_time = get_cpu_time();
+			elapsed = curr_time - L->start_time;
+			if (elapsed > L->deadline) {
+				quit = 1;
+				goto finished;
 			}
 		}
 	}
 
-	aligned_free(p_array);
-	aligned_free(q_array);
+finished:
+	CUDA_TRY(cuMemFree(gpu_p_array))
+	CUDA_TRY(cuMemFree(gpu_q_array))
+	CUDA_TRY(cuMemFree(gpu_found_array))
+	CUDA_TRY(cuCtxDestroy(gpu_context)) 
+	free(p_array);
+	free(q_array);
+	free(found_array);
 	return quit;
 }
