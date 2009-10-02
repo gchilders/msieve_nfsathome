@@ -197,8 +197,6 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 			if (L->num_q == 0)
 				goto finished;
 
-			printf("q batch %u %u\n", L->num_q, min_large);
-
 			CUDA_TRY(cuMemcpyHtoD(gpu_q_array, q_array,
 					sizeof(p_large_batch_t)))
 
@@ -217,8 +215,6 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 			}
 
 			CUDA_TRY(cuLaunchGrid(gpu_kernel, num_blocks, 1))
-
-			CUDA_TRY(cuCtxSynchronize())
 
 			CUDA_TRY(cuMemcpyDtoH(found_array, gpu_found_array, 
 				found_array_size * sizeof(found_t)))
