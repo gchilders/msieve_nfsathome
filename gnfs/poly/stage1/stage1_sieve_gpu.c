@@ -13,7 +13,6 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include "stage1.h"
-#include <cuda_xface.h>
 
 #define P_SMALL_BATCH_SIZE 1024
 
@@ -81,7 +80,8 @@ uint32
 sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
 		uint32 small_p_min, uint32 small_p_max, 
-		uint32 large_p_min, uint32 large_p_max)
+		uint32 large_p_min, uint32 large_p_max,
+		gpu_info_t *gpu_info, CUfunction gpu_kernel)
 {
 	uint32 i;
 	uint32 min_small, min_large;
@@ -91,12 +91,6 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 	found_t *found_array;
 	uint32 found_array_size;
 
-	gpu_info_t *gpu_info;
-	gpu_config_t gpu_config;
-	CUcontext gpu_context;
-	CUmodule gpu_module;
-	CUfunction gpu_kernel;
-
 	int32 num_p_offset;
 	int32 num_q_offset;
 	CUdeviceptr gpu_p_array;
@@ -105,23 +99,6 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 	void *gpu_ptr;
 	uint32 threads_per_block;
 	uint32 num_blocks;
-
-	gpu_init(&gpu_config);
-	if (gpu_config.num_gpu == 0) {
-		printf("error: no CUDA-enabled GPUs found\n");
-		exit(-1);
-	}
-
-	/* choose the first GPU in the list */
-	gpu_info = &gpu_config.info[0];
-	logprintf(obj, "choosing GPU 0 (%s)\n", gpu_info->name);
-	CUDA_TRY(cuCtxCreate(&gpu_context, 0, 
-			gpu_info->device_handle))
-
-	CUDA_TRY(cuModuleLoad(&gpu_module, "stage1_core.ptx"))
-
-	CUDA_TRY(cuModuleGetFunction(&gpu_kernel, gpu_module, 
-				"sieve_kernel_p1xq1"))
 
 	p_array = L->p_array = (p_small_batch_t *)xmalloc(
 					sizeof(p_small_batch_t));
@@ -265,7 +242,6 @@ finished:
 	CUDA_TRY(cuMemFree(gpu_p_array))
 	CUDA_TRY(cuMemFree(gpu_q_array))
 	CUDA_TRY(cuMemFree(gpu_found_array))
-	CUDA_TRY(cuCtxDestroy(gpu_context)) 
 	free(p_array);
 	free(q_array);
 	free(found_array);

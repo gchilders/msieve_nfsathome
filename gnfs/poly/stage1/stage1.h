@@ -16,6 +16,7 @@ $Id$
 #define _STAGE1_H_
 
 #include <poly_skew.h>
+#include <cuda_xface.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -163,7 +164,8 @@ uint32
 sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
 		uint32 small_p_min, uint32 small_p_max, 
-		uint32 large_p_min, uint32 large_p_max);
+		uint32 large_p_min, uint32 large_p_max,
+		gpu_info_t *gpu_info, CUfunction gpu_kernel);
 
 void
 handle_collision(poly_search_t *poly,
@@ -173,7 +175,8 @@ handle_collision(poly_search_t *poly,
 
 void sieve_lattice(msieve_obj *obj, poly_search_t *poly, 
 			uint32 small_fb_max, uint32 large_fb_min, 
-			uint32 large_fb_max, uint32 deadline);
+			uint32 large_fb_max, gpu_info_t *gpu_info,
+			uint32 deadline);
 
 #ifdef __cplusplus
 }

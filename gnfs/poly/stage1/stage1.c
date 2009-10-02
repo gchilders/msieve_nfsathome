@@ -107,7 +107,8 @@ poly_search_free(poly_search_t *poly)
 
 /*------------------------------------------------------------------------*/
 static void
-search_coeffs_core(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
+search_coeffs_core(msieve_obj *obj, poly_search_t *poly, 
+			gpu_info_t *gpu_info, uint32 deadline)
 {
 	uint32 i;
 	uint32 degree = poly->degree;
@@ -130,13 +131,15 @@ search_coeffs_core(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 	poly->sieve_size = poly->coeff_max / mpz_get_d(poly->m0) * 
 			poly->p_size_max * poly->p_size_max / degree;
 
-	sieve_lattice(obj, poly, 2000, 2001, 100000, deadline);
+	sieve_lattice(obj, poly, 2000, 2001, 
+			100000, gpu_info, deadline);
 }
 
 /*------------------------------------------------------------------------*/
 static void
 search_coeffs(msieve_obj *obj, poly_search_t *poly, 
-		bounds_t *bounds, uint32 deadline)
+		bounds_t *bounds, gpu_info_t *gpu_info,
+		uint32 deadline)
 {
 	mpz_t curr_high_coeff;
 	double dn = mpz_get_d(poly->N);
@@ -184,7 +187,8 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly,
 		poly->p_size_max = bounds->p_size_max;
 		poly->coeff_max = bounds->coeff_max;
 
-		search_coeffs_core(obj, poly, deadline_per_coeff);
+		search_coeffs_core(obj, poly, gpu_info,
+					deadline_per_coeff);
 
 		if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
 			break;
@@ -233,9 +237,20 @@ poly_stage1_run(msieve_obj *obj, poly_stage1_t *data)
 	bounds_t bounds;
 	poly_search_t poly;
 
+	gpu_config_t gpu_config;
+
+	gpu_init(&gpu_config);
+	if (gpu_config.num_gpu == 0) {
+		printf("error: no CUDA-enabled GPUs found\n");
+		exit(-1);
+	}
+
 	stage1_bounds_init(&bounds, data);
 	poly_search_init(&poly, data);
-	search_coeffs(obj, &poly, &bounds, data->deadline);
+
+	/* always use GPU 0 for now */
+	search_coeffs(obj, &poly, &bounds, 
+			gpu_config.info + 0, data->deadline);
 
 	poly_search_free(&poly);
 	stage1_bounds_free(&bounds);
