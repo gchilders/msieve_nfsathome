@@ -112,31 +112,57 @@ montmul(uint64 a, uint64 b,
 	uint32 n0 = (uint32)n;
 	uint32 n1 = (uint32)(n >> 32);
 	uint64 prod;
+	uint32 prod_lo, prod_hi;
 	uint32 acc0, acc1, acc2, nmult;
 
-	prod = (uint64)a0 * b0;
-	acc0 = (uint32)prod;
-	prod = (prod >> 32) + (uint64)a1 * b0;
+	prod_lo = a0 * b0;
+	prod_hi = __umulhi(a0, b0);
+	acc0 = prod_lo;
+
+	prod = (uint64)prod_hi;
+	prod_lo = a1 * b0;
+	prod_hi = __umulhi(a1, b0);
+	prod += ((uint64)prod_hi << 32 | prod_lo);
 	acc1 = (uint32)prod;
 	acc2 = (uint32)(prod >> 32);
 
 	nmult = acc0 * w;
-	prod = acc0 + (uint64)nmult * n0;
-	prod = (prod >> 32) + (uint64)acc1 + (uint64)nmult * n1;
+
+	prod_lo = nmult * n0;
+	prod_hi = __umulhi(nmult, n0);
+	prod = acc0 + ((uint64)prod_hi << 32 | prod_lo);
+	prod = prod >> 32;
+
+	prod_lo = nmult * n1;
+	prod_hi = __umulhi(nmult, n1);
+	prod += (uint64)acc1 + ((uint64)prod_hi << 32 | prod_lo);
 	acc0 = (uint32)prod;
 	prod = (prod >> 32) + (uint64)acc2;
 	acc1 = (uint32)prod;
 	acc2 = (uint32)(prod >> 32);
 
-	prod = (uint64)acc0 + (uint64)a0 * b1;
+	prod_lo = a0 * b1;
+	prod_hi = __umulhi(a0, b1);
+	prod = (uint64)acc0 + ((uint64)prod_hi << 32 | prod_lo);
 	acc0 = (uint32)prod;
-	prod = (prod >> 32) + (uint64)acc1 + (uint64)a1 * b1;
+	prod = prod >> 32;
+
+	prod_lo = a1 * b1;
+	prod_hi = __umulhi(a1, b1);
+	prod += (uint64)acc1 + ((uint64)prod_hi << 32 | prod_lo);
 	acc1 = (uint32)prod;
 	acc2 = (uint32)(prod >> 32) + acc2;
 
 	nmult = acc0 * w;
-	prod = acc0 + (uint64)nmult * n0;
-	prod = (prod >> 32) + (uint64)acc1 + (uint64)nmult * n1;
+
+	prod_hi = __umulhi(nmult, n0);
+	prod_lo = nmult * n0;
+	prod = acc0 + ((uint64)prod_hi << 32 | prod_lo);
+	prod = prod >> 32;
+
+	prod_hi = __umulhi(nmult, n1);
+	prod_lo = nmult * n1;
+	prod += acc1 + ((uint64)prod_hi << 32 | prod_lo);
 	acc0 = (uint32)prod;
 	prod = (prod >> 32) + (uint64)acc2;
 	acc1 = (uint32)prod;
