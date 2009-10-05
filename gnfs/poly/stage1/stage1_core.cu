@@ -12,30 +12,11 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-typedef unsigned int uint32;
-typedef unsigned long long uint64;
+#include "stage1_core.h"
 
-#define P_SMALL_BATCH_SIZE 1024
-
-typedef struct {
-	uint32 lattice_size[P_SMALL_BATCH_SIZE];
-	uint32 p[P_SMALL_BATCH_SIZE];
-	uint64 roots[P_SMALL_BATCH_SIZE];
-} p_small_batch_t;
-
-#define P_LARGE_BATCH_SIZE 16384
-
-typedef struct {
-	uint32 p[P_LARGE_BATCH_SIZE];
-	uint64 roots[P_LARGE_BATCH_SIZE];
-} p_large_batch_t;
-
-typedef struct {
-	uint32 p;
-	uint32 q;
-	uint64 offset;
-	uint64 proot;
-} found_t;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /*------------------------------------------------------------------------*/
 __device__ uint64 
@@ -205,20 +186,26 @@ montmul_r(uint64 n, uint32 w) {
 }
 
 /*------------------------------------------------------------------------*/
-#ifdef __cplusplus
-extern "C" {
-#endif
+__device__ p_packed_t *
+p_packed_next(p_packed_t *curr)
+{
+	return (p_packed_t *)((uint64 *)curr + 
+			P_PACKED_HEADER_WORDS + curr->num_roots);
+}
+
+/*------------------------------------------------------------------------*/
+__constant__ uint64 pbatch[1000];
 
 __global__ void
-sieve_kernel_p1xq1(p_small_batch_t *pbatch, 
-                 uint32 num_p,
-		 p_large_batch_t *qbatch, 
-		 uint32 num_q,
-		 found_t *found_array)
+sieve_kernel(p_soa_t *qbatch, 
+             uint32 num_q,
+	     uint32 num_qroots,
+	     uint32 num_p,
+	     found_t *found_array)
 {
 	uint32 my_threadid;
 	uint32 num_threads;
-	uint32 i, j;
+	uint32 i, j, k, m;
 	found_t my_found;
 
 	my_found.p = 0;
@@ -230,28 +217,41 @@ sieve_kernel_p1xq1(p_small_batch_t *pbatch,
 		uint64 q2 = (uint64)q * q;
 		uint32 q2_w = montmul_w((uint32)q2);
 		uint64 q2_r = montmul_r(q2, q2_w);
-		uint64 qroot = qbatch->roots[i];
+		p_packed_t *curr_p = (p_packed_t *)pbatch;
+		
 
 		for (j = 0; j < num_p; j++) {
-			uint32 p = pbatch->p[j];
+			uint32 p = curr_p->p;
 			uint64 p2 = (uint64)p * p;
-			uint32 lattice_size = pbatch->lattice_size[j];
+			uint32 num_proots = curr_p->num_roots;
+			uint32 lattice_size = curr_p->lattice_size;
 			uint64 pinv = modinv(p2, q2);
-			uint64 proot = pbatch->roots[j];
-			uint64 res;
 
 			pinv = montmul(pinv, q2_r, q2, q2_w);
 
-			res = montmul(pinv, modsub(qroot, proot, q2),
-					q2, q2_w);
+			for (k = 0; k < num_qroots; k++) {
 
-			if (res < lattice_size ||
-			    res >= q2 - lattice_size) {
-				my_found.p = p;
-				my_found.q = q;
-				my_found.offset = res;
-				my_found.proot = proot;
+				uint64 qroot = qbatch->roots[k][i];
+
+				for (m = 0; m < num_proots; m++) {
+
+					uint64 proot = curr_p->roots[m];
+					uint64 res = montmul(pinv, 
+							modsub(qroot, 
+								proot, q2),
+							q2, q2_w);
+
+					if (res < lattice_size ||
+					    res >= q2 - lattice_size) {
+						my_found.p = p;
+						my_found.q = q;
+						my_found.offset = res;
+						my_found.proot = proot;
+					}
+				}
 			}
+
+			curr_p = p_packed_next(curr_p);
 		}
 	}
 

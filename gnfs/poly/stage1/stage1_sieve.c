@@ -106,7 +106,6 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 
 	CUcontext gpu_context;
 	CUmodule gpu_module;
-	CUfunction gpu_kernel;
 
 	if (poly->p_size_max >= (double)MAX_P * MAX_P) {
 		printf("error: rational leading coefficient is too large\n");
@@ -127,10 +126,8 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 			p_scale = 1.3;
 		else if (bits < 396)
 			p_scale = 1.2;
-		else if (bits < 420)
-			p_scale = 1.1;
 		else
-			p_scale = 1.03;
+			p_scale = 1.1;
 		break;
 	}
 
@@ -138,9 +135,6 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 			gpu_info->device_handle))
 
 	CUDA_TRY(cuModuleLoad(&gpu_module, "stage1_core.ptx"))
-
-	CUDA_TRY(cuModuleGetFunction(&gpu_kernel, gpu_module, 
-				"sieve_kernel_p1xq1"))
 
 	large_p_min = sqrt(poly->p_size_max);
 	if (large_p_min >= MAX_P / p_scale)
@@ -158,8 +152,8 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 			(uint64)small_p_min, (uint64)small_p_max,
 			(uint64)large_p_min, (uint64)large_p_max);
 
-	sieve_fb_init(&sieve_small, poly, large_fb_min, large_fb_max);
-	sieve_fb_init(&sieve_large, poly, 5, small_fb_max);
+	sieve_fb_init(&sieve_small, poly, 5, small_fb_max);
+	sieve_fb_init(&sieve_large, poly, large_fb_min, large_fb_max);
 	lattice_fb_init(&L, poly, deadline);
 
 	while (1) {
@@ -167,7 +161,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 		if (sieve_lattice_gpu(obj, &L, &sieve_small, &sieve_large,
 					small_p_min, small_p_max,
 					large_p_min, large_p_max,
-					gpu_info, gpu_kernel)) {
+					gpu_info, gpu_module)) {
 			break;
 		}
 #else

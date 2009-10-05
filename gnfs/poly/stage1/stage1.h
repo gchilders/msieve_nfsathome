@@ -17,6 +17,7 @@ $Id$
 
 #include <poly_skew.h>
 #include <cuda_xface.h>
+#include "stage1_core.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,8 +82,6 @@ void poly_search_free(poly_search_t *poly);
    can be up to 64 bits in size and the product of (powers 
    of) up to MAX_P_FACTORS distinct primes */
 
-#define MAX_ROOTS 36
-
 typedef struct {
 	uint32 p;
 	uint32 r;
@@ -143,6 +142,14 @@ typedef struct {
 	uint32 num_q;
 	void *q_array;
 
+	CUdeviceptr gpu_p_array;
+	uint32 p_array_max_words;
+	CUdeviceptr gpu_q_array;
+	CUdeviceptr gpu_found_array;
+	found_t *found_array;
+	uint32 found_array_size;
+	p_soa_t *marshall;
+
 	poly_search_t *poly;
 
 	double start_time;
@@ -165,7 +172,7 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
 		uint32 small_p_min, uint32 small_p_max, 
 		uint32 large_p_min, uint32 large_p_max,
-		gpu_info_t *gpu_info, CUfunction gpu_kernel);
+		gpu_info_t *gpu_info, CUmodule gpu_module);
 
 void
 handle_collision(poly_search_t *poly,

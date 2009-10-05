@@ -144,6 +144,7 @@ NFS_HDR = \
 	gnfs/poly/poly.h \
 	gnfs/poly/poly_skew.h \
 	gnfs/poly/stage1/stage1.h \
+	gnfs/poly/stage1/stage1_core.h \
 	gnfs/poly/stage2/stage2.h \
 	gnfs/sieve/sieve.h \
 	gnfs/sqrt/sqrt.h \
