@@ -33,7 +33,7 @@ lattice_fb_init(lattice_fb_t *L, poly_search_t *poly,
 		uint32 deadline)
 {
 	L->poly = poly;
-	L->start_time = get_cpu_time();
+	L->start_time = time(NULL);
 	L->deadline = deadline;
 	L->num_tests = 0;
 }

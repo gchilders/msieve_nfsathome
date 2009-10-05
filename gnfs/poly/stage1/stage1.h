@@ -152,7 +152,7 @@ typedef struct {
 
 	poly_search_t *poly;
 
-	double start_time;
+	time_t start_time;
 	uint32 deadline;
 	uint32 num_tests;
 	uint32 tests_per_block;

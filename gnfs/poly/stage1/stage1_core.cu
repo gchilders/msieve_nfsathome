@@ -206,11 +206,10 @@ sieve_kernel(p_soa_t *qbatch,
 	uint32 my_threadid;
 	uint32 num_threads;
 	uint32 i, j, k, m;
-	found_t my_found;
 
-	my_found.p = 0;
 	my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
 	num_threads = gridDim.x * blockDim.x;
+	found_array[my_threadid].p = 0;
 
 	for (i = my_threadid; i < num_q; i += num_threads) {
 		uint32 q = qbatch->p[i];
@@ -243,10 +242,12 @@ sieve_kernel(p_soa_t *qbatch,
 
 					if (res < lattice_size ||
 					    res >= q2 - lattice_size) {
-						my_found.p = p;
-						my_found.q = q;
-						my_found.offset = res;
-						my_found.proot = proot;
+						found_t *f = found_array +
+								my_threadid;
+						f->p = p;
+						f->q = q;
+						f->offset = res;
+						f->proot = proot;
 					}
 				}
 			}
@@ -254,9 +255,6 @@ sieve_kernel(p_soa_t *qbatch,
 			curr_p = p_packed_next(curr_p);
 		}
 	}
-
-	if (my_found.p > 0)
-		found_array[my_threadid] = my_found;
 }
 
 #ifdef __cplusplus

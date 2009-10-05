@@ -247,7 +247,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			uint32 packed_words = 0;
 			uint32 curr_num_p = 0;
 			p_packed_t *packed_start = packed_array;
-			double curr_time;
+			time_t curr_time;
 			double elapsed;
 
 			uint32 curr_num_q = MIN(P_SOA_BATCH_SIZE,
@@ -289,10 +289,11 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 								curr_packed);
 				} while (++num_p_done < p_array->num_p);
 
+#if 0
 				printf("qroots %u qnum %u pnum %u pwords %u\n",
 						num_qroots, curr_num_q,
 						curr_num_p, packed_words);
-
+#endif
 				CUDA_TRY(cuMemcpyHtoD(L->gpu_p_array, 
 							packed_start,
 							packed_words *
@@ -324,11 +325,6 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 				j += sizeof(gpu_ptr);
 
 				CUDA_TRY(cuParamSetSize(gpu_kernel, j))
-
-				CUDA_TRY(cuMemsetD32(L->gpu_found_array, 0, 
-							L->found_array_size * 
-							sizeof(found_t) / 
-							sizeof(uint32)))
 
 				num_blocks = gpu_info->num_compute_units;
 				if (curr_num_q < L->found_array_size) {
@@ -363,7 +359,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
 				return 1;
 
-			curr_time = get_cpu_time();
+			curr_time = time(NULL);
 			elapsed = curr_time - L->start_time;
 			if (elapsed > L->deadline)
 				return 1;

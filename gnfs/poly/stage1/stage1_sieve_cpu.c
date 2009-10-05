@@ -211,7 +211,7 @@ sieve_lattice_batch(lattice_fb_t *L)
 		L->num_tests += num_qroots * L->tests_per_block;
 		if (L->num_tests >= 1000000) {
 
-			double curr_time = get_cpu_time();
+			time_t curr_time = time(NULL);
 			double elapsed = curr_time - L->start_time;
 
 			if (elapsed > L->deadline)
