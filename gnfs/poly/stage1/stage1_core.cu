@@ -20,8 +20,8 @@ extern "C" {
 
 /*------------------------------------------------------------------------*/
 __device__ uint64 
-modsub(uint64 a, uint64 b, uint64 p) {
-
+modsub(uint64 a, uint64 b, uint64 p) 
+{
 	uint64 t = 0, tr;
 	tr = a - b;
 	if (tr > a)
@@ -30,10 +30,10 @@ modsub(uint64 a, uint64 b, uint64 p) {
 }
 
 /*------------------------------------------------------------------------*/
-__device__ uint64 
-modinv(uint64 a, uint64 p) {
+__device__ uint32 
+modinv(uint32 a, uint32 p) {
 
-	uint64 ps1, ps2, dividend, divisor, rem, q, t;
+	uint32 ps1, ps2, dividend, divisor, rem, q, t;
 	uint32 parity;
 
 	q = 1; rem = a; dividend = p; divisor = a;
@@ -222,10 +222,17 @@ sieve_kernel(p_soa_t *qbatch,
 		for (j = 0; j < num_p; j++) {
 			uint32 p = curr_p->p;
 			uint64 p2 = (uint64)p * p;
+			uint32 pinvmodq = modinv(p, q);
+
 			uint32 num_proots = curr_p->num_roots;
 			uint32 lattice_size = curr_p->lattice_size;
-			uint64 pinv = modinv(p2, q2);
+			uint64 pinv, tmp;
 
+			tmp = (uint64)pinvmodq * pinvmodq;
+			tmp = montmul(tmp, q2_r, q2, q2_w);
+			pinv = montmul(p2, tmp, q2, q2_w);
+			pinv = modsub((uint64)2, pinv, q2);
+			pinv = montmul(pinv, tmp, q2, q2_w);
 			pinv = montmul(pinv, q2_r, q2, q2_w);
 
 			for (k = 0; k < num_qroots; k++) {
