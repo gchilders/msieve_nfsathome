@@ -409,9 +409,9 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 				   gpu_module, "pbatch"))
 	L->p_array_max_words /= sizeof(uint64);
 
-	threads_per_block = 128;
-	if (gpu_info->registers_per_block == 16384)
-		threads_per_block = 256;
+	CUDA_TRY(cuFuncGetAttribute((int *)&threads_per_block, 
+			CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+			gpu_kernel))
 
 	CUDA_TRY(cuFuncSetBlockShape(gpu_kernel, 
 				threads_per_block, 1, 1))
