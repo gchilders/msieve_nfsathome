@@ -341,7 +341,8 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 							L->found_array_size * 
 							sizeof(found_t)))
 
-				for (j = 0; j < L->found_array_size; j++) {
+				for (j = 0; j < threads_per_block *
+						num_blocks; j++) {
 					found_t *f = L->found_array + j;
 
 					if (f->p > 0) {
