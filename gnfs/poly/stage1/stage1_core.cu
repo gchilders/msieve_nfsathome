@@ -18,6 +18,12 @@ $Id$
 extern "C" {
 #endif
 
+#if 0
+#define MONTMUL_RADIX 24
+#else
+#define MONTMUL_RADIX 32
+#endif
+
 /*------------------------------------------------------------------------*/
 __device__ uint64 
 modsub(uint64 a, uint64 b, uint64 p) 
@@ -74,17 +80,119 @@ modinv(uint32 a, uint32 p) {
 __device__ uint32 
 montmul_w(uint32 n) {
 
+#if MONTMUL_RADIX == 24
+	uint32 res = 8 - (n % 8);
+	res = __umul24(res, 2 + __umul24(n, res));
+	res = __umul24(res, 2 + __umul24(n, res));
+	return __umul24(res, 2 + __umul24(n, res));
+#else /* MONTMUL_RADIX == 32 */
 	uint32 res = 2 + n;
 	res = res * (2 + n * res);
 	res = res * (2 + n * res);
 	res = res * (2 + n * res);
 	return res * (2 + n * res);
+#endif
 }
 
 /*------------------------------------------------------------------------*/
+#define LOW24 0xffffff
+
 __device__ uint64 
 montmul(uint64 a, uint64 b,
 		uint64 n, uint32 w) {
+
+#if MONTMUL_RADIX == 24
+	uint32 a0 = (uint32)a & LOW24;
+	uint32 a1 = (uint32)(a >> 24) & LOW24;
+	uint32 a2 = (uint32)(a >> 48);
+	uint32 b0 = (uint32)b & LOW24;
+	uint32 b1 = (uint32)(b >> 24) & LOW24;
+	uint32 b2 = (uint32)(b >> 48);
+	uint32 n0 = (uint32)n & LOW24;
+	uint32 n1 = (uint32)(n >> 24) & LOW24;
+	uint32 n2 = (uint32)(n >> 48);
+	uint32 q0, q1, q2;
+	uint64 acc;
+	uint32 prod_lo, prod_hi;
+	uint64 r;
+
+	prod_lo = __umul24(a0, b0);
+	prod_hi = __umulhi(a0, b0);
+	acc = (uint64)prod_hi << 32 | prod_lo;
+	q0 = __umul24((uint32)acc, w) & LOW24;
+
+	prod_lo = __umul24(q0, n0);
+	prod_hi = __umulhi(q0, n0);
+	acc = (acc + ((uint64)prod_hi << 32 | prod_lo)) >> 24;
+
+	prod_lo = __umul24(a0, b1);
+	prod_hi = __umulhi(a0, b1);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	prod_lo = __umul24(a1, b0);
+	prod_hi = __umulhi(a1, b0);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	prod_lo = __umul24(q0, n1);
+	prod_hi = __umulhi(q0, n1);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	q1 = __umul24((uint32)acc, w) & LOW24;
+
+	prod_lo = __umul24(q1, n0);
+	prod_hi = __umulhi(q1, n0);
+	acc = (acc + ((uint64)prod_hi << 32 | prod_lo)) >> 24;
+
+	prod_lo = __umul24(a0, b2);
+	prod_hi = __umulhi(a0, b2);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	prod_lo = __umul24(a1, b1);
+	prod_hi = __umulhi(a1, b1);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	prod_lo = __umul24(a2, b0);
+	prod_hi = __umulhi(a2, b0);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	prod_lo = __umul24(q0, n2);
+	prod_hi = __umulhi(q0, n2);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	prod_lo = __umul24(q1, n1);
+	prod_hi = __umulhi(q1, n1);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	q2 = __umul24((uint32)acc, w) & LOW24;
+
+	prod_lo = __umul24(q2, n0);
+	prod_hi = __umulhi(q2, n0);
+	acc = (acc + ((uint64)prod_hi << 32 | prod_lo)) >> 24;
+
+	prod_lo = __umul24(a1, b2);
+	prod_hi = __umulhi(a1, b2);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	prod_lo = __umul24(a2, b1);
+	prod_hi = __umulhi(a2, b1);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	prod_lo = __umul24(q1, n2);
+	prod_hi = __umulhi(q1, n2);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	prod_lo = __umul24(q2, n1);
+	prod_hi = __umulhi(q2, n1);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+
+	r = acc & LOW24;
+	acc >>= 24;
+
+	prod_lo = __umul24(a2, b2);
+	prod_hi = __umulhi(a2, b2);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	prod_lo = __umul24(q2, n2);
+	prod_hi = __umulhi(q2, n2);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+
+	prod_hi = (uint32)(acc >> 48);
+	r |= acc << 24;
+
+	if (prod_hi > 0 || r >= n)
+		return r - n;
+	else
+		return r;
+
+#else /* MONTMUL_RADIX == 32 */
 
 	uint32 a0 = (uint32)a;
 	uint32 a1 = (uint32)(a >> 32);
@@ -92,9 +200,9 @@ montmul(uint64 a, uint64 b,
 	uint32 b1 = (uint32)(b >> 32);
 	uint32 n0 = (uint32)n;
 	uint32 n1 = (uint32)(n >> 32);
-	uint64 prod;
-	uint32 prod_lo, prod_hi;
 	uint32 acc0, acc1, acc2, nmult;
+	uint32 prod_lo, prod_hi;
+	uint64 prod;
 
 	prod_lo = a0 * b0;
 	prod_hi = __umulhi(a0, b0);
@@ -154,9 +262,16 @@ montmul(uint64 a, uint64 b,
 		return prod - n;
 	else
 		return prod;
+#endif
 }
 
 /*------------------------------------------------------------------------*/
+#if MONTMUL_RADIX == 24
+	#define MONTMUL_R_LIMIT 81
+#else /* MONTMUL_RADIX == 32 */
+	#define MONTMUL_R_LIMIT 72
+#endif
+
 __device__ uint64 
 montmul_r(uint64 n, uint32 w) {
 
@@ -169,7 +284,7 @@ montmul_r(uint64 n, uint32 w) {
 	shifted_n = n << shift;
 	res = -shifted_n;
 
-	for (i = 64 - shift; i < 72; i++) {
+	for (i = 64 - shift; i < MONTMUL_R_LIMIT; i++) {
 		if (res >> 63)
 			res = res + res - shifted_n;
 		else
