@@ -43,7 +43,7 @@ typedef struct {
    so we store in SOA format. All the entries in the structure
    have the same number of roots */
 
-#define P_SOA_BATCH_SIZE 4096
+#define P_SOA_BATCH_SIZE 11520
 
 typedef struct {
 	uint32 p[P_SOA_BATCH_SIZE];
