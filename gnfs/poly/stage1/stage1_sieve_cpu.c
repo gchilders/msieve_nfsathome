@@ -290,7 +290,7 @@ cpu_kernel(poly_search_t *poly,
 uint32
 sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L)
 {
-	uint32 j, k;
+	uint32 i;
 	p_soa_var_t * p_array = (p_soa_var_t *)L->p_array;
 	p_soa_var_t * q_array = (p_soa_var_t *)L->q_array;
 	uint32 num_poly = L->poly->num_poly;
@@ -313,15 +313,14 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L)
 		if (q_left > 0 && q_left < P_SOA_BATCH_SIZE / 4)
 			curr_num_q /= 2;
 
-		for (j = 0; j < curr_num_q; j++) {
-			q_marshall->p[j] = q_array->p[num_q_done + j];
-			q_marshall->lattice_size[j] = 
-					q_array->lattice_size[num_q_done + j];
+		memcpy(q_marshall->p, 
+			q_array->p + num_q_done,
+			curr_num_q * sizeof(uint32));
 
-			for (k = 0; k < num_poly; k++) {
-				q_marshall->roots[k][j] =
-					q_array->roots[k][num_q_done + j];
-			}
+		for (i = 0; i < num_poly; i++) {
+			memcpy(q_marshall->roots[i],
+				q_array->roots[i] + num_q_done,
+				curr_num_q * sizeof(uint64));
 		}
 
 		while (num_p_done < p_array->num_p) {
@@ -334,19 +333,21 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L)
 			if (p_left > 0 && p_left < P_SOA_BATCH_SIZE / 4)
 				curr_num_p /= 2;
 
-			for (j = 0; j < curr_num_p; j++) {
-				p_marshall->p[j] = p_array->p[num_p_done + j];
-				p_marshall->lattice_size[j] = 
-					p_array->lattice_size[num_p_done + j];
+			memcpy(p_marshall->p, 
+				p_array->p + num_p_done,
+				curr_num_p * sizeof(uint32));
+			memcpy(p_marshall->lattice_size, 
+				p_array->lattice_size + num_p_done,
+				curr_num_p * sizeof(uint32));
 
-				for (k = 0; k < num_poly; k++) {
-					p_marshall->roots[k][j] =
-						p_array->roots[k][num_p_done+j];
-				}
+			for (i = 0; i < num_poly; i++) {
+				memcpy(p_marshall->roots[i],
+					p_array->roots[i] + num_p_done,
+					curr_num_p * sizeof(uint64));
 			}
-
+#if 0
 			printf("qnum %u pnum %u\n", curr_num_q, curr_num_p);
-
+#endif
 			cpu_kernel(L->poly, p_marshall, curr_num_p,
 					q_marshall, curr_num_q);
 

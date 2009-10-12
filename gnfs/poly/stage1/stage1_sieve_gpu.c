@@ -124,7 +124,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			uint32 threads_per_block,
 			gpu_info_t *gpu_info, CUfunction gpu_kernel)
 {
-	uint32 j, k;
+	uint32 i;
 	p_soa_var_t * p_array = (p_soa_var_t *)L->p_array;
 	p_soa_var_t * q_array = (p_soa_var_t *)L->q_array;
 	uint32 num_blocks;
@@ -150,15 +150,14 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 		if (q_left > 0 && q_left < L->found_array_size / 4)
 			curr_num_q /= 2;
 
-		for (j = 0; j < curr_num_q; j++) {
-			q_marshall->p[j] = q_array->p[num_q_done + j];
-			q_marshall->lattice_size[j] = 
-					q_array->lattice_size[num_q_done + j];
+		memcpy(q_marshall->p, 
+			q_array->p + num_q_done,
+			curr_num_q * sizeof(uint32));
 
-			for (k = 0; k < num_poly; k++) {
-				q_marshall->roots[k][j] =
-					q_array->roots[k][num_q_done + j];
-			}
+		for (i = 0; i < num_poly; i++) {
+			memcpy(q_marshall->roots[i],
+				q_array->roots[i] + num_q_done,
+				curr_num_q * sizeof(uint64));
 		}
 
 		CUDA_TRY(cuMemcpyHtoD(L->gpu_q_array, q_marshall,
@@ -176,55 +175,57 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			if (p_left > 0 && p_left < L->found_array_size / 4)
 				curr_num_p /= 2;
 
-			for (j = 0; j < curr_num_p; j++) {
-				p_marshall->p[j] = p_array->p[num_p_done + j];
-				p_marshall->lattice_size[j] = 
-					p_array->lattice_size[num_p_done + j];
+			memcpy(p_marshall->p, 
+				p_array->p + num_p_done,
+				curr_num_p * sizeof(uint32));
+			memcpy(p_marshall->lattice_size, 
+				p_array->lattice_size + num_p_done,
+				curr_num_p * sizeof(uint32));
 
-				for (k = 0; k < num_poly; k++) {
-					p_marshall->roots[k][j] =
-						p_array->roots[k][num_p_done+j];
-				}
+			for (i = 0; i < num_poly; i++) {
+				memcpy(p_marshall->roots[i],
+					p_array->roots[i] + num_p_done,
+					curr_num_p * sizeof(uint64));
 			}
 
 			CUDA_TRY(cuMemcpyHtoD(L->gpu_p_array, p_marshall,
 				P_SOA_BATCH_SIZE * (2 * sizeof(uint32) +
 					num_poly * sizeof(uint64))))
-
+#if 0
 			printf("qnum %u pnum %u\n", curr_num_q, curr_num_p);
-
-			j = 0;
+#endif
+			i = 0;
 			gpu_ptr = (void *)(size_t)L->gpu_p_array;
-			CUDA_ALIGN_PARAM(j, __alignof(gpu_ptr));
-			CUDA_TRY(cuParamSetv(gpu_kernel, (int)j, 
+			CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
+			CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
 					&gpu_ptr, sizeof(gpu_ptr)))
-			j += sizeof(gpu_ptr);
+			i += sizeof(gpu_ptr);
 
-			CUDA_ALIGN_PARAM(j, __alignof(uint32));
-			CUDA_TRY(cuParamSeti(gpu_kernel, j, curr_num_p))
-			j += sizeof(uint32);
+			CUDA_ALIGN_PARAM(i, __alignof(uint32));
+			CUDA_TRY(cuParamSeti(gpu_kernel, i, curr_num_p))
+			i += sizeof(uint32);
 
 			gpu_ptr = (void *)(size_t)L->gpu_q_array;
-			CUDA_ALIGN_PARAM(j, __alignof(gpu_ptr));
-			CUDA_TRY(cuParamSetv(gpu_kernel, (int)j, 
+			CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
+			CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
 					&gpu_ptr, sizeof(gpu_ptr)))
-			j += sizeof(gpu_ptr);
+			i += sizeof(gpu_ptr);
 
-			CUDA_ALIGN_PARAM(j, __alignof(uint32));
-			CUDA_TRY(cuParamSeti(gpu_kernel, j, curr_num_q))
-			j += sizeof(uint32);
+			CUDA_ALIGN_PARAM(i, __alignof(uint32));
+			CUDA_TRY(cuParamSeti(gpu_kernel, i, curr_num_q))
+			i += sizeof(uint32);
 
-			CUDA_ALIGN_PARAM(j, __alignof(uint32));
-			CUDA_TRY(cuParamSeti(gpu_kernel, j, num_poly))
-			j += sizeof(uint32);
+			CUDA_ALIGN_PARAM(i, __alignof(uint32));
+			CUDA_TRY(cuParamSeti(gpu_kernel, i, num_poly))
+			i += sizeof(uint32);
 
 			gpu_ptr = (void *)(size_t)L->gpu_found_array;
-			CUDA_ALIGN_PARAM(j, __alignof(gpu_ptr));
-			CUDA_TRY(cuParamSetv(gpu_kernel, (int)j, 
+			CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
+			CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
 					&gpu_ptr, sizeof(gpu_ptr)))
-			j += sizeof(gpu_ptr);
+			i += sizeof(gpu_ptr);
 
-			CUDA_TRY(cuParamSetSize(gpu_kernel, j))
+			CUDA_TRY(cuParamSetSize(gpu_kernel, i))
 
 			num_blocks = gpu_info->num_compute_units;
 			if (curr_num_q < L->found_array_size) {
@@ -242,9 +243,9 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 						threads_per_block *
 							sizeof(found_t)))
 
-			for (j = 0; j < threads_per_block *
-					num_blocks; j++) {
-				found_t *f = L->found_array + j;
+			for (i = 0; i < threads_per_block *
+					num_blocks; i++) {
+				found_t *f = L->found_array + i;
 
 				if (f->p > 0) {
 					handle_collision(L->poly, 
