@@ -24,6 +24,8 @@ extern "C" {
 #define MONTMUL_RADIX 32
 #endif
 
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
 /*------------------------------------------------------------------------*/
 __device__ uint64 
 modsub(uint64 a, uint64 b, uint64 p) 
@@ -336,8 +338,8 @@ sieve_kernel(p_soa_t *pbatch,
 
 		while (p_done < num_p) {
 
-			uint32 curr_num_p = __min(SHARED_BATCH_SIZE,
-							num_p - p_done);
+			uint32 curr_num_p = MIN(SHARED_BATCH_SIZE,
+						num_p - p_done);
 
 			if (threadIdx.x < curr_num_p) {
 				j = threadIdx.x;
