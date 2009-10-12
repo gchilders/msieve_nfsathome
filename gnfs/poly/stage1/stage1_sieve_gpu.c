@@ -128,12 +128,47 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 	p_soa_var_t * p_array = (p_soa_var_t *)L->p_array;
 	p_soa_var_t * q_array = (p_soa_var_t *)L->q_array;
 	uint32 num_blocks;
+	uint32 num_p_offset;
+	uint32 num_q_offset;
 	void *gpu_ptr;
 	uint32 num_poly = L->poly->num_poly;
 
 	p_soa_t *p_marshall = L->p_marshall;
 	p_soa_t *q_marshall = L->q_marshall;
 	uint32 num_q_done = 0;
+
+	i = 0;
+	gpu_ptr = (void *)(size_t)L->gpu_p_array;
+	CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
+	CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
+			&gpu_ptr, sizeof(gpu_ptr)))
+	i += sizeof(gpu_ptr);
+
+	CUDA_ALIGN_PARAM(i, __alignof(uint32));
+	num_p_offset = i;
+	i += sizeof(uint32);
+
+	gpu_ptr = (void *)(size_t)L->gpu_q_array;
+	CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
+	CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
+			&gpu_ptr, sizeof(gpu_ptr)))
+	i += sizeof(gpu_ptr);
+
+	CUDA_ALIGN_PARAM(i, __alignof(uint32));
+	num_q_offset = i;
+	i += sizeof(uint32);
+
+	CUDA_ALIGN_PARAM(i, __alignof(uint32));
+	CUDA_TRY(cuParamSeti(gpu_kernel, i, num_poly))
+	i += sizeof(uint32);
+
+	gpu_ptr = (void *)(size_t)L->gpu_found_array;
+	CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
+	CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
+			&gpu_ptr, sizeof(gpu_ptr)))
+	i += sizeof(gpu_ptr);
+
+	CUDA_TRY(cuParamSetSize(gpu_kernel, i))
 
 	while (num_q_done < q_array->num_p) {
 
@@ -163,6 +198,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 		CUDA_TRY(cuMemcpyHtoD(L->gpu_q_array, q_marshall,
 				P_SOA_BATCH_SIZE * (2 * sizeof(uint32) +
 					num_poly * sizeof(uint64))))
+		CUDA_TRY(cuParamSeti(gpu_kernel, num_q_offset, curr_num_q))
 
 		while (num_p_done < p_array->num_p) {
 
@@ -191,41 +227,12 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			CUDA_TRY(cuMemcpyHtoD(L->gpu_p_array, p_marshall,
 				P_SOA_BATCH_SIZE * (2 * sizeof(uint32) +
 					num_poly * sizeof(uint64))))
+
+			CUDA_TRY(cuParamSeti(gpu_kernel, num_p_offset, 
+						curr_num_p))
 #if 0
 			printf("qnum %u pnum %u\n", curr_num_q, curr_num_p);
 #endif
-			i = 0;
-			gpu_ptr = (void *)(size_t)L->gpu_p_array;
-			CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
-			CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
-					&gpu_ptr, sizeof(gpu_ptr)))
-			i += sizeof(gpu_ptr);
-
-			CUDA_ALIGN_PARAM(i, __alignof(uint32));
-			CUDA_TRY(cuParamSeti(gpu_kernel, i, curr_num_p))
-			i += sizeof(uint32);
-
-			gpu_ptr = (void *)(size_t)L->gpu_q_array;
-			CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
-			CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
-					&gpu_ptr, sizeof(gpu_ptr)))
-			i += sizeof(gpu_ptr);
-
-			CUDA_ALIGN_PARAM(i, __alignof(uint32));
-			CUDA_TRY(cuParamSeti(gpu_kernel, i, curr_num_q))
-			i += sizeof(uint32);
-
-			CUDA_ALIGN_PARAM(i, __alignof(uint32));
-			CUDA_TRY(cuParamSeti(gpu_kernel, i, num_poly))
-			i += sizeof(uint32);
-
-			gpu_ptr = (void *)(size_t)L->gpu_found_array;
-			CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
-			CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
-					&gpu_ptr, sizeof(gpu_ptr)))
-			i += sizeof(gpu_ptr);
-
-			CUDA_TRY(cuParamSetSize(gpu_kernel, i))
 
 			num_blocks = gpu_info->num_compute_units;
 			if (curr_num_q < L->found_array_size) {
