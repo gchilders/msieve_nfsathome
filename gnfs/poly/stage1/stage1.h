@@ -23,7 +23,9 @@ $Id$
 extern "C" {
 #endif
 
-#if MAX_POLY_DEGREE < 6
+#define MAX_POLYSELECT_DEGREE 6
+
+#if MAX_POLY_DEGREE < MAX_POLYSELECT_DEGREE
 #error "supported poly degree must be at least 6"
 #endif
 
@@ -49,13 +51,22 @@ void stage1_bounds_update(bounds_t *bounds, double N,
 /*-----------------------------------------------------------------------*/
 
 typedef struct {
-
-	uint32 degree;
-
 	mpz_t high_coeff; 
-	mpz_t N; 
 	mpz_t trans_N;
 	mpz_t trans_m0;
+
+	double coeff_max;
+	double p_size_max;
+	double sieve_size;
+} curr_poly_t;
+
+typedef struct {
+
+	uint32 degree;
+	uint32 num_poly;
+	curr_poly_t batch[POLY_BATCH_SIZE];
+
+	mpz_t N; 
 	mpz_t m0; 
 	mpz_t p;
 	mpz_t tmp1;
@@ -63,10 +74,6 @@ typedef struct {
 	mpz_t tmp3;
 	mpz_t tmp4;
 	mpz_t tmp5;
-
-	double coeff_max;
-	double p_size_max;
-	double sieve_size;
 
 	stage1_callback_t callback;
 	void *callback_data;
@@ -82,12 +89,14 @@ void poly_search_free(poly_search_t *poly);
    can be up to 64 bits in size and the product of (powers 
    of) up to MAX_P_FACTORS distinct primes */
 
+#define MAX_P_FACTORS 5
+
 typedef struct {
 	uint32 p;
 	uint32 r;
 	uint8 log_p;
-	uint8 num_roots;
-	uint32 roots[MAX_POLY_DEGREE];
+	uint8 num_roots[POLY_BATCH_SIZE];
+	uint32 roots[POLY_BATCH_SIZE][MAX_POLYSELECT_DEGREE];
 } sieve_prime_t;
 
 typedef struct {
@@ -114,20 +123,22 @@ typedef struct {
 	uint64 next_composite_p;
 
 	mpz_t p, p2, m0, nmodp2, tmp1, tmp2;
-	mpz_t accum[MAX_POLY_DEGREE + 1];
+	mpz_t accum[MAX_P_FACTORS + 1];
 	mpz_t roots[MAX_ROOTS];
 } sieve_fb_t;
 
 void sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
-			uint32 factor_min, uint32 factor_max);
+			uint32 factor_min, uint32 factor_max,
+			uint32 fb_roots_min, uint32 fb_roots_max);
 
 void sieve_fb_free(sieve_fb_t *s);
 
 void sieve_fb_reset(sieve_fb_t *s, uint64 p_min, uint64 p_max,
 			uint32 num_roots_min, uint32 num_roots_max);
 
-typedef void (*root_callback)(uint64 p, uint32 num_roots,
-				mpz_t *roots, void *extra);
+typedef void (*root_callback)(uint64 p, uint32 num_roots, 
+				uint32 which_poly, mpz_t *roots, 
+				void *extra);
 
 uint64 sieve_fb_next(sieve_fb_t *s, 
 			poly_search_t *poly, 
@@ -137,9 +148,8 @@ uint64 sieve_fb_next(sieve_fb_t *s,
 /*-----------------------------------------------------------------------*/
 
 typedef struct {
-	uint32 num_p;
+	uint32 fill_p;
 	void *p_array;
-	uint32 num_q;
 	void *q_array;
 
 	CUdeviceptr gpu_p_array;
@@ -148,7 +158,8 @@ typedef struct {
 	CUdeviceptr gpu_found_array;
 	found_t *found_array;
 	uint32 found_array_size;
-	p_soa_t *marshall;
+	p_soa_t *p_marshall;
+	p_soa_t *q_marshall;
 
 	poly_search_t *poly;
 
@@ -175,7 +186,7 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 		gpu_info_t *gpu_info, CUmodule gpu_module);
 
 void
-handle_collision(poly_search_t *poly,
+handle_collision(poly_search_t *poly, uint32 which_poly,
 		uint64 p, uint64 proot, uint64 res, uint64 q);
 
 /* main search routine */

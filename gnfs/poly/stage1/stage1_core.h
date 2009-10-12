@@ -24,11 +24,15 @@ typedef unsigned int uint32;
 typedef unsigned long long uint64;
 #endif
 
+#define POLY_BATCH_SIZE 16
+
 /* structure indicating a collision */
 
 typedef struct {
 	uint32 p;
 	uint32 q;
+	uint32 which_poly;
+	uint32 pad;
 	uint64 offset;
 	uint64 proot;
 } found_t;
@@ -39,28 +43,14 @@ typedef struct {
    so we store in SOA format. All the entries in the structure
    have the same number of roots */
 
-#define P_SOA_BATCH_SIZE 8192
+#define P_SOA_BATCH_SIZE 4096
 
 typedef struct {
 	uint32 p[P_SOA_BATCH_SIZE];
-	uint64 roots[MAX_ROOTS][P_SOA_BATCH_SIZE];
+	uint32 lattice_size[P_SOA_BATCH_SIZE];
+	uint64 roots[POLY_BATCH_SIZE][P_SOA_BATCH_SIZE];
 } p_soa_t;
 
-
-/* the batch of p values used in the inner loop does not have
-   a predefined size; instead, p values with different numbers
-   of roots are compacted together contiguously, with unused
-   entries in the roots[] array removed */
-
-#define P_PACKED_HEADER_WORDS 2
-
-typedef struct {
-	uint32 p;
-	uint32 lattice_size;
-	uint32 num_roots;
-	uint32 pad;
-	uint64 roots[MAX_ROOTS];
-} p_packed_t;
 
 #ifdef __cplusplus
 }

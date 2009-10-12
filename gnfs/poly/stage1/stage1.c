@@ -71,9 +71,14 @@ stage1_bounds_update(bounds_t *bounds, double N,
 void
 poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 {
-	mpz_init(poly->high_coeff);
-	mpz_init(poly->trans_N);
-	mpz_init(poly->trans_m0);
+	uint32 i;
+
+	for (i = 0; i < POLY_BATCH_SIZE; i++) {
+		curr_poly_t *c = poly->batch + i;
+		mpz_init(c->high_coeff);
+		mpz_init(c->trans_N);
+		mpz_init(c->trans_m0);
+	}
 	mpz_init_set(poly->N, data->gmp_N);
 	mpz_init(poly->m0);
 	mpz_init(poly->p);
@@ -92,9 +97,14 @@ poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 void
 poly_search_free(poly_search_t *poly)
 {
-	mpz_clear(poly->high_coeff);
-	mpz_clear(poly->trans_N);
-	mpz_clear(poly->trans_m0);
+	uint32 i;
+
+	for (i = 0; i < POLY_BATCH_SIZE; i++) {
+		curr_poly_t *c = poly->batch + i;
+		mpz_clear(c->high_coeff);
+		mpz_clear(c->trans_N);
+		mpz_clear(c->trans_m0);
+	}
 	mpz_clear(poly->N);
 	mpz_clear(poly->m0);
 	mpz_clear(poly->p);
@@ -110,8 +120,9 @@ static void
 search_coeffs_core(msieve_obj *obj, poly_search_t *poly, 
 			gpu_info_t *gpu_info, uint32 deadline)
 {
-	uint32 i;
+	uint32 i, j;
 	uint32 degree = poly->degree;
+	uint32 num_poly = poly->num_poly;
 	uint32 mult = 0;
 
 	switch (degree) {
@@ -120,19 +131,24 @@ search_coeffs_core(msieve_obj *obj, poly_search_t *poly,
 	case 6: mult = 6 * 6 * 6 * 6 * 6 * 6; break;
 	}
 
-	mpz_mul_ui(poly->trans_N, poly->N, (mp_limb_t)mult);
-	for (i = 0; i < degree - 1; i++)
-		mpz_mul(poly->trans_N, poly->trans_N, poly->high_coeff);
+	for (i = 0; i < num_poly; i++) {
+		curr_poly_t *c = poly->batch + i;
 
-	mpz_root(poly->trans_m0, poly->trans_N, (mp_limb_t)degree);
-	mpz_tdiv_q(poly->m0, poly->N, poly->high_coeff);
-	mpz_root(poly->m0, poly->m0, (mp_limb_t)degree);
+		mpz_mul_ui(c->trans_N, poly->N, (mp_limb_t)mult);
+		for (j = 0; j < degree - 1; j++)
+			mpz_mul(c->trans_N, c->trans_N, c->high_coeff);
 
-	poly->sieve_size = poly->coeff_max / mpz_get_d(poly->m0) * 
-			poly->p_size_max * poly->p_size_max / degree;
+		mpz_root(c->trans_m0, c->trans_N, (mp_limb_t)degree);
+
+		mpz_tdiv_q(poly->m0, poly->N, c->high_coeff);
+		mpz_root(poly->m0, poly->m0, (mp_limb_t)degree);
+		c->sieve_size = c->coeff_max / mpz_get_d(poly->m0) * 
+				c->p_size_max * c->p_size_max / degree;
+	}
 
 	sieve_lattice(obj, poly, 2000, 2001, 
-			100000, gpu_info, deadline);
+			100000, gpu_info, 
+			num_poly * deadline);
 }
 
 /*------------------------------------------------------------------------*/
@@ -145,22 +161,22 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly,
 	double dn = mpz_get_d(poly->N);
 	uint32 digits = mpz_sizeinbase(poly->N, 10);
 	double start_time = get_cpu_time();
-	uint32 deadline_per_coeff = 3200;
+	uint32 deadline_per_coeff = 1600;
 
 	if (digits <= 100)
-		deadline_per_coeff = 20;
+		deadline_per_coeff = 10;
 	else if (digits <= 105)
-		deadline_per_coeff = 80;
+		deadline_per_coeff = 40;
 	else if (digits <= 110)
-		deadline_per_coeff = 120;
+		deadline_per_coeff = 60;
 	else if (digits <= 120)
-		deadline_per_coeff = 200;
+		deadline_per_coeff = 100;
 	else if (digits <= 130)
-		deadline_per_coeff = 400;
+		deadline_per_coeff = 200;
 	else if (digits <= 140)
-		deadline_per_coeff = 800;
+		deadline_per_coeff = 400;
 	else if (digits <= 150)
-		deadline_per_coeff = 1600;
+		deadline_per_coeff = 800;
 	printf("deadline: %u seconds per coefficient\n", deadline_per_coeff);
 
 	mpz_init(curr_high_coeff);
@@ -175,30 +191,44 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly,
 				(mp_limb_t)MULTIPLIER);
 	}
 
+	poly->num_poly = 0;
+
 	while (1) {
-		if (mpz_cmp(curr_high_coeff, bounds->gmp_high_coeff_end) > 0)
+		curr_poly_t *c = poly->batch + poly->num_poly;
+
+		if (mpz_cmp(curr_high_coeff, 
+					bounds->gmp_high_coeff_end) > 0) {
+
+			if (poly->num_poly > 0) {
+				search_coeffs_core(obj, poly, gpu_info,
+						deadline_per_coeff);
+			}
 			break;
+		}
 
 		stage1_bounds_update(bounds, dn, 
 					mpz_get_d(curr_high_coeff),
 					poly->degree);
 
-		mpz_set(poly->high_coeff, curr_high_coeff);
-		poly->p_size_max = bounds->p_size_max;
-		poly->coeff_max = bounds->coeff_max;
+		mpz_set(c->high_coeff, curr_high_coeff);
+		c->p_size_max = bounds->p_size_max;
+		c->coeff_max = bounds->coeff_max;
 
-		search_coeffs_core(obj, poly, gpu_info,
-					deadline_per_coeff);
+		if (++poly->num_poly == POLY_BATCH_SIZE) {
+			search_coeffs_core(obj, poly, gpu_info,
+						deadline_per_coeff);
 
-		if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
-			break;
-
-		if (deadline) {
-			double curr_time = get_cpu_time();
-			double elapsed = curr_time - start_time;
-
-			if (elapsed > deadline)
+			if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
 				break;
+
+			if (deadline) {
+				double curr_time = get_cpu_time();
+				double elapsed = curr_time - start_time;
+
+				if (elapsed > deadline)
+					break;
+			}
+			poly->num_poly = 0;
 		}
 
 		mpz_add_ui(curr_high_coeff, curr_high_coeff, 

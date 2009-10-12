@@ -301,26 +301,27 @@ montmul_r(uint64 n, uint32 w) {
 }
 
 /*------------------------------------------------------------------------*/
-__device__ p_packed_t *
-p_packed_next(p_packed_t *curr)
-{
-	return (p_packed_t *)((uint64 *)curr + 
-			P_PACKED_HEADER_WORDS + curr->num_roots);
-}
+#define SHARED_BATCH_SIZE 104
 
-/*------------------------------------------------------------------------*/
-__constant__ uint64 pbatch[1000];
+typedef struct {
+	uint32 p[SHARED_BATCH_SIZE];
+	uint32 lattice_size[SHARED_BATCH_SIZE];
+	uint64 roots[POLY_BATCH_SIZE][SHARED_BATCH_SIZE];
+} p_soa_shared_t;
+
+__shared__ p_soa_shared_t pbatch_cache;
 
 __global__ void
-sieve_kernel(p_soa_t *qbatch, 
-             uint32 num_q,
-	     uint32 num_qroots,
-	     uint32 num_p,
+sieve_kernel(p_soa_t *pbatch, 
+             uint32 num_p,
+	     p_soa_t *qbatch,
+	     uint32 num_q,
+	     uint32 num_roots,
 	     found_t *found_array)
 {
 	uint32 my_threadid;
 	uint32 num_threads;
-	uint32 i, j, k, m;
+	uint32 i, j, k;
 
 	my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
 	num_threads = gridDim.x * blockDim.x;
@@ -331,50 +332,64 @@ sieve_kernel(p_soa_t *qbatch,
 		uint64 q2 = (uint64)q * q;
 		uint32 q2_w = montmul_w((uint32)q2);
 		uint64 q2_r = montmul_r(q2, q2_w);
-		p_packed_t *curr_p = (p_packed_t *)pbatch;
-		
+		uint32 p_done = 0;
 
-		for (j = 0; j < num_p; j++) {
-			uint32 p = curr_p->p;
-			uint64 p2 = (uint64)p * p;
-			uint32 pinvmodq = modinv(p, q);
+		while (p_done < num_p) {
 
-			uint32 num_proots = curr_p->num_roots;
-			uint32 lattice_size = curr_p->lattice_size;
-			uint64 pinv, tmp;
+			uint32 curr_num_p = __min(SHARED_BATCH_SIZE,
+							num_p - p_done);
 
-			tmp = (uint64)pinvmodq * pinvmodq;
-			tmp = montmul(tmp, q2_r, q2, q2_w);
-			pinv = montmul(p2, tmp, q2, q2_w);
-			pinv = modsub((uint64)2, pinv, q2);
-			pinv = montmul(pinv, tmp, q2, q2_w);
-			pinv = montmul(pinv, q2_r, q2, q2_w);
+			if (threadIdx.x < curr_num_p) {
+				j = threadIdx.x;
 
-			for (k = 0; k < num_qroots; k++) {
+				pbatch_cache.p[j] = pbatch->p[p_done + j];
+				pbatch_cache.lattice_size[j] = 
+					pbatch->lattice_size[p_done + j];
 
-				uint64 qroot = qbatch->roots[k][i];
+				for (k = 0; k < num_roots; k++) {
+					pbatch_cache.roots[k][j] = 
+						pbatch->roots[k][p_done + j];
+				}
+			}
 
-				for (m = 0; m < num_proots; m++) {
+			for (j = 0; j < curr_num_p; j++) {
+				uint32 p = pbatch_cache.p[j];
+				uint64 p2 = (uint64)p * p;
+				uint32 pinvmodq = modinv(p, q);
 
-					uint64 proot = curr_p->roots[m];
+				uint32 lattice_size = 
+						pbatch_cache.lattice_size[j];
+				uint64 pinv, tmp;
+
+				tmp = (uint64)pinvmodq * pinvmodq;
+				tmp = montmul(tmp, q2_r, q2, q2_w);
+				pinv = montmul(p2, tmp, q2, q2_w);
+				pinv = modsub((uint64)2, pinv, q2);
+				pinv = montmul(pinv, tmp, q2, q2_w);
+				pinv = montmul(pinv, q2_r, q2, q2_w);
+
+				for (k = 0; k < num_roots; k++) {
+
+					uint64 proot = pbatch_cache.roots[k][j];
+					uint64 qroot = qbatch->roots[k][i];
 					uint64 res = montmul(pinv, 
-							modsub(qroot, 
-								proot, q2),
-							q2, q2_w);
+							modsub(qroot, proot, 
+							q2), q2, q2_w);
 
 					if (res < lattice_size ||
 					    res >= q2 - lattice_size) {
-						found_t *f = found_array +
+						found_t *f = found_array + 
 								my_threadid;
 						f->p = p;
 						f->q = q;
+						f->which_poly = k;
 						f->offset = res;
 						f->proot = proot;
 					}
 				}
 			}
 
-			curr_p = p_packed_next(curr_p);
+			p_done += curr_num_p;
 		}
 	}
 }

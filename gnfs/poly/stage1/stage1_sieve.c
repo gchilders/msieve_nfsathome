@@ -40,9 +40,11 @@ lattice_fb_init(lattice_fb_t *L, poly_search_t *poly,
 
 /*------------------------------------------------------------------------*/
 void
-handle_collision(poly_search_t *poly,
+handle_collision(poly_search_t *poly, uint32 which_poly,
 		uint64 p, uint64 proot, uint64 res, uint64 q)
 {
+	curr_poly_t *c = poly->batch + which_poly;
+
 	uint64_2gmp(p, poly->tmp1);
 	uint64_2gmp(q, poly->tmp2);
 	uint64_2gmp(proot, poly->tmp3);
@@ -54,23 +56,23 @@ handle_collision(poly_search_t *poly,
 		mpz_submul(poly->tmp4, poly->tmp2, poly->tmp2);
 
 	mpz_addmul(poly->tmp3, poly->tmp1, poly->tmp4);
-	mpz_add(poly->m0, poly->trans_m0, poly->tmp3);
+	mpz_add(poly->m0, c->trans_m0, poly->tmp3);
 
 #ifdef CHECK
-	gmp_printf("p %.0lf q %.0lf coeff %Zd\n", 
-				(double)p, (double)q, poly->p);
+	gmp_printf("poly %2u p %.0lf q %.0lf coeff %Zd\n", 
+			which_poly, (double)p, (double)q, poly->p);
 
 	mpz_pow_ui(poly->tmp1, poly->m0, (mp_limb_t)poly->degree);
 	mpz_mul(poly->tmp2, poly->p, poly->p);
-	mpz_sub(poly->tmp1, poly->trans_N, poly->tmp1);
+	mpz_sub(poly->tmp1, c->trans_N, poly->tmp1);
 	mpz_tdiv_r(poly->tmp3, poly->tmp1, poly->tmp2);
 	if (mpz_cmp_ui(poly->tmp3, (mp_limb_t)0)) {
 		printf("crap\n");
-		exit(-1);
+	return;//	exit(-1);
 	}
 #endif
 
-	mpz_mul_ui(poly->tmp1, poly->high_coeff, (mp_limb_t)poly->degree);
+	mpz_mul_ui(poly->tmp1, c->high_coeff, (mp_limb_t)poly->degree);
 	mpz_tdiv_qr(poly->m0, poly->tmp2, poly->m0, poly->tmp1);
 	mpz_invert(poly->tmp3, poly->tmp1, poly->p);
 
@@ -86,8 +88,8 @@ handle_collision(poly_search_t *poly,
 
 	mpz_addmul(poly->m0, poly->tmp4, poly->tmp5);
 
-	poly->callback(poly->high_coeff, poly->p, poly->m0, 
-			poly->coeff_max, poly->callback_data);
+	poly->callback(c->high_coeff, poly->p, poly->m0, 
+			c->coeff_max, poly->callback_data);
 }
 
 /*------------------------------------------------------------------------*/
@@ -103,32 +105,30 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 	uint32 large_p_min, large_p_max;
 	uint32 bits;
 	double p_scale = 1.1;
+	curr_poly_t *middle_poly;
+	curr_poly_t *last_poly;
 
 	CUcontext gpu_context;
 	CUmodule gpu_module;
 
-	if (poly->p_size_max >= (double)MAX_P * MAX_P) {
+	middle_poly = poly->batch + poly->num_poly / 2;
+	last_poly = poly->batch + poly->num_poly - 1;
+
+	if (middle_poly->p_size_max >= (double)MAX_P * MAX_P) {
 		printf("error: rational leading coefficient is too large\n");
 		exit(-1);
 	}
 
 	bits = mpz_sizeinbase(poly->N, 2);
-	switch(poly->degree) {
-	case 4:
-		if (bits < 306)
-			p_scale = 1.3;
-		else if (bits < 323)
-			p_scale = 1.2;
-		break;
-
-	case 5:
+	if (poly->degree == 4) {
+		printf("error: GPU version cannot handle degree 4\n");
+		exit(-1);
+	}
+	else if (poly->degree == 5) {
 		if (bits < 363)
 			p_scale = 1.3;
 		else if (bits < 396)
 			p_scale = 1.2;
-		else
-			p_scale = 1.1;
-		break;
 	}
 
 	CUDA_TRY(cuCtxCreate(&gpu_context, CU_CTX_SCHED_YIELD,
@@ -136,7 +136,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 
 	CUDA_TRY(cuModuleLoad(&gpu_module, "stage1_core.ptx"))
 
-	large_p_min = sqrt(poly->p_size_max);
+	large_p_min = sqrt(middle_poly->p_size_max);
 	if (large_p_min >= MAX_P / p_scale)
 		large_p_max = MAX_P - 1;
 	else
@@ -145,15 +145,16 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 	small_p_min = large_p_min / p_scale;
 	small_p_max = large_p_min - 1;
 
-	gmp_printf("coeff %Zd"
+	gmp_printf("coeff %Zd-%Zd"
 		   " %" PRIu64 " %" PRIu64 
 		   " %" PRIu64 " %" PRIu64 "\n",
-			poly->high_coeff, 
+			poly->batch[0].high_coeff,
+			last_poly->high_coeff,
 			(uint64)small_p_min, (uint64)small_p_max,
 			(uint64)large_p_min, (uint64)large_p_max);
 
-	sieve_fb_init(&sieve_small, poly, 5, small_fb_max);
-	sieve_fb_init(&sieve_large, poly, large_fb_min, large_fb_max);
+	sieve_fb_init(&sieve_small, poly, 5, small_fb_max, 1, 1);
+	sieve_fb_init(&sieve_large, poly, large_fb_min, large_fb_max, 1, 1);
 	lattice_fb_init(&L, poly, deadline);
 
 	while (1) {
@@ -171,19 +172,20 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 			break;
 		}
 #endif
+
 		small_p_max = small_p_min - 1;
 		small_p_min = small_p_min / p_scale;
-		if (small_p_min < 2000)
+		if (small_p_min < small_fb_max)
 			break;
 
-		if (poly->p_size_max / small_p_max >= MAX_P)
+		if (middle_poly->p_size_max / small_p_max >= MAX_P)
 			break;
-		large_p_min = poly->p_size_max / small_p_max;
+		large_p_min = middle_poly->p_size_max / small_p_max;
 
-		if (poly->p_size_max / small_p_min >= MAX_P)
+		if (middle_poly->p_size_max / small_p_min >= MAX_P)
 			large_p_max = MAX_P - 1;
 		else
-			large_p_max = poly->p_size_max / small_p_min;
+			large_p_max = middle_poly->p_size_max / small_p_min;
 	}
 
 	CUDA_TRY(cuCtxDestroy(gpu_context)) 
