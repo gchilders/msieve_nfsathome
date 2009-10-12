@@ -131,7 +131,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 			p_scale = 1.2;
 	}
 
-	CUDA_TRY(cuCtxCreate(&gpu_context, CU_CTX_SCHED_YIELD,
+	CUDA_TRY(cuCtxCreate(&gpu_context, CU_CTX_BLOCKING_SYNC,
 			gpu_info->device_handle))
 
 	CUDA_TRY(cuModuleLoad(&gpu_module, "stage1_core.ptx"))
