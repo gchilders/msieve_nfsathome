@@ -274,13 +274,18 @@ poly_stage1_run(msieve_obj *obj, poly_stage1_t *data)
 		printf("error: no CUDA-enabled GPUs found\n");
 		exit(-1);
 	}
+	if (obj->which_gpu >= (uint32)gpu_config.num_gpu) {
+		printf("error: GPU %u does not exist "
+			"or is not CUDA-enabled\n", obj->which_gpu);
+		exit(-1);
+	}
 
 	stage1_bounds_init(&bounds, data);
 	poly_search_init(&poly, data);
 
-	/* always use GPU 0 for now */
+	logprintf(obj, "using GPU %u\n", obj->which_gpu);
 	search_coeffs(obj, &poly, &bounds, 
-			gpu_config.info + 0, data->deadline);
+			gpu_config.info + obj->which_gpu, data->deadline);
 
 	poly_search_free(&poly);
 	stage1_bounds_free(&bounds);
