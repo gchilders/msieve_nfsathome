@@ -175,18 +175,19 @@ sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 				uint32 num_roots = get_prime_roots(poly, i,
 								p, roots);
 				sp->num_roots[i] = num_roots;
-				if (num_roots > 0) {
 
-					if (num_roots < fb_roots_min ||
-					    num_roots > fb_roots_max) {
-						found = 0;
-						break;
-					}
+				if (num_roots == 0)
+					continue;
 
-					for (j = 0; j < num_roots; j++)
-						sp->roots[i][j] = roots[j];
-					found++;
+				if (num_roots < fb_roots_min ||
+				    num_roots > fb_roots_max) {
+					found = 0;
+					break;
 				}
+
+				for (j = 0; j < num_roots; j++)
+					sp->roots[i][j] = roots[j];
+				found++;
 			}
 
 			if (found == 0) {
@@ -567,6 +568,9 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 				num_roots = get_prime_roots(poly, i,
 							(uint32)p, roots);
 
+				if (num_roots == 0)
+					continue;
+
 				if (num_roots < s->num_roots_min ||
 				    num_roots > s->num_roots_max)
 					break;
@@ -598,6 +602,9 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 				num_roots = get_composite_roots(s, 
 							poly->batch + i, i, p, 
 							num_factors, factors);
+
+				if (num_roots == 0)
+					continue;
 
 				if (num_roots < s->num_roots_min ||
 				    num_roots > s->num_roots_max)
