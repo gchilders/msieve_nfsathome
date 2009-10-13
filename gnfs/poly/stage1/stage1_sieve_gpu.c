@@ -20,67 +20,18 @@ $Id$
 /*------------------------------------------------------------------------*/
 typedef struct {
 	uint32 num_p;
-	uint32 num_p_alloc;
 	uint32 last_p;
 
-	uint32 *p;
-	uint32 *lattice_size;
-	uint64 *roots[POLY_BATCH_SIZE];
+	uint32 p[HOST_BATCH_SIZE];
+	uint32 lattice_size[HOST_BATCH_SIZE];
+	uint64 roots[POLY_BATCH_SIZE][HOST_BATCH_SIZE];
 } p_soa_var_t;
-
-static void
-p_soa_var_init(p_soa_var_t *soa)
-{
-	uint32 i;
-	memset(soa, 0, sizeof(p_soa_var_t));
-
-	soa->num_p_alloc = 1000;
-	soa->p = (uint32 *)xmalloc(soa->num_p_alloc * 
-				sizeof(uint32));
-	soa->lattice_size = (uint32 *)xmalloc(soa->num_p_alloc * 
-				sizeof(uint32));
-	for (i = 0; i < POLY_BATCH_SIZE; i++) {
-		soa->roots[i] = (uint64 *)xmalloc(
-					soa->num_p_alloc * 
-					sizeof(uint64));
-	}
-}
-
-static void
-p_soa_var_free(p_soa_var_t *soa)
-{
-	uint32 i;
-
-	free(soa->p);
-	free(soa->lattice_size);
-	for (i = 0; i < POLY_BATCH_SIZE; i++)
-		free(soa->roots[i]);
-}
 
 static void
 p_soa_var_reset(p_soa_var_t *soa)
 {
 	soa->num_p = 0;
 	soa->last_p = 0;
-}
-
-static void
-p_soa_var_grow(p_soa_var_t *soa)
-{
-	uint32 i;
-
-	soa->num_p_alloc *= 2;
-	soa->p = (uint32 *)xrealloc(soa->p, 
-				soa->num_p_alloc * 
-				sizeof(uint32));
-	soa->lattice_size = (uint32 *)xrealloc(soa->lattice_size, 
-				soa->num_p_alloc * 
-				sizeof(uint32));
-	for (i = 0; i < POLY_BATCH_SIZE; i++) {
-		soa->roots[i] = (uint64 *)xrealloc(soa->roots[i], 
-					soa->num_p_alloc * 
-					sizeof(uint64));
-	}
 }
 
 static void 
@@ -103,9 +54,6 @@ store_p_soa(uint64 p, uint32 num_roots, uint32 which_poly,
 
 	num = soa->num_p;
 	if (p != soa->last_p) {
-		if (soa->num_p_alloc == soa->num_p)
-			p_soa_var_grow(soa);
-
 		soa->p[num] = (uint32)p;
 		soa->lattice_size[num] = (uint32)(L->poly->batch[
 				which_poly].sieve_size / ((double)p * p));
@@ -303,8 +251,6 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 					sizeof(p_soa_var_t));
 	q_array = L->q_array = (p_soa_var_t *)xmalloc(
 					sizeof(p_soa_var_t));
-	p_soa_var_init(p_array);
-	p_soa_var_init(q_array);
 
 	CUDA_TRY(cuModuleGetFunction(&gpu_kernel, gpu_module, 
 				"sieve_kernel"))
@@ -378,8 +324,6 @@ finished:
 	CUDA_TRY(cuMemFree(L->gpu_p_array))
 	CUDA_TRY(cuMemFree(L->gpu_q_array))
 	CUDA_TRY(cuMemFree(L->gpu_found_array))
-	p_soa_var_free(p_array);
-	p_soa_var_free(q_array);
 	free(p_array);
 	free(q_array);
 	free(L->p_marshall);
