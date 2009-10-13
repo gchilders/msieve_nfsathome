@@ -204,7 +204,7 @@ x86: $(COMMON_OBJS) $(QS_OBJS) $(QS_CORE_OBJS) \
 			libmsieve.a $(LIBS)
 
 x86_64: $(COMMON_OBJS) $(QS_OBJS) $(QS_CORE_OBJS) \
-		$(QS_CORE_OBJS_X86_64) $(NFS_OBJS)
+		$(QS_CORE_OBJS_X86_64) $(NFS_OBJS) $(GPU_OBJS)
 	rm -f libmsieve.a
 	ar r libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
 			$(QS_CORE_OBJS) $(QS_CORE_OBJS_X86_64) \
