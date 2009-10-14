@@ -9,7 +9,7 @@ useful. Again optionally, if you add to the functionality present here
 please consider making those additions public too, so that others may 
 benefit from your work.	
 
-$Id: stage1_sieve_gpu64.c -1   $
+$Id$
 --------------------------------------------------------------------*/
 
 #include "stage1.h"

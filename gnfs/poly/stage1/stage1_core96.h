@@ -9,7 +9,7 @@ useful. Again optionally, if you add to the functionality present here
 please consider making those additions public too, so that others may 
 benefit from your work.	
 
-$Id: stage1_core64.h -1   $
+$Id$
 --------------------------------------------------------------------*/
 
 #ifndef _STAGE1_CORE_H_
