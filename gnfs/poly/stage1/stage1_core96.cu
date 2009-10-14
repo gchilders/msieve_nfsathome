@@ -9,10 +9,10 @@ useful. Again optionally, if you add to the functionality present here
 please consider making those additions public too, so that others may 
 benefit from your work.	
 
-$Id$
+$Id: stage1_core64.cu -1   $
 --------------------------------------------------------------------*/
 
-#include "stage1_core.h"
+#include "stage1_core96.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -314,7 +314,7 @@ typedef struct {
 __shared__ p_soa_shared_t pbatch_cache;
 
 __global__ void
-sieve_kernel(p_soa_t *pbatch, 
+sieve_kernel_96(p_soa_t *pbatch, 
              uint32 num_p,
 	     p_soa_t *qbatch,
 	     uint32 num_q,

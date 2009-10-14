@@ -24,7 +24,7 @@ $Id$
    bits (32 bits is enough for 512-bit factorizations), and 
    candidates must satisfy a condition modulo p^2 */
 
-#define MAX_P_BITS 32
+#define MAX_P_BITS 48
 #define MAX_P ((uint64)1 << MAX_P_BITS)
 
 /*------------------------------------------------------------------------*/
@@ -101,15 +101,18 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 {
 	lattice_fb_t L;
 	sieve_fb_t sieve_small, sieve_large;
-	uint32 small_p_min, small_p_max;
-	uint32 large_p_min, large_p_max;
+	uint64 small_p_min, small_p_max;
+	uint64 large_p_min, large_p_max;
 	uint32 bits;
 	double p_scale = 1.1;
 	curr_poly_t *middle_poly;
 	curr_poly_t *last_poly;
 
 	CUcontext gpu_context;
-	CUmodule gpu_module;
+	CUmodule gpu_module64;
+	CUmodule gpu_module96;
+	CUfunction gpu_kernel64;
+	CUfunction gpu_kernel96;
 
 	middle_poly = poly->batch + poly->num_poly / 2;
 	last_poly = poly->batch + poly->num_poly - 1;
@@ -134,7 +137,13 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 	CUDA_TRY(cuCtxCreate(&gpu_context, CU_CTX_BLOCKING_SYNC,
 			gpu_info->device_handle))
 
-	CUDA_TRY(cuModuleLoad(&gpu_module, "stage1_core.ptx"))
+	CUDA_TRY(cuModuleLoad(&gpu_module64, "stage1_core64.ptx"))
+	CUDA_TRY(cuModuleLoad(&gpu_module96, "stage1_core96.ptx"))
+
+	CUDA_TRY(cuModuleGetFunction(&gpu_kernel64, gpu_module64, 
+				"sieve_kernel_64"))
+	CUDA_TRY(cuModuleGetFunction(&gpu_kernel96, gpu_module96, 
+				"sieve_kernel_96"))
 
 	large_p_min = sqrt(middle_poly->p_size_max);
 	if (large_p_min >= MAX_P / p_scale)
@@ -150,28 +159,35 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 		   " %" PRIu64 " %" PRIu64 "\n",
 			poly->batch[0].high_coeff,
 			last_poly->high_coeff,
-			(uint64)small_p_min, (uint64)small_p_max,
-			(uint64)large_p_min, (uint64)large_p_max);
+			small_p_min, small_p_max,
+			large_p_min, large_p_max);
 
 	sieve_fb_init(&sieve_small, poly, 5, small_fb_max, 1, 1);
 	sieve_fb_init(&sieve_large, poly, large_fb_min, large_fb_max, 1, 1);
 	lattice_fb_init(&L, poly, deadline);
 
 	while (1) {
-#if 1
-		if (sieve_lattice_gpu(obj, &L, &sieve_small, &sieve_large,
+
+		if (large_p_max < ((uint64)1 << 32)) {
+			if (sieve_lattice_gpu64(obj, &L,
+					&sieve_small, &sieve_large,
+					(uint32)small_p_min, 
+					(uint32)small_p_max,
+					(uint32)large_p_min, 
+					(uint32)large_p_max,
+					gpu_info, gpu_kernel64)) {
+				break;
+			}
+		}
+		else {
+			if (sieve_lattice_gpu96(obj, &L,
+					&sieve_small, &sieve_large,
 					small_p_min, small_p_max,
 					large_p_min, large_p_max,
-					gpu_info, gpu_module)) {
-			break;
+					gpu_info, gpu_kernel96)) {
+				break;
+			}
 		}
-#else
-		if (sieve_lattice_cpu(obj, &L, &sieve_small, &sieve_large,
-					small_p_min, small_p_max,
-					large_p_min, large_p_max)) {
-			break;
-		}
-#endif
 
 		small_p_max = small_p_min - 1;
 		small_p_min = small_p_min / p_scale;

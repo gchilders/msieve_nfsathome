@@ -17,11 +17,12 @@ $Id$
 
 #include <poly_skew.h>
 #include <cuda_xface.h>
-#include "stage1_core.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define POLY_BATCH_SIZE 16
 
 #define MAX_POLYSELECT_DEGREE 6
 
@@ -90,6 +91,7 @@ void poly_search_free(poly_search_t *poly);
    of) up to MAX_P_FACTORS distinct primes */
 
 #define MAX_P_FACTORS 5
+#define MAX_ROOTS 36
 
 typedef struct {
 	uint32 p;
@@ -153,13 +155,12 @@ typedef struct {
 	void *q_array;
 
 	CUdeviceptr gpu_p_array;
-	uint32 p_array_max_words;
 	CUdeviceptr gpu_q_array;
 	CUdeviceptr gpu_found_array;
-	found_t *found_array;
+	void *found_array;
 	uint32 found_array_size;
-	p_soa_t *p_marshall;
-	p_soa_t *q_marshall;
+	void *p_marshall;
+	void *q_marshall;
 
 	poly_search_t *poly;
 
@@ -169,21 +170,21 @@ typedef struct {
 	uint32 tests_per_block;
 } lattice_fb_t;
 
-
 /* lower-level sieve routines */
 
 uint32
-sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
-		uint32 small_p_min, uint32 small_p_max, 
-		uint32 large_p_min, uint32 large_p_max);
-
-uint32
-sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
+sieve_lattice_gpu64(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
 		uint32 small_p_min, uint32 small_p_max, 
 		uint32 large_p_min, uint32 large_p_max,
-		gpu_info_t *gpu_info, CUmodule gpu_module);
+		gpu_info_t *gpu_info, CUfunction gpu_kernel);
+
+uint32
+sieve_lattice_gpu96(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
+		uint64 small_p_min, uint64 small_p_max, 
+		uint64 large_p_min, uint64 large_p_max,
+		gpu_info_t *gpu_info, CUfunction gpu_kernel);
 
 void
 handle_collision(poly_search_t *poly, uint32 which_poly,

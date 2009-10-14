@@ -9,7 +9,7 @@ useful. Again optionally, if you add to the functionality present here
 please consider making those additions public too, so that others may 
 benefit from your work.	
 
-$Id$
+$Id: stage1_core64.h -1   $
 --------------------------------------------------------------------*/
 
 #ifndef _STAGE1_CORE_H_
@@ -20,11 +20,10 @@ extern "C" {
 #endif
 
 #ifdef __CUDACC__
-typedef unsigned int uint32;
-typedef unsigned long long uint64;
+	typedef unsigned int uint32;
+	typedef unsigned long long uint64;
+	#define POLY_BATCH_SIZE 16
 #endif
-
-#define POLY_BATCH_SIZE 16
 
 /* structure indicating a collision */
 
@@ -36,8 +35,6 @@ typedef struct {
 	uint64 offset;
 	uint64 proot;
 } found_t;
-
-#define MAX_ROOTS 36
 
 /* the outer loop needs parallel access to different p,
    so we store in SOA format. All the entries in the structure

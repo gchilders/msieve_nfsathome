@@ -13,7 +13,7 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include "stage1.h"
-#include "stage1_core.h"
+#include "stage1_core64.h"
 
 #define HOST_BATCH_SIZE 30000
 
@@ -67,7 +67,7 @@ store_p_soa(uint64 p, uint32 num_roots, uint32 which_poly,
 }
 
 /*------------------------------------------------------------------------*/
-uint32
+static uint32
 sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			uint32 threads_per_block,
 			gpu_info_t *gpu_info, CUfunction gpu_kernel)
@@ -81,8 +81,10 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 	void *gpu_ptr;
 	uint32 num_poly = L->poly->num_poly;
 
-	p_soa_t *p_marshall = L->p_marshall;
-	p_soa_t *q_marshall = L->q_marshall;
+	p_soa_t *p_marshall = (p_soa_t *)L->p_marshall;
+	p_soa_t *q_marshall = (p_soa_t *)L->q_marshall;
+	found_t *found_array = (found_t *)L->found_array;
+	uint32 found_array_size = L->found_array_size;
 	uint32 num_q_done = 0;
 
 	i = 0;
@@ -125,12 +127,12 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 		time_t curr_time;
 		double elapsed;
 
-		uint32 curr_num_q = MIN(L->found_array_size,
+		uint32 curr_num_q = MIN(found_array_size,
 					q_array->num_p - num_q_done);
 
 		curr_num_q = MIN(curr_num_q, P_SOA_BATCH_SIZE);
 		q_left = q_array->num_p - (num_q_done + curr_num_q);
-		if (q_left > 0 && q_left < L->found_array_size / 4)
+		if (q_left > 0 && q_left < found_array_size / 4)
 			curr_num_q /= 2;
 
 		memcpy(q_marshall->p, 
@@ -151,12 +153,12 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 		while (num_p_done < p_array->num_p) {
 
 			uint32 p_left;
-			uint32 curr_num_p = MIN(L->found_array_size,
+			uint32 curr_num_p = MIN(found_array_size,
 						p_array->num_p - num_p_done);
 
 			curr_num_p = MIN(curr_num_p, P_SOA_BATCH_SIZE);
 			p_left = p_array->num_p - (num_p_done + curr_num_p);
-			if (p_left > 0 && p_left < L->found_array_size / 4)
+			if (p_left > 0 && p_left < found_array_size / 4)
 				curr_num_p /= 2;
 
 			memcpy(p_marshall->p, 
@@ -183,7 +185,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 #endif
 
 			num_blocks = gpu_info->num_compute_units;
-			if (curr_num_q < L->found_array_size) {
+			if (curr_num_q < found_array_size) {
 				num_blocks = (curr_num_q + 
 					threads_per_block - 1) /
 					threads_per_block;
@@ -192,7 +194,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			CUDA_TRY(cuLaunchGrid(gpu_kernel, 
 						num_blocks, 1))
 
-			CUDA_TRY(cuMemcpyDtoH(L->found_array, 
+			CUDA_TRY(cuMemcpyDtoH(found_array, 
 						L->gpu_found_array, 
 						num_blocks * 
 						threads_per_block *
@@ -200,7 +202,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 
 			for (i = 0; i < threads_per_block *
 					num_blocks; i++) {
-				found_t *f = L->found_array + i;
+				found_t *f = found_array + i;
 
 				if (f->p > 0) {
 					handle_collision(L->poly, 
@@ -229,11 +231,11 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 
 /*------------------------------------------------------------------------*/
 uint32
-sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
+sieve_lattice_gpu64(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
 		uint32 small_p_min, uint32 small_p_max, 
 		uint32 large_p_min, uint32 large_p_max,
-		gpu_info_t *gpu_info, CUmodule gpu_module)
+		gpu_info_t *gpu_info, CUfunction gpu_kernel)
 {
 	uint32 i;
 	uint32 min_small, min_large;
@@ -242,7 +244,6 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 	p_soa_var_t * q_array;
 	clock_t clock_start;
 
-	CUfunction gpu_kernel;
 	uint32 threads_per_block;
 
 	L->p_marshall = (p_soa_t *)xmalloc(sizeof(p_soa_t));
@@ -252,8 +253,6 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 	q_array = L->q_array = (p_soa_var_t *)xmalloc(
 					sizeof(p_soa_var_t));
 
-	CUDA_TRY(cuModuleGetFunction(&gpu_kernel, gpu_module, 
-				"sieve_kernel"))
 	CUDA_TRY(cuMemAlloc(&L->gpu_p_array, sizeof(p_soa_t)))
 	CUDA_TRY(cuMemAlloc(&L->gpu_q_array, sizeof(p_soa_t)))
 
