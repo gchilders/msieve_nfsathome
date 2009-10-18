@@ -905,6 +905,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 	uint32 report_interval = 0;
 	uint32 check_interval = 0;
 	uint32 next_report = 0;
+	uint32 log_ETA_once = 0;
 	uint32 next_check = 0;
 	uint32 next_dump = 0;
 	time_t first_time;
@@ -1207,6 +1208,10 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 					"%dh%2dm)    \r",
 					dim_solved, n, 100.0 * dim_solved / n,
 					eta / 3600, (eta % 3600) / 60);
+				if(++log_ETA_once == 3)  /* wait 3 intervals for a better ETA */
+				  logprintf(obj, "linear algebra at %1.1f%%, ETA %dh%2dm\n",
+					100.0 * dim_solved / n,
+					eta / 3600, (eta % 3600) / 60);
 				next_report = dim_solved + report_interval;
 				fflush(stderr);
 			}
@@ -1359,8 +1364,8 @@ uint64 * block_lanczos(msieve_obj *obj, uint32 nrows,
 	dump_interval = 0;
 	if (ncols > 1000000) {
 
-		if (ncols > 4000000)
-			dump_interval = 100000;
+		if (ncols > 4000000)   /* ~ once an hour */
+			dump_interval = 10000 * (int)rint(5.0e7 / ncols);
 		else if (ncols > 2000000)
 			dump_interval = 250000;
 		else
