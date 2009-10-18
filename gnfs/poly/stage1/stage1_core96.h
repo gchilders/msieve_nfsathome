@@ -12,40 +12,45 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#ifndef _STAGE1_CORE_H_
-#define _STAGE1_CORE_H_
+#ifndef _STAGE1_CORE96_H_
+#define _STAGE1_CORE96_H_
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #ifdef __CUDACC__
+	typedef int int32;
 	typedef unsigned int uint32;
 	typedef unsigned long long uint64;
+
 	#define POLY_BATCH_SIZE 16
+
+	/* 96-bit integers */
+
+	typedef struct {
+		uint32 w[3];
+	} uint96;
 #endif
+
 
 /* structure indicating a collision */
 
 typedef struct {
-	uint32 p;
-	uint32 q;
+	uint64 p;
+	uint64 q;
 	uint32 which_poly;
 	uint32 pad;
-	uint64 offset;
-	uint64 proot;
+	uint96 offset;
+	uint96 proot;
 } found_t;
-
-/* the outer loop needs parallel access to different p,
-   so we store in SOA format. All the entries in the structure
-   have the same number of roots */
 
 #define P_SOA_BATCH_SIZE 11520
 
 typedef struct {
-	uint32 p[P_SOA_BATCH_SIZE];
-	uint32 lattice_size[P_SOA_BATCH_SIZE];
-	uint64 roots[POLY_BATCH_SIZE][P_SOA_BATCH_SIZE];
+	uint64 p[P_SOA_BATCH_SIZE];
+	uint64 lattice_size[P_SOA_BATCH_SIZE];
+	uint32 roots[3 * POLY_BATCH_SIZE][P_SOA_BATCH_SIZE];
 } p_soa_t;
 
 
@@ -53,4 +58,4 @@ typedef struct {
 }
 #endif
 
-#endif /* !_STAGE1_CORE_H_ */
+#endif /* !_STAGE1_CORE96_H_ */

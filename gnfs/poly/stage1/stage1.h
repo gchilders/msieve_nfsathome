@@ -32,6 +32,12 @@ extern "C" {
 
 #define MULTIPLIER 60	/* 2*2*3*5 */
 
+/* 96-bit integers */
+
+typedef struct {
+	uint32 w[3];
+} uint96;
+
 /*-----------------------------------------------------------------------*/
 
 /* search bounds */
@@ -188,7 +194,7 @@ sieve_lattice_gpu96(msieve_obj *obj, lattice_fb_t *L,
 
 void
 handle_collision(poly_search_t *poly, uint32 which_poly,
-		uint64 p, uint64 proot, uint64 res, uint64 q);
+		uint64 p, uint96 proot, uint96 res, uint64 q);
 
 /* main search routine */
 

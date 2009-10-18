@@ -41,14 +41,14 @@ lattice_fb_init(lattice_fb_t *L, poly_search_t *poly,
 /*------------------------------------------------------------------------*/
 void
 handle_collision(poly_search_t *poly, uint32 which_poly,
-		uint64 p, uint64 proot, uint64 res, uint64 q)
+		uint64 p, uint96 proot, uint96 res, uint64 q)
 {
 	curr_poly_t *c = poly->batch + which_poly;
 
 	uint64_2gmp(p, poly->tmp1);
 	uint64_2gmp(q, poly->tmp2);
-	uint64_2gmp(proot, poly->tmp3);
-	uint64_2gmp(res, poly->tmp4);
+	mpz_import(poly->tmp3, 3, -1, sizeof(uint32), 0, 0, &proot);
+	mpz_import(poly->tmp4, 3, -1, sizeof(uint32), 0, 0, &res);
 
 	mpz_mul(poly->p, poly->tmp1, poly->tmp2);
 	mpz_mul(poly->tmp1, poly->tmp1, poly->tmp1);
