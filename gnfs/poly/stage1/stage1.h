@@ -22,7 +22,7 @@ $Id$
 extern "C" {
 #endif
 
-#define POLY_BATCH_SIZE 16
+#define POLY_BATCH_SIZE 40
 
 #define MAX_POLYSELECT_DEGREE 6
 

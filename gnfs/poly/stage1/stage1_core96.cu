@@ -374,18 +374,15 @@ montmul_r(uint96 n, uint32 w) {
 		res.w[1] = res.w[2];
 		res.w[2] = 0;
 	}
-#if 1
+
 	res = montmul(res, res, n, w);
 	res = montmul(res, res, n, w);
 	res = montmul(res, res, n, w);
 	return montmul(res, res, n, w);
-#else
-	return res;
-#endif
 }
 
 /*------------------------------------------------------------------------*/
-#define SHARED_BATCH_SIZE 72
+#define SHARED_BATCH_SIZE 32
 
 typedef struct {
 	uint64 p[SHARED_BATCH_SIZE];
@@ -400,7 +397,7 @@ __constant__ uint96 two = {{2, 0, 0}};
 __global__ void
 sieve_kernel_96(p_soa_t *pbatch, 
              uint32 num_p,
-	     p_soa_t *qbatch,
+	     q_soa_t *qbatch,
 	     uint32 num_q,
 	     uint32 num_roots,
 	     found_t *found_array)

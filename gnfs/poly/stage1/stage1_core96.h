@@ -24,7 +24,7 @@ extern "C" {
 	typedef unsigned int uint32;
 	typedef unsigned long long uint64;
 
-	#define POLY_BATCH_SIZE 16
+	#define POLY_BATCH_SIZE 40
 
 	/* 96-bit integers */
 
@@ -45,13 +45,21 @@ typedef struct {
 	uint96 proot;
 } found_t;
 
-#define P_SOA_BATCH_SIZE 11520
+#define P_SOA_BATCH_SIZE 2048
 
 typedef struct {
 	uint64 p[P_SOA_BATCH_SIZE];
 	uint64 lattice_size[P_SOA_BATCH_SIZE];
 	uint32 roots[3 * POLY_BATCH_SIZE][P_SOA_BATCH_SIZE];
 } p_soa_t;
+
+#define Q_SOA_BATCH_SIZE (5*30*192)
+
+typedef struct {
+	uint64 p[Q_SOA_BATCH_SIZE];
+	uint64 lattice_size[Q_SOA_BATCH_SIZE];
+	uint32 roots[3 * POLY_BATCH_SIZE][Q_SOA_BATCH_SIZE];
+} q_soa_t;
 
 
 #ifdef __cplusplus

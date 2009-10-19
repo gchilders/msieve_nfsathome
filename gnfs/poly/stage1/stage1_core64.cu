@@ -303,7 +303,7 @@ montmul_r(uint64 n, uint32 w) {
 }
 
 /*------------------------------------------------------------------------*/
-#define SHARED_BATCH_SIZE 104
+#define SHARED_BATCH_SIZE 48
 
 typedef struct {
 	uint32 p[SHARED_BATCH_SIZE];
@@ -316,7 +316,7 @@ __shared__ p_soa_shared_t pbatch_cache;
 __global__ void
 sieve_kernel_64(p_soa_t *pbatch, 
              uint32 num_p,
-	     p_soa_t *qbatch,
+	     q_soa_t *qbatch,
 	     uint32 num_q,
 	     uint32 num_roots,
 	     found_t *found_array)
