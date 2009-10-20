@@ -24,8 +24,7 @@ $Id$
    bits (32 bits is enough for 512-bit factorizations), and 
    candidates must satisfy a condition modulo p^2 */
 
-#define MAX_P_BITS 48
-#define MAX_P ((uint64)1 << MAX_P_BITS)
+#define MAX_P ((uint64)(-1))
 
 /*------------------------------------------------------------------------*/
 static void 
@@ -41,14 +40,14 @@ lattice_fb_init(lattice_fb_t *L, poly_search_t *poly,
 /*------------------------------------------------------------------------*/
 void
 handle_collision(poly_search_t *poly, uint32 which_poly,
-		uint64 p, uint96 proot, uint96 res, uint64 q)
+		uint64 p, uint128 proot, uint128 res, uint64 q)
 {
 	curr_poly_t *c = poly->batch + which_poly;
 
 	uint64_2gmp(p, poly->tmp1);
 	uint64_2gmp(q, poly->tmp2);
-	mpz_import(poly->tmp3, 3, -1, sizeof(uint32), 0, 0, &proot);
-	mpz_import(poly->tmp4, 3, -1, sizeof(uint32), 0, 0, &res);
+	mpz_import(poly->tmp3, 4, -1, sizeof(uint32), 0, 0, &proot);
+	mpz_import(poly->tmp4, 4, -1, sizeof(uint32), 0, 0, &res);
 
 	mpz_mul(poly->p, poly->tmp1, poly->tmp2);
 	mpz_mul(poly->tmp1, poly->tmp1, poly->tmp1);
@@ -111,14 +110,19 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 	CUcontext gpu_context;
 	CUmodule gpu_module64;
 	CUmodule gpu_module96;
+	CUmodule gpu_module128;
 	CUfunction gpu_kernel64;
 	CUfunction gpu_kernel96;
+	CUfunction gpu_kernel128;
 
 	middle_poly = poly->batch + poly->num_poly / 2;
 	last_poly = poly->batch + poly->num_poly - 1;
 
 	if (middle_poly->p_size_max >= (double)MAX_P * MAX_P) {
-		printf("error: rational leading coefficient is too large\n");
+		printf("error: rational leading coefficient is "
+			"too large at %le (%0.3f bits)\n",
+	 		 middle_poly->p_size_max, 
+			 log(middle_poly->p_size_max)/ M_LN2);
 		exit(-1);
 	}
 
@@ -133,17 +137,28 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 		else if (bits < 396)
 			p_scale = 1.2;
 	}
+	else if (poly->degree == 6) {
+		if (bits < 512)
+			p_scale = 1.2;
+		else if (bits < 600)
+			p_scale = 1.1;
+		else
+			p_scale = 1.03;
+	}
 
 	CUDA_TRY(cuCtxCreate(&gpu_context, CU_CTX_BLOCKING_SYNC,
 			gpu_info->device_handle))
 
 	CUDA_TRY(cuModuleLoad(&gpu_module64, "stage1_core64.ptx"))
 	CUDA_TRY(cuModuleLoad(&gpu_module96, "stage1_core96.ptx"))
+	CUDA_TRY(cuModuleLoad(&gpu_module128, "stage1_core128.ptx"))
 
 	CUDA_TRY(cuModuleGetFunction(&gpu_kernel64, gpu_module64, 
 				"sieve_kernel_64"))
 	CUDA_TRY(cuModuleGetFunction(&gpu_kernel96, gpu_module96, 
 				"sieve_kernel_96"))
+	CUDA_TRY(cuModuleGetFunction(&gpu_kernel128, gpu_module128, 
+				"sieve_kernel_128"))
 
 	large_p_min = sqrt(middle_poly->p_size_max);
 	if (large_p_min >= MAX_P / p_scale)
@@ -179,12 +194,21 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 				break;
 			}
 		}
-		else {
+		else if (large_p_max < ((uint64)1 << 48)) {
 			if (sieve_lattice_gpu96(obj, &L,
 					&sieve_small, &sieve_large,
 					small_p_min, small_p_max,
 					large_p_min, large_p_max,
 					gpu_info, gpu_kernel96)) {
+				break;
+			}
+		}
+		else {
+			if (sieve_lattice_gpu128(obj, &L,
+					&sieve_small, &sieve_large,
+					small_p_min, small_p_max,
+					large_p_min, large_p_max,
+					gpu_info, gpu_kernel128)) {
 				break;
 			}
 		}

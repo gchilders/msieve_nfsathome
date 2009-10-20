@@ -198,10 +198,20 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 				found_t *f = found_array + i;
 
 				if (f->p > 0) {
+					uint128 proot, offset;
+
+					proot.w[0] = f->proot.w[0];
+					proot.w[1] = f->proot.w[1];
+					proot.w[2] = f->proot.w[2];
+					proot.w[3] = 0;
+					offset.w[0] = f->offset.w[0];
+					offset.w[1] = f->offset.w[1];
+					offset.w[2] = f->offset.w[2];
+					offset.w[3] = 0;
+
 					handle_collision(L->poly, 
-						f->which_poly,
-						f->p, f->proot, 
-						f->offset, f->q);
+						f->which_poly, f->p, proot, 
+						offset, f->q);
 				}
 			}
 

@@ -38,6 +38,12 @@ typedef struct {
 	uint32 w[3];
 } uint96;
 
+/* 128-bit integers */
+
+typedef struct {
+	uint32 w[4];
+} uint128;
+
 /*-----------------------------------------------------------------------*/
 
 /* search bounds */
@@ -192,9 +198,16 @@ sieve_lattice_gpu96(msieve_obj *obj, lattice_fb_t *L,
 		uint64 large_p_min, uint64 large_p_max,
 		gpu_info_t *gpu_info, CUfunction gpu_kernel);
 
+uint32
+sieve_lattice_gpu128(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
+		uint64 small_p_min, uint64 small_p_max, 
+		uint64 large_p_min, uint64 large_p_max,
+		gpu_info_t *gpu_info, CUfunction gpu_kernel);
+
 void
 handle_collision(poly_search_t *poly, uint32 which_poly,
-		uint64 p, uint96 proot, uint96 res, uint64 q);
+		uint64 p, uint128 proot, uint128 res, uint64 q);
 
 /* main search routine */
 
