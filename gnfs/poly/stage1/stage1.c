@@ -78,6 +78,7 @@ poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 		mpz_init(c->high_coeff);
 		mpz_init(c->trans_N);
 		mpz_init(c->trans_m0);
+		mpz_init(c->mp_sieve_size);
 	}
 	mpz_init_set(poly->N, data->gmp_N);
 	mpz_init(poly->m0);
@@ -104,6 +105,7 @@ poly_search_free(poly_search_t *poly)
 		mpz_clear(c->high_coeff);
 		mpz_clear(c->trans_N);
 		mpz_clear(c->trans_m0);
+		mpz_clear(c->mp_sieve_size);
 	}
 	mpz_clear(poly->N);
 	mpz_clear(poly->m0);
@@ -144,6 +146,7 @@ search_coeffs_core(msieve_obj *obj, poly_search_t *poly,
 		mpz_root(poly->m0, poly->m0, (mp_limb_t)degree);
 		c->sieve_size = c->coeff_max / mpz_get_d(poly->m0) * 
 				c->p_size_max * c->p_size_max / degree;
+		mpz_set_d(c->mp_sieve_size, c->sieve_size);
 	}
 
 	sieve_lattice(obj, poly, 2000, 2001, 

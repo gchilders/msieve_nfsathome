@@ -564,7 +564,7 @@ sieve_kernel_128(p_soa_t *pbatch,
 				uint64 lattice_size = 
 						pbatch_cache.lattice_size[j];
 				uint128 pinv, tmp;
-				uint128 test1, test2;
+				uint128 test1;
 
 				tmp = wide_sqr(pinvmodq);
 				tmp = montmul(tmp, q2_r, q2, q2_w);
@@ -577,7 +577,6 @@ sieve_kernel_128(p_soa_t *pbatch,
 				test1.w[1] = (uint32)(lattice_size >> 32);
 				test1.w[2] = 0;
 				test1.w[3] = 0;
-				test2 = sub128(q2, test1);
 
 				for (k = 0; k < 4 * num_roots; k += 4) {
 
@@ -597,8 +596,7 @@ sieve_kernel_128(p_soa_t *pbatch,
 							modsub(qroot, proot, 
 							q2), q2, q2_w);
 
-					if (cmp128(res, test1) < 0 ||
-					    cmp128(res, test2) > 0) {
+					if (cmp128(res, test1) < 0) {
 						found_t *f = found_array + 
 								my_threadid;
 						f->p = p;

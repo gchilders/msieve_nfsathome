@@ -447,7 +447,7 @@ sieve_kernel_96(p_soa_t *pbatch,
 				uint64 lattice_size = 
 						pbatch_cache.lattice_size[j];
 				uint96 pinv, tmp;
-				uint96 test1, test2;
+				uint96 test1;
 
 				tmp = wide_sqr(pinvmodq);
 				tmp = montmul(tmp, q2_r, q2, q2_w);
@@ -459,7 +459,6 @@ sieve_kernel_96(p_soa_t *pbatch,
 				test1.w[0] = (uint32)lattice_size;
 				test1.w[1] = (uint32)(lattice_size >> 32);
 				test1.w[2] = 0;
-				test2 = sub96(q2, test1);
 
 				for (k = 0; k < 3 * num_roots; k += 3) {
 
@@ -477,8 +476,7 @@ sieve_kernel_96(p_soa_t *pbatch,
 							modsub(qroot, proot, 
 							q2), q2, q2_w);
 
-					if (cmp96(res, test1) < 0 ||
-					    cmp96(res, test2) > 0) {
+					if (cmp96(res, test1) < 0) {
 						found_t *f = found_array + 
 								my_threadid;
 						f->p = p;

@@ -70,7 +70,9 @@ typedef struct {
 
 	double coeff_max;
 	double p_size_max;
+
 	double sieve_size;
+	mpz_t mp_sieve_size;
 } curr_poly_t;
 
 typedef struct {

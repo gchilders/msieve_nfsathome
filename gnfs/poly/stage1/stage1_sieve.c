@@ -51,10 +51,8 @@ handle_collision(poly_search_t *poly, uint32 which_poly,
 
 	mpz_mul(poly->p, poly->tmp1, poly->tmp2);
 	mpz_mul(poly->tmp1, poly->tmp1, poly->tmp1);
-	if (mpz_cmp(poly->tmp4, poly->tmp2) > 0)
-		mpz_submul(poly->tmp4, poly->tmp2, poly->tmp2);
-
 	mpz_addmul(poly->tmp3, poly->tmp1, poly->tmp4);
+	mpz_sub(poly->tmp3, poly->tmp3, c->mp_sieve_size);
 	mpz_add(poly->m0, c->trans_m0, poly->tmp3);
 
 #ifdef CHECK

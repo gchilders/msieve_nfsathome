@@ -17,10 +17,6 @@ $Id$
 #define SIEVE_SIZE 16384
 #define LOG_SCALE 3.5
 
-#if 0
-#define CHECK
-#endif
-
 #define PRIME_P_LIMIT 0xfffff000
 
 /*------------------------------------------------------------------------*/
@@ -330,7 +326,8 @@ lift_roots(sieve_fb_t *s, curr_poly_t *c,
 	uint64_2gmp(p, s->p);
 	mpz_mul(s->p2, s->p, s->p);
 	mpz_tdiv_r(s->nmodp2, c->trans_N, s->p2);
-	mpz_tdiv_r(s->m0, c->trans_m0, s->p2);
+	mpz_sub(s->tmp1, c->trans_m0, c->mp_sieve_size);
+	mpz_tdiv_r(s->m0, s->tmp1, s->p2);
 
 	for (i = 0; i < num_roots; i++) {
 
@@ -350,17 +347,6 @@ lift_roots(sieve_fb_t *s, curr_poly_t *c,
 		mpz_sub(s->roots[i], s->roots[i], s->m0);
 		if (mpz_cmp_ui(s->roots[i], (mp_limb_t)0) < 0)
 			mpz_add(s->roots[i], s->roots[i], s->p2);
-#ifdef CHECK
-		mpz_add(s->tmp1, c->trans_m0, s->roots[i]);
-		mpz_tdiv_r(s->tmp1, s->tmp1, s->p2);
-		mpz_powm_ui(s->tmp1, s->tmp1, (mp_limb_t)degree, s->p2);
-		if (mpz_cmp(s->tmp1, s->nmodp2) != 0) {
-			gmp_printf("error: %Zd n %Zd p %Zd p2 %Zd m0 %Zd r %Zd\n",
-					s->tmp1, s->nmodp2, s->p, s->p2, 
-					s->m0, s->roots[i]);
-			exit(-1);
-		}
-#endif
 	}
 
 	return num_roots;

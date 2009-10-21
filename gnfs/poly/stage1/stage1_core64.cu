@@ -378,8 +378,7 @@ sieve_kernel_64(p_soa_t *pbatch,
 							modsub(qroot, proot, 
 							q2), q2, q2_w);
 
-					if (res < lattice_size ||
-					    res >= q2 - lattice_size) {
+					if (res < lattice_size) {
 						found_t *f = found_array + 
 								my_threadid;
 						f->p = p;

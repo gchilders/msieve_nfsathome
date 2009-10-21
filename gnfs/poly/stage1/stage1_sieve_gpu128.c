@@ -309,7 +309,7 @@ sieve_lattice_gpu128(msieve_obj *obj, lattice_fb_t *L,
 				uint64 p = p_array->p[i];
 
 				p_array->lattice_size[i] = (uint64)
-					(L->poly->batch[num_poly - 
+					(2 * L->poly->batch[num_poly - 
 					1].sieve_size / ((double)p * p));
 			}
 
