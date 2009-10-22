@@ -557,6 +557,11 @@ sieve_kernel_128(p_soa_t *pbatch,
 			}
 
 			for (j = 0; j < curr_num_p; j++) {
+				uint32 prefetch0 = qbatch->roots[0][i];
+				uint32 prefetch1 = qbatch->roots[1][i];
+				uint32 prefetch2 = qbatch->roots[2][i];
+				uint32 prefetch3 = qbatch->roots[3][i];
+
 				uint64 p = pbatch_cache.p[j];
 				uint128 p2 = wide_sqr(p);
 				uint64 pinvmodq = modinv(p, q);
@@ -582,18 +587,22 @@ sieve_kernel_128(p_soa_t *pbatch,
 
 					uint128 proot, qroot, res;
 
+					qroot.w[0] = prefetch0;
+					qroot.w[1] = prefetch1;
+					qroot.w[2] = prefetch2;
+					qroot.w[3] = prefetch3;
+
+					prefetch0 = qbatch->roots[k+4][i];
+					prefetch1 = qbatch->roots[k+5][i];
+					prefetch2 = qbatch->roots[k+6][i];
+					prefetch3 = qbatch->roots[k+7][i];
+
 					proot.w[0] = pbatch_cache.roots[k][j];
 					proot.w[1] = pbatch_cache.roots[k+1][j];
 					proot.w[2] = pbatch_cache.roots[k+2][j];
 					proot.w[3] = pbatch_cache.roots[k+3][j];
 
-					qroot.w[0] = qbatch->roots[k][i];
-					qroot.w[1] = qbatch->roots[k+1][i];
-					qroot.w[2] = qbatch->roots[k+2][i];
-					qroot.w[3] = qbatch->roots[k+3][i];
-
-					res = montmul(pinv, 
-							modsub(qroot, proot, 
+					res = montmul(pinv, modsub(qroot, proot,
 							q2), q2, q2_w);
 
 					if (cmp128(res, test1) < 0) {

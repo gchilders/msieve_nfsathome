@@ -355,6 +355,7 @@ sieve_kernel_64(p_soa_t *pbatch,
 			}
 
 			for (j = 0; j < curr_num_p; j++) {
+				uint64 prefetch = qbatch->roots[0][i];
 				uint32 p = pbatch_cache.p[j];
 				uint64 p2 = (uint64)p * p;
 				uint32 pinvmodq = modinv(p, q);
@@ -372,10 +373,14 @@ sieve_kernel_64(p_soa_t *pbatch,
 
 				for (k = 0; k < num_roots; k++) {
 
-					uint64 proot = pbatch_cache.roots[k][j];
-					uint64 qroot = qbatch->roots[k][i];
-					uint64 res = montmul(pinv, 
-							modsub(qroot, proot, 
+					uint64 qroot;
+					uint64 proot;
+					uint64 res;
+
+					qroot = prefetch;
+					prefetch = qbatch->roots[k+1][i];
+					proot = pbatch_cache.roots[k][j];
+					res = montmul(pinv, modsub(qroot, proot,
 							q2), q2, q2_w);
 
 					if (res < lattice_size) {
