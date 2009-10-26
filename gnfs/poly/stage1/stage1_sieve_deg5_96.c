@@ -13,7 +13,7 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include "stage1.h"
-#include "stage1_core96.h"
+#include "stage1_core_deg5_96.h"
 
 #define HOST_BATCH_SIZE 40000
 

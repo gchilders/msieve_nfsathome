@@ -286,7 +286,8 @@ poly_stage1_run(msieve_obj *obj, poly_stage1_t *data)
 	stage1_bounds_init(&bounds, data);
 	poly_search_init(&poly, data);
 
-	logprintf(obj, "using GPU %u\n", obj->which_gpu);
+	logprintf(obj, "using GPU %u (%s)\n", obj->which_gpu,
+			gpu_config.info[obj->which_gpu].name);
 	search_coeffs(obj, &poly, &bounds, 
 			gpu_config.info + obj->which_gpu, data->deadline);
 

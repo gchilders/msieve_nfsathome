@@ -12,7 +12,7 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#include "stage1_core128.h"
+#include "stage1_core_deg5_128.h"
 
 #ifdef __cplusplus
 extern "C" {
