@@ -19,6 +19,8 @@ $Id$
 
 #define PRIME_P_LIMIT 0xfffff000
 
+#define INVALID_NUM_ROOTS ((uint32)(-1))
+
 /*------------------------------------------------------------------------*/
 static uint32
 lift_root_32(uint32 n, uint32 r, uint32 old_power, 
@@ -355,8 +357,11 @@ lift_roots(sieve_fb_t *s, curr_poly_t *c,
 /*------------------------------------------------------------------------*/
 static uint32 
 get_composite_roots(sieve_fb_t *s, curr_poly_t *c,
-			uint32 which_poly, uint64 p, uint32 num_factors, 
-			uint32 *factors)
+			uint32 which_poly, uint64 p, 
+			uint32 num_factors, 
+			uint32 *factors,
+			uint32 num_roots_min,
+			uint32 num_roots_max)
 {
 	uint32 i, j, k, i0, i1, i2, i3, i4;
 	uint32 crt_p[MAX_P_FACTORS];
@@ -366,14 +371,26 @@ get_composite_roots(sieve_fb_t *s, curr_poly_t *c,
 	sieve_prime_t *primes = s->good_primes.primes;
 	uint32 degree = s->degree;
 
+	for (i = 0, j = 1; i < num_factors; i++) {
+		sieve_prime_t *sp;
+
+		if (i > 0 && factors[i] == factors[i-1])
+			continue;
+
+		sp = primes + factors[i];
+		if (sp->num_roots[which_poly] == 0)
+			return 0;
+
+		j *= sp->num_roots[which_poly];
+	}
+	if (j < num_roots_min || j > num_roots_max)
+		return INVALID_NUM_ROOTS;
+
 	for (i = j = 0; j < MAX_P_FACTORS && i < num_factors; i++, j++) {
 		sieve_prime_t *sp = primes + factors[i];
 		uint32 power_limit;
 
 		num_roots[j] = sp->num_roots[which_poly];
-		if (num_roots[j] == 0)
-			return 0;
-
 		crt_p[j] = sp->p;
 		power_limit = (uint32)(-1) / sp->p;
 		for (k = 0; k < num_roots[j]; k++) {
@@ -587,13 +604,14 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 			for (i = 0; i < poly->num_poly; i++) {
 				num_roots = get_composite_roots(s, 
 							poly->batch + i, i, p, 
-							num_factors, factors);
+							num_factors, factors,
+							s->num_roots_min,
+							s->num_roots_max);
 
 				if (num_roots == 0)
 					continue;
 
-				if (num_roots < s->num_roots_min ||
-				    num_roots > s->num_roots_max)
+				if (num_roots == INVALID_NUM_ROOTS)
 					break;
 
 				found++;
