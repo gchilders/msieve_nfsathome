@@ -12,8 +12,8 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#ifndef _STAGE1_CORE64_H_
-#define _STAGE1_CORE64_H_
+#ifndef _STAGE1_CORE_DEG5_64_H_
+#define _STAGE1_CORE_DEG5_64_H_
 
 #ifdef __cplusplus
 extern "C" {
@@ -61,4 +61,4 @@ typedef struct {
 }
 #endif
 
-#endif /* !_STAGE1_CORE64_H_ */
+#endif /* !_STAGE1_CORE_DEG5_64_H_ */
