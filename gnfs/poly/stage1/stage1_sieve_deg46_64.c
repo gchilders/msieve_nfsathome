@@ -27,7 +27,7 @@ typedef struct {
 	uint64 *roots[MAX_ROOTS];
 } q_soa_var_t;
 
-#define MAX_P_SOA_ARRAYS 5
+#define MAX_P_SOA_ARRAYS 4
 
 typedef struct {
 	uint32 num_arrays;
@@ -46,8 +46,7 @@ q_soa_array_init(q_soa_array_t *s, uint32 poly_degree)
 		s->soa[0].num_roots = 4;
 		break;
 	case 6:
-		s->num_arrays = 5;
-		s->soa[4].num_roots = 2;
+		s->num_arrays = 4;
 		s->soa[3].num_roots = 4;
 		s->soa[2].num_roots = 6;
 		s->soa[1].num_roots = 8;
@@ -217,15 +216,49 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			uint32 threads_per_block,
 			p_packed_var_t *p_array,
 			q_soa_array_t *q_array,
-			gpu_info_t *gpu_info, CUfunction gpu_kernel)
+			gpu_info_t *gpu_info, 
+			CUfunction gpu_kernel,
+			uint32 deadline)
 {
-	uint32 i, j, k;
+	uint32 i, j;
 	p_packed_t *packed_array = p_array->packed_array;
 	q_soa_t *q_marshall = (q_soa_t *)L->q_marshall;
 	uint32 num_blocks;
+	uint32 num_p_offset;
+	uint32 num_q_offset;
+	uint32 num_qroots_offset;
 	uint32 found_array_size = L->found_array_size;
 	found_t *found_array = (found_t *)L->found_array;
+	clock_t start_time = clock();
 	void *gpu_ptr;
+
+	i = 0;
+	gpu_ptr = (void *)(size_t)L->gpu_q_array;
+	CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
+	CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
+			&gpu_ptr, sizeof(gpu_ptr)))
+	i += sizeof(gpu_ptr);
+
+	CUDA_ALIGN_PARAM(i, __alignof(uint32));
+	num_q_offset = i;
+	i += sizeof(uint32);
+
+	CUDA_ALIGN_PARAM(i, __alignof(uint32));
+	num_qroots_offset = i;
+	i += sizeof(uint32);
+
+	CUDA_ALIGN_PARAM(i, __alignof(uint32));
+	num_p_offset = i;
+	i += sizeof(uint32);
+
+	gpu_ptr = (void *)(size_t)L->gpu_found_array;
+	CUDA_ALIGN_PARAM(i, __alignof(gpu_ptr));
+	CUDA_TRY(cuParamSetv(gpu_kernel, (int)i, 
+			&gpu_ptr, sizeof(gpu_ptr)))
+	i += sizeof(gpu_ptr);
+
+	CUDA_TRY(cuParamSetSize(gpu_kernel, i))
+
 
 	for (i = 0; i < q_array->num_arrays; i++) {
 
@@ -233,8 +266,11 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 		uint32 num_qroots = soa->num_roots;
 		uint32 num_q_done = 0;
 
-		if (soa->num_p == 0)
+		if (soa->num_p < 100)
 			continue;
+
+		CUDA_TRY(cuParamSeti(gpu_kernel, 
+				num_qroots_offset, num_qroots))
 
 		while (num_q_done < soa->num_p) {
 
@@ -242,26 +278,27 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			uint32 packed_words = 0;
 			uint32 curr_num_p = 0;
 			p_packed_t *packed_start = packed_array;
-			time_t curr_time;
-			double elapsed;
 
 			uint32 curr_num_q = MIN(3 * found_array_size,
 						soa->num_p - num_q_done);
 
 			curr_num_q = MIN(curr_num_q, Q_SOA_BATCH_SIZE);
 
-			for (j = 0; j < curr_num_q; j++) {
-				q_marshall->p[j] = soa->p[num_q_done + j];
-
-				for (k = 0; k < num_qroots; k++) {
-					q_marshall->roots[k][j] =
-						soa->roots[k][num_q_done + j];
-				}
+			memcpy(q_marshall->p, 
+				soa->p + num_q_done,
+				curr_num_q * sizeof(uint32));
+			for (j = 0; j < num_qroots; j++) {
+				memcpy(q_marshall->roots[j],
+					soa->roots[j] + num_q_done,
+					curr_num_q * sizeof(uint64));
 			}
 
 			CUDA_TRY(cuMemcpyHtoD(L->gpu_q_array, q_marshall,
 					Q_SOA_BATCH_SIZE * (sizeof(uint32) +
 						num_qroots * sizeof(uint64))))
+
+			CUDA_TRY(cuParamSeti(gpu_kernel, num_q_offset, 
+						curr_num_q))
 
 			while (num_p_done < p_array->num_p) {
 				p_packed_t *curr_packed = packed_start;
@@ -290,32 +327,8 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 							packed_words *
 							sizeof(uint64)))
 
-				j = 0;
-				gpu_ptr = (void *)(size_t)L->gpu_q_array;
-				CUDA_ALIGN_PARAM(j, __alignof(gpu_ptr));
-				CUDA_TRY(cuParamSetv(gpu_kernel, (int)j, 
-						&gpu_ptr, sizeof(gpu_ptr)))
-				j += sizeof(gpu_ptr);
-
-				CUDA_ALIGN_PARAM(j, __alignof(uint32));
-				CUDA_TRY(cuParamSeti(gpu_kernel, j, curr_num_q))
-				j += sizeof(uint32);
-
-				CUDA_ALIGN_PARAM(j, __alignof(uint32));
-				CUDA_TRY(cuParamSeti(gpu_kernel, j, num_qroots))
-				j += sizeof(uint32);
-
-				CUDA_ALIGN_PARAM(j, __alignof(uint32));
-				CUDA_TRY(cuParamSeti(gpu_kernel, j, curr_num_p))
-				j += sizeof(uint32);
-
-				gpu_ptr = (void *)(size_t)L->gpu_found_array;
-				CUDA_ALIGN_PARAM(j, __alignof(gpu_ptr));
-				CUDA_TRY(cuParamSetv(gpu_kernel, (int)j, 
-						&gpu_ptr, sizeof(gpu_ptr)))
-				j += sizeof(gpu_ptr);
-
-				CUDA_TRY(cuParamSetSize(gpu_kernel, j))
+				CUDA_TRY(cuParamSeti(gpu_kernel, num_p_offset, 
+							curr_num_p))
 
 				num_blocks = gpu_info->num_compute_units;
 				if (curr_num_q < found_array_size) {
@@ -356,18 +369,17 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 					}
 				}
 
+				if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
+					return 1;
+
+				if ((double)(clock() - start_time) /
+						CLOCKS_PER_SEC > deadline)
+					return 0;
+
 				packed_start = curr_packed;
 				packed_words = 0;
 				curr_num_p = 0;
 			}
-
-			if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
-				return 1;
-
-			curr_time = time(NULL);
-			elapsed = curr_time - L->start_time;
-			if (elapsed > L->deadline)
-				return 1;
 
 			num_q_done += curr_num_q;
 		}
@@ -391,7 +403,7 @@ sieve_lattice_gpu_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 	q_soa_array_t * q_array;
 	uint32 degree = L->poly->degree;
 	uint32 num_poly = L->poly->num_poly;
-	clock_t clock_start;
+	uint32 one_deadline = L->deadline / num_poly;
 
 	uint32 threads_per_block;
 
@@ -427,9 +439,7 @@ sieve_lattice_gpu_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 
 	min_large = large_p_min;
 	sieve_fb_reset(sieve_small, (uint64)large_p_min, 
-			(uint64)large_p_max, 2, 8);
-
-	clock_start = clock();
+			(uint64)large_p_max, 4, 8);
 
 	while (min_large < large_p_max) {
 
@@ -459,18 +469,27 @@ sieve_lattice_gpu_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 			}
 
 			for (i = 0; i < num_poly; i++) {
+				time_t curr_time;
+				double elapsed;
+
 				if (sieve_lattice_batch(obj, L, i,
 						threads_per_block,
 						p_array + i, q_array + i,
-						gpu_info, gpu_kernel)) {
+						gpu_info, gpu_kernel,
+						one_deadline)) {
+					quit = 1;
+					goto finished;
+				}
+
+				curr_time = time(NULL);
+				elapsed = curr_time - L->start_time;
+				if (elapsed > L->deadline) {
 					quit = 1;
 					goto finished;
 				}
 			}
 		}
 	}
-
-	printf("%lf\n", (double)(clock() - clock_start) / CLOCKS_PER_SEC);
 
 finished:
 	CUDA_TRY(cuMemFree(L->gpu_q_array))

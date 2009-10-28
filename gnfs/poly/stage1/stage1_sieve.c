@@ -206,8 +206,6 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 	max_roots = degree;
 	if (degree == 5)
 		max_roots = 1;
-	else
-		deadline = deadline / poly->num_poly;
 
 	sieve_fb_init(&sieve_small, poly, 
 			5, small_fb_max, 

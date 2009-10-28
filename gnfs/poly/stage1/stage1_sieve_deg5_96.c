@@ -245,7 +245,6 @@ sieve_lattice_gpu_deg5_96(msieve_obj *obj, lattice_fb_t *L,
 	uint32 quit = 0;
 	p_soa_var_t * p_array;
 	p_soa_var_t * q_array;
-	clock_t clock_start;
 	uint32 num_poly = L->poly->num_poly;
 
 	uint32 threads_per_block;
@@ -281,8 +280,6 @@ sieve_lattice_gpu_deg5_96(msieve_obj *obj, lattice_fb_t *L,
 	min_large = large_p_min;
 	sieve_fb_reset(sieve_small, large_p_min, 
 			large_p_max, 1, 1);
-
-	clock_start = clock();
 
 	while (min_large < large_p_max) {
 
@@ -328,8 +325,6 @@ sieve_lattice_gpu_deg5_96(msieve_obj *obj, lattice_fb_t *L,
 			}
 		}
 	}
-
-	printf("%lf\n", (double)(clock() - clock_start) / CLOCKS_PER_SEC);
 
 finished:
 	CUDA_TRY(cuMemFree(L->gpu_p_array))
