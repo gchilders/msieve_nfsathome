@@ -31,6 +31,7 @@ typedef struct {
 
 typedef struct {
 	uint32 num_arrays;
+	uint32 num_p;
 	q_soa_var_t soa[MAX_P_SOA_ARRAYS];
 } q_soa_array_t;
 
@@ -87,6 +88,7 @@ q_soa_array_reset(q_soa_array_t *s)
 {
 	uint32 i;
 
+	s->num_p = 0;
 	for (i = 0; i < s->num_arrays; i++)
 		s->soa[i].num_p = 0;
 }
@@ -131,6 +133,7 @@ store_p_soa(uint64 p, uint32 num_roots, uint32 which_poly,
 			soa->roots[j][num] = gmp2uint64(roots[j]);
 
 		soa->num_p++;
+		s->num_p++;
 		break;
 	}
 }
@@ -451,6 +454,12 @@ sieve_lattice_gpu_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 			min_large = sieve_fb_next(sieve_small, L->poly,
 						store_p_soa, L);
 		}
+		for (i = 0; i < num_poly; i++) {
+			if (q_array[i].num_p > 0)
+				break;
+		}
+		if (i == num_poly)
+			break;
 
 		min_small = small_p_min;
 		sieve_fb_reset(sieve_large, 
@@ -467,6 +476,12 @@ sieve_lattice_gpu_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 				min_small = sieve_fb_next(sieve_large, L->poly,
 							store_p_packed, L);
 			}
+			for (i = 0; i < num_poly; i++) {
+				if (p_array[i].num_p > 0)
+					break;
+			}
+			if (i == num_poly)
+				break;
 
 			for (i = 0; i < num_poly; i++) {
 				time_t curr_time;
