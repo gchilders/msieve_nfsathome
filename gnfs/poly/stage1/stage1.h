@@ -187,21 +187,28 @@ typedef struct {
 /* lower-level sieve routines */
 
 uint32
-sieve_lattice_gpu64(msieve_obj *obj, lattice_fb_t *L, 
+sieve_lattice_gpu_deg46_64(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
 		uint32 small_p_min, uint32 small_p_max, 
 		uint32 large_p_min, uint32 large_p_max,
 		gpu_info_t *gpu_info, CUfunction gpu_kernel);
 
 uint32
-sieve_lattice_gpu96(msieve_obj *obj, lattice_fb_t *L, 
+sieve_lattice_gpu_deg5_64(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
+		uint32 small_p_min, uint32 small_p_max, 
+		uint32 large_p_min, uint32 large_p_max,
+		gpu_info_t *gpu_info, CUfunction gpu_kernel);
+
+uint32
+sieve_lattice_gpu_deg5_96(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
 		uint64 small_p_min, uint64 small_p_max, 
 		uint64 large_p_min, uint64 large_p_max,
 		gpu_info_t *gpu_info, CUfunction gpu_kernel);
 
 uint32
-sieve_lattice_gpu128(msieve_obj *obj, lattice_fb_t *L, 
+sieve_lattice_gpu_deg5_128(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
 		uint64 small_p_min, uint64 small_p_max, 
 		uint64 large_p_min, uint64 large_p_max,
