@@ -133,11 +133,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 	bits = mpz_sizeinbase(poly->N, 2);
 	switch (degree) {
 	case 4:
-		if (bits < 297)
-			p_scale = 1.3;
-		else if (bits < 313)
-			p_scale = 1.2;
-
+		p_scale = 1.3;
 		CUDA_TRY(cuModuleLoad(&gpu_module64, 
 				"stage1_core_deg46_64.ptx"))
 		CUDA_TRY(cuModuleGetFunction(&gpu_kernel64, 
