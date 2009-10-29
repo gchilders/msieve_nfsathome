@@ -135,7 +135,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 	case 4:
 		p_scale = 1.3;
 		CUDA_TRY(cuModuleLoad(&gpu_module64, 
-				"stage1_core_deg46_64.ptx"))
+				"stage1_core_deg4_64.ptx"))
 		CUDA_TRY(cuModuleGetFunction(&gpu_kernel64, 
 				gpu_module64, 
 				"sieve_kernel_64"))
@@ -173,11 +173,11 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 		else
 			p_scale = 1.03;
 
-		CUDA_TRY(cuModuleLoad(&gpu_module64, 
-				"stage1_core_deg46_64.ptx"))
-		CUDA_TRY(cuModuleGetFunction(&gpu_kernel64, 
-				gpu_module64, 
-				"sieve_kernel_64"))
+		CUDA_TRY(cuModuleLoad(&gpu_module128, 
+				"stage1_core_deg6_128.ptx"))
+		CUDA_TRY(cuModuleGetFunction(&gpu_kernel128, 
+				gpu_module128, 
+				"sieve_kernel_128"))
 		break;
 	}
 
@@ -214,7 +214,18 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 	while (1) {
 		uint32 done = 1;
 
-		if (degree == 5) {
+		if (degree == 4) {
+			CUDA_TRY(cuModuleGetGlobal(&L.gpu_p_array, 
+					NULL, gpu_module64, "pbatch"))
+			done = sieve_lattice_gpu_deg4_64(obj, &L,
+				&sieve_small, &sieve_large,
+				(uint32)small_p_min, 
+				(uint32)small_p_max,
+				(uint32)large_p_min, 
+				(uint32)large_p_max,
+				gpu_info, gpu_kernel64);
+		}
+		else if (degree == 5) {
 			if (large_p_max < ((uint64)1 << 32)) {
 				done = sieve_lattice_gpu_deg5_64(obj, &L,
 					&sieve_small, &sieve_large,
@@ -239,18 +250,14 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 					gpu_info, gpu_kernel128);
 			}
 		}
-		else {	/* degree 4 or 6 */
-			if (large_p_max < ((uint64)1 << 32)) {
-				CUDA_TRY(cuModuleGetGlobal(&L.gpu_p_array, 
-						NULL, gpu_module64, "pbatch"))
-				done = sieve_lattice_gpu_deg46_64(obj, &L,
-					&sieve_small, &sieve_large,
-					(uint32)small_p_min, 
-					(uint32)small_p_max,
-					(uint32)large_p_min, 
-					(uint32)large_p_max,
-					gpu_info, gpu_kernel64);
-			}
+		else {	/* degree 6 */
+			CUDA_TRY(cuModuleGetGlobal(&L.gpu_p_array, 
+					NULL, gpu_module128, "pbatch"))
+			done = sieve_lattice_gpu_deg6_128(obj, &L,
+				&sieve_small, &sieve_large,
+				small_p_min, small_p_max,
+				large_p_min, large_p_max,
+				gpu_info, gpu_kernel128);
 		}
 
 		if (done)
