@@ -165,6 +165,10 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly,
 	uint32 digits = mpz_sizeinbase(poly->N, 10);
 	double start_time = get_cpu_time();
 	uint32 deadline_per_coeff = 800;
+	uint32 batch_size = POLY_BATCH_SIZE;
+
+	if (poly->degree == 6)
+		batch_size = 1;
 
 	if (digits <= 100)
 		deadline_per_coeff = 5;
@@ -217,7 +221,7 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly,
 		c->p_size_max = bounds->p_size_max;
 		c->coeff_max = bounds->coeff_max;
 
-		if (++poly->num_poly == POLY_BATCH_SIZE) {
+		if (++poly->num_poly == batch_size) {
 			search_coeffs_core(obj, poly, gpu_info,
 						deadline_per_coeff);
 
