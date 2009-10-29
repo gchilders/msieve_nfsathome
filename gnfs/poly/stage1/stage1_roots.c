@@ -15,7 +15,7 @@ $Id$
 #include "stage1.h"
 
 #define SIEVE_SIZE 16384
-#define LOG_SCALE 3.5
+#define LOG_SCALE 2.2
 
 #define PRIME_P_LIMIT 0xfffff000
 
@@ -363,7 +363,7 @@ get_composite_roots(sieve_fb_t *s, curr_poly_t *c,
 			uint32 num_roots_min,
 			uint32 num_roots_max)
 {
-	uint32 i, j, k, i0, i1, i2, i3, i4;
+	uint32 i, j, k, i0, i1, i2, i3, i4, i5, i6;
 	uint32 crt_p[MAX_P_FACTORS];
 	uint32 num_roots[MAX_P_FACTORS];
 	uint64 prod[MAX_P_FACTORS];
@@ -435,8 +435,20 @@ get_composite_roots(sieve_fb_t *s, curr_poly_t *c,
 	mpz_set_ui(s->accum[i], (mp_limb_t)0);
 	uint64_2gmp(p, s->p);
 
-	i0 = i1 = i2 = i3 = i4 = i = 0;
+	i0 = i1 = i2 = i3 = i4 = i5 = i6 = i = 0;
 	switch (num_factors) {
+	case 7:
+		for (i6 = num_roots[6] - 1; (int32)i6 >= 0; i6--) {
+			uint64_2gmp(prod[6], s->accum[6]);
+			mpz_mul_ui(s->accum[6], s->accum[6], 
+						(mp_limb_t)roots[6][i6]);
+			mpz_add(s->accum[6], s->accum[6], s->accum[7]);
+	case 6:
+		for (i5 = num_roots[5] - 1; (int32)i5 >= 0; i5--) {
+			uint64_2gmp(prod[5], s->accum[5]);
+			mpz_mul_ui(s->accum[5], s->accum[5], 
+						(mp_limb_t)roots[5][i5]);
+			mpz_add(s->accum[5], s->accum[5], s->accum[6]);
 	case 5:
 		for (i4 = num_roots[4] - 1; (int32)i4 >= 0; i4--) {
 			uint64_2gmp(prod[4], s->accum[4]);
@@ -470,7 +482,7 @@ get_composite_roots(sieve_fb_t *s, curr_poly_t *c,
 
 			mpz_tdiv_r(s->accum[0], s->accum[0], s->p);
 			mpz_set(s->roots[i++], s->accum[0]);
-		}}}}}
+		}}}}}}}
 	}
 
 	return i;

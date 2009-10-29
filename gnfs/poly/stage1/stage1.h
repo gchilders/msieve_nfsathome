@@ -104,8 +104,8 @@ void poly_search_free(poly_search_t *poly);
    can be up to 64 bits in size and the product of (powers 
    of) up to MAX_P_FACTORS distinct primes */
 
-#define MAX_P_FACTORS 5
-#define MAX_ROOTS 36
+#define MAX_P_FACTORS 7
+#define MAX_ROOTS 128
 
 typedef struct {
 	uint32 p;
@@ -191,6 +191,13 @@ sieve_lattice_gpu_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
 		uint32 small_p_min, uint32 small_p_max, 
 		uint32 large_p_min, uint32 large_p_max,
+		gpu_info_t *gpu_info, CUfunction gpu_kernel);
+
+uint32
+sieve_lattice_gpu_deg46_128(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
+		uint64 small_p_min, uint64 small_p_max, 
+		uint64 large_p_min, uint64 large_p_max,
 		gpu_info_t *gpu_info, CUfunction gpu_kernel);
 
 uint32
