@@ -107,9 +107,12 @@ void poly_search_free(poly_search_t *poly);
 #define MAX_P_FACTORS 7
 #define MAX_ROOTS 128
 
+#define P_SEARCH_DONE ((uint64)(-1))
+
 typedef struct {
 	uint32 p;
 	uint32 r;
+	float fp_log_p;
 	uint8 log_p;
 	uint8 num_roots[POLY_BATCH_SIZE];
 	uint32 roots[POLY_BATCH_SIZE][MAX_POLYSELECT_DEGREE];
@@ -120,6 +123,29 @@ typedef struct {
 	uint32 num_primes;
 	uint32 num_primes_alloc;
 } sieve_prime_list_t;
+
+typedef struct {
+	uint32 num_factors;
+	float log_prod;
+	uint64 prod;
+} ss_t;
+
+typedef struct {
+	ss_t *list;
+	uint32 num_entries;
+	uint32 num_entries_alloc;
+} subset_sum_t;
+
+typedef struct {
+	subset_sum_t curr_list;
+	subset_sum_t new_list;
+
+	uint32 curr_entry;
+	uint32 next_prime;
+	uint32 num_primes;
+	float log_p_min;
+	float log_p_max;
+} p_enum_t;
 
 typedef struct {
 
@@ -137,6 +163,8 @@ typedef struct {
 	sieve_prime_list_t good_primes;
 	sieve_prime_list_t bad_primes;
 	uint64 next_composite_p;
+
+	p_enum_t p_enum;
 
 	mpz_t p, p2, m0, nmodp2, tmp1, tmp2;
 	mpz_t accum[MAX_P_FACTORS + 1];

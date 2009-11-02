@@ -27,7 +27,7 @@ typedef struct {
 	uint32 *roots[4*MAX_ROOTS];
 } q_soa_var_t;
 
-#define MAX_P_SOA_ARRAYS 7
+#define MAX_P_SOA_ARRAYS 5
 
 typedef struct {
 	uint32 num_arrays;
@@ -47,14 +47,12 @@ q_soa_array_init(q_soa_array_t *s, uint32 poly_degree)
 		s->soa[0].num_roots = 4;
 		break;
 	case 6:
-		s->num_arrays = 7;
-		s->soa[6].num_roots = 16;
-		s->soa[5].num_roots = 32;
-		s->soa[4].num_roots = 48;
-		s->soa[3].num_roots = 64;
-		s->soa[2].num_roots = 72;
-		s->soa[1].num_roots = 96;
-		s->soa[0].num_roots = 128;
+		s->num_arrays = 5;
+		s->soa[4].num_roots = 32;
+		s->soa[3].num_roots = 48;
+		s->soa[2].num_roots = 64;
+		s->soa[1].num_roots = 72;
+		s->soa[0].num_roots = 96;
 		break;
 	}
 
@@ -458,7 +456,7 @@ sieve_lattice_gpu_deg6_128(msieve_obj *obj, lattice_fb_t *L,
 		p_min_roots = 12;
 		p_max_roots = 32;
 		q_min_roots = 16;
-		q_max_roots = MAX_ROOTS;
+		q_max_roots = 96;
 	}
 
 	min_large = large_p_min;
@@ -471,10 +469,11 @@ sieve_lattice_gpu_deg6_128(msieve_obj *obj, lattice_fb_t *L,
 			q_soa_array_reset(q_array + i);
 
 		for (i = 0; i < HOST_BATCH_SIZE && 
-				min_large < large_p_max; i++) {
+				min_large != P_SEARCH_DONE; i++) {
 			min_large = sieve_fb_next(sieve_small, L->poly,
 						store_p_soa, L);
 		}
+
 		for (i = 0; i < num_poly; i++) {
 			if (q_array[i].num_p > 0)
 				break;
@@ -493,10 +492,11 @@ sieve_lattice_gpu_deg6_128(msieve_obj *obj, lattice_fb_t *L,
 				p_packed_reset(p_array + i);
 
 			for (i = 0; i < HOST_BATCH_SIZE && 
-					min_small < small_p_max; i++) {
+					min_small != P_SEARCH_DONE; i++) {
 				min_small = sieve_fb_next(sieve_large, L->poly,
 							store_p_packed, L);
 			}
+
 			for (i = 0; i < num_poly; i++) {
 				if (p_array[i].num_p > 0)
 					break;
