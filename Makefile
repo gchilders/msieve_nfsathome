@@ -168,6 +168,7 @@ NFS_SRCS = \
 	gnfs/poly/stage1/stage1_sieve_deg5_64.c \
 	gnfs/poly/stage1/stage1_sieve_deg5_96.c \
 	gnfs/poly/stage1/stage1_sieve_deg6_128.c \
+	gnfs/poly/stage1/stage1_sieve_deg6_96.c \
 	gnfs/poly/stage2/optimize.c \
 	gnfs/poly/stage2/root_sieve.c \
 	gnfs/poly/stage2/stage2.c \
@@ -193,7 +194,8 @@ GPU_OBJS = \
 	stage1_core_deg5_128.ptx \
 	stage1_core_deg5_64.ptx \
 	stage1_core_deg5_96.ptx \
-	stage1_core_deg6_128.ptx
+	stage1_core_deg6_128.ptx \
+	stage1_core_deg6_96.ptx
 
 #---------------------------------- make targets -------------------------
 
@@ -339,4 +341,8 @@ stage1_core_deg5_96.ptx: gnfs/poly/stage1/stage1_core_deg5_96.cu  \
 
 stage1_core_deg6_128.ptx: gnfs/poly/stage1/stage1_core_deg6_128.cu  \
 			gnfs/poly/stage1/stage1_core_deg6_128.h
+	nvcc -ptx -o $@ $<
+
+stage1_core_deg6_96.ptx: gnfs/poly/stage1/stage1_core_deg6_96.cu  \
+			gnfs/poly/stage1/stage1_core_deg6_96.h
 	nvcc -ptx -o $@ $<
