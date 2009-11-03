@@ -705,6 +705,7 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 
 			if (num_roots != 0 &&
 			    num_roots != INVALID_NUM_ROOTS) {
+				lift_roots(s, poly->batch + 0, p, num_roots);
 				callback(p, num_roots, 0, s->roots, extra);
 				break;
 			}
