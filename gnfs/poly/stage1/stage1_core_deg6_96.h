@@ -54,7 +54,7 @@ typedef struct {
 	uint96 roots[MAX_ROOTS];
 } p_packed_t;
 
-#define Q_SOA_BATCH_SIZE (3*30*384)
+#define Q_SOA_BATCH_SIZE (3*30*256)
 
 typedef struct {
 	uint64 p[Q_SOA_BATCH_SIZE];

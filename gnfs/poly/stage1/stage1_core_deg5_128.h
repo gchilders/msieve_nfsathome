@@ -52,7 +52,7 @@ typedef struct {
 	uint32 roots[4 * POLY_BATCH_SIZE][P_SOA_BATCH_SIZE];
 } p_soa_t;
 
-#define Q_SOA_BATCH_SIZE (5*30*192)
+#define Q_SOA_BATCH_SIZE (5*30*256)
 
 typedef struct {
 	uint64 p[Q_SOA_BATCH_SIZE];
