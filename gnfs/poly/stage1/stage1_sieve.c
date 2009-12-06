@@ -94,7 +94,8 @@ void
 sieve_lattice(msieve_obj *obj, poly_search_t *poly, 
 		uint32 small_fb_max, uint32 large_fb_min, 
 		uint32 large_fb_max, gpu_info_t *gpu_info,
-		uint32 deadline)
+		CUmodule gpu_module64, CUmodule gpu_module96,
+		CUmodule gpu_module128, uint32 deadline)
 {
 	lattice_fb_t L;
 	sieve_fb_t sieve_small, sieve_large;
@@ -107,10 +108,6 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 	curr_poly_t *middle_poly;
 	curr_poly_t *last_poly;
 
-	CUcontext gpu_context;
-	CUmodule gpu_module64;
-	CUmodule gpu_module96;
-	CUmodule gpu_module128;
 	CUfunction gpu_kernel64;
 	CUfunction gpu_kernel96;
 	CUfunction gpu_kernel128;
@@ -126,16 +123,11 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 		exit(-1);
 	}
 
-	CUDA_TRY(cuCtxCreate(&gpu_context, 
-			CU_CTX_BLOCKING_SYNC,
-			gpu_info->device_handle))
-
 	bits = mpz_sizeinbase(poly->N, 2);
 	switch (degree) {
 	case 4:
-		p_scale = 1.3;
-		CUDA_TRY(cuModuleLoad(&gpu_module64, 
-				"stage1_core_deg4_64.ptx"))
+		if (bits < 320)
+			p_scale = 1.3;
 		CUDA_TRY(cuModuleGetFunction(&gpu_kernel64, 
 				gpu_module64, 
 				"sieve_kernel_64"))
@@ -146,13 +138,6 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 			p_scale = 1.3;
 		else if (bits < 396)
 			p_scale = 1.2;
-
-		CUDA_TRY(cuModuleLoad(&gpu_module64, 
-				"stage1_core_deg5_64.ptx"))
-		CUDA_TRY(cuModuleLoad(&gpu_module96, 
-				"stage1_core_deg5_96.ptx"))
-		CUDA_TRY(cuModuleLoad(&gpu_module128, 
-				"stage1_core_deg5_128.ptx"))
 
 		CUDA_TRY(cuModuleGetFunction(&gpu_kernel64, 
 				gpu_module64, 
@@ -173,10 +158,6 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 		else
 			p_scale = 1.1;
 
-		CUDA_TRY(cuModuleLoad(&gpu_module96, 
-				"stage1_core_deg6_96.ptx"))
-		CUDA_TRY(cuModuleLoad(&gpu_module128, 
-				"stage1_core_deg6_128.ptx"))
 		CUDA_TRY(cuModuleGetFunction(&gpu_kernel96, 
 				gpu_module96, 
 				"sieve_kernel_96"))
@@ -185,7 +166,6 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 				"sieve_kernel_128"))
 		break;
 	}
-
 
 	large_p_min = sqrt(middle_poly->p_size_max);
 	if (large_p_min >= MAX_P / p_scale)
@@ -294,7 +274,6 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 			large_p_max = middle_poly->p_size_max / small_p_min;
 	}
 
-	CUDA_TRY(cuCtxDestroy(gpu_context)) 
 	sieve_fb_free(&sieve_small);
 	sieve_fb_free(&sieve_large);
 }
