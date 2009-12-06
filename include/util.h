@@ -99,11 +99,24 @@ extern "C" {
 #define MAX(a,b) ((a) > (b)? (a) : (b))
 
 #if defined(_MSC_VER)
+    
+    #include <float.h>
 	#define INLINE __inline
 	#define getpid _getpid
 
 	int64 strtoll(const char *nptr, char **endptr, int base);
 	uint64 strtoull(const char *nptr, char **endptr, int base);
+
+    __inline double rint(double x)
+    {
+        static double c2_52 = 4503599627370496.0e0;  /* 2 ^ 52 */ 
+        double t;
+
+        if(x != x || _copysign(x, 1.0) >= c2_52)
+            return (x);
+        t = _copysign(c2_52, x);
+        return (x + t) - t;
+    }
 
 #elif !defined(RS6K)
 	#define INLINE inline
