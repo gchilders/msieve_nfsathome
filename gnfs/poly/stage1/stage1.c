@@ -167,7 +167,7 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly,
 	uint32 deadline_per_coeff = 800;
 	uint32 batch_size = POLY_BATCH_SIZE;
 
-	if (poly->degree == 6)
+	if (poly->degree != 5)
 		batch_size = 1;
 
 	if (digits <= 100)
