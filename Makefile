@@ -143,12 +143,12 @@ NFS_HDR = \
 	gnfs/filter/filter.h \
 	gnfs/poly/poly.h \
 	gnfs/poly/poly_skew.h \
-	gnfs/poly/stage1/stage1.h \
-	gnfs/poly/stage1/stage1_core_deg4_64.h \
-	gnfs/poly/stage1/stage1_core_deg5_128.h \
-	gnfs/poly/stage1/stage1_core_deg5_64.h \
-	gnfs/poly/stage1/stage1_core_deg5_96.h \
-	gnfs/poly/stage1/stage1_core_deg6_128.h \
+	gnfs/poly/stage1_gpu/stage1.h \
+	gnfs/poly/stage1_gpu/stage1_core_deg4_64.h \
+	gnfs/poly/stage1_gpu/stage1_core_deg5_128.h \
+	gnfs/poly/stage1_gpu/stage1_core_deg5_64.h \
+	gnfs/poly/stage1_gpu/stage1_core_deg5_96.h \
+	gnfs/poly/stage1_gpu/stage1_core_deg6_128.h \
 	gnfs/poly/stage2/stage2.h \
 	gnfs/sieve/sieve.h \
 	gnfs/sqrt/sqrt.h \
@@ -160,15 +160,15 @@ NFS_SRCS = \
 	gnfs/poly/polyutil.c \
 	gnfs/poly/root_score.c \
 	gnfs/poly/size_score.c \
-	gnfs/poly/stage1/stage1.c \
-	gnfs/poly/stage1/stage1_roots.c \
-	gnfs/poly/stage1/stage1_sieve.c \
-	gnfs/poly/stage1/stage1_sieve_deg4_64.c \
-	gnfs/poly/stage1/stage1_sieve_deg5_128.c \
-	gnfs/poly/stage1/stage1_sieve_deg5_64.c \
-	gnfs/poly/stage1/stage1_sieve_deg5_96.c \
-	gnfs/poly/stage1/stage1_sieve_deg6_128.c \
-	gnfs/poly/stage1/stage1_sieve_deg6_96.c \
+	gnfs/poly/stage1_gpu/stage1.c \
+	gnfs/poly/stage1_gpu/stage1_roots.c \
+	gnfs/poly/stage1_gpu/stage1_sieve.c \
+	gnfs/poly/stage1_gpu/stage1_sieve_deg4_64.c \
+	gnfs/poly/stage1_gpu/stage1_sieve_deg5_128.c \
+	gnfs/poly/stage1_gpu/stage1_sieve_deg5_64.c \
+	gnfs/poly/stage1_gpu/stage1_sieve_deg5_96.c \
+	gnfs/poly/stage1_gpu/stage1_sieve_deg6_128.c \
+	gnfs/poly/stage1_gpu/stage1_sieve_deg6_96.c \
 	gnfs/poly/stage2/optimize.c \
 	gnfs/poly/stage2/root_sieve.c \
 	gnfs/poly/stage2/stage2.c \
@@ -323,26 +323,26 @@ mpqs/sieve_core_k8_64_64k.qo: mpqs/sieve_core.c $(COMMON_HDR) $(QS_HDR)
 
 # GPU build rules
 
-stage1_core_deg4_64.ptx: gnfs/poly/stage1/stage1_core_deg4_64.cu  \
-			gnfs/poly/stage1/stage1_core_deg4_64.h
+stage1_core_deg4_64.ptx: gnfs/poly/stage1_gpu/stage1_core_deg4_64.cu  \
+			gnfs/poly/stage1_gpu/stage1_core_deg4_64.h
 	nvcc -ptx -o $@ $<
 
-stage1_core_deg5_128.ptx: gnfs/poly/stage1/stage1_core_deg5_128.cu  \
-			gnfs/poly/stage1/stage1_core_deg5_128.h
+stage1_core_deg5_128.ptx: gnfs/poly/stage1_gpu/stage1_core_deg5_128.cu  \
+			gnfs/poly/stage1_gpu/stage1_core_deg5_128.h
 	nvcc -ptx -o $@ $<
 
-stage1_core_deg5_64.ptx: gnfs/poly/stage1/stage1_core_deg5_64.cu  \
-			gnfs/poly/stage1/stage1_core_deg5_64.h
+stage1_core_deg5_64.ptx: gnfs/poly/stage1_gpu/stage1_core_deg5_64.cu  \
+			gnfs/poly/stage1_gpu/stage1_core_deg5_64.h
 	nvcc -ptx -o $@ $<
 
-stage1_core_deg5_96.ptx: gnfs/poly/stage1/stage1_core_deg5_96.cu  \
-			gnfs/poly/stage1/stage1_core_deg5_96.h
+stage1_core_deg5_96.ptx: gnfs/poly/stage1_gpu/stage1_core_deg5_96.cu  \
+			gnfs/poly/stage1_gpu/stage1_core_deg5_96.h
 	nvcc -ptx -o $@ $<
 
-stage1_core_deg6_128.ptx: gnfs/poly/stage1/stage1_core_deg6_128.cu  \
-			gnfs/poly/stage1/stage1_core_deg6_128.h
+stage1_core_deg6_128.ptx: gnfs/poly/stage1_gpu/stage1_core_deg6_128.cu  \
+			gnfs/poly/stage1_gpu/stage1_core_deg6_128.h
 	nvcc -ptx -o $@ $<
 
-stage1_core_deg6_96.ptx: gnfs/poly/stage1/stage1_core_deg6_96.cu  \
-			gnfs/poly/stage1/stage1_core_deg6_96.h
+stage1_core_deg6_96.ptx: gnfs/poly/stage1_gpu/stage1_core_deg6_96.cu  \
+			gnfs/poly/stage1_gpu/stage1_core_deg6_96.h
 	nvcc -ptx -o $@ $<
