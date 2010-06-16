@@ -17,7 +17,7 @@
 CC = gcc -D_FILE_OFFSET_BITS=64
 WARN_FLAGS = -Wall -W
 OPT_FLAGS = -O3 -fomit-frame-pointer -march=athlon-xp -DNDEBUG
-#OPT_FLAGS = -O3 -fomit-frame-pointer -march=k8 -DNDEBUG
+OPT_FLAGS = -O3 -fomit-frame-pointer -march=k8 -DNDEBUG
 
 CFLAGS = $(OPT_FLAGS) $(MACHINE_FLAGS) $(WARN_FLAGS) \
 		-I. -Iinclude -Ignfs -Ignfs/poly -Ignfs/poly/stage1
@@ -41,6 +41,9 @@ ifeq ($(CUDA),1)
 	# Also, the CUDA driver library has a different name in linux
 	LIBS += "$(CUDA_LIB_DIR)/cuda.lib"
 	# LIBS += -lcuda
+endif
+ifeq ($(MPI),1)
+	CFLAGS += -DHAVE_MPI
 endif
 
 # Note to MinGW users: the library does not use pthreads calls in

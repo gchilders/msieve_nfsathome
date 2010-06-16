@@ -1360,6 +1360,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 /*-----------------------------------------------------------------------*/
 uint64 * block_lanczos(msieve_obj *obj, uint32 nrows, 
 			uint32 num_dense_rows, uint32 ncols, 
+			uint32 max_ncols, uint32 start_col,
 			la_col_t *B, uint32 *num_deps_found) {
 	
 	/* External interface to the linear algebra */

@@ -268,14 +268,16 @@ uint64 * block_lanczos(msieve_obj *obj,
 			uint32 nrows, 
 			uint32 num_dense_rows,
 			uint32 ncols, 
+			uint32 max_ncols,
+			uint32 start_col,
 			la_col_t *cols,
 			uint32 *deps_found);
 
-void count_matrix_nonzero(msieve_obj *obj,
+uint32 count_matrix_nonzero(msieve_obj *obj,
 			uint32 nrows, uint32 num_dense_rows,
 			uint32 ncols, la_col_t *cols);
 
-void reduce_matrix(msieve_obj *obj, uint32 *nrows, 
+uint32 reduce_matrix(msieve_obj *obj, uint32 *nrows, 
 		uint32 num_dense_rows, uint32 *ncols, 
 		la_col_t *cols, uint32 num_excess);
 
@@ -289,11 +291,13 @@ void dump_cycles(msieve_obj *obj, la_col_t *cols, uint32 ncols);
 
 void dump_matrix(msieve_obj *obj, 
 		uint32 nrows, uint32 num_dense_rows,
-		uint32 ncols, la_col_t *cols);
+		uint32 ncols, la_col_t *cols,
+		uint32 num_nonzero);
 
-void read_matrix(msieve_obj *obj, 
+uint32 read_matrix(msieve_obj *obj, 
 		uint32 *nrows_out, uint32 *num_dense_rows_out,
-		uint32 *ncols_out, la_col_t **cols_out,
+		uint32 *ncols_out, uint32 *start_col_out,
+		la_col_t **cols_out,
 		uint32 *rowperm, uint32 *colperm);
 
 void dump_dependencies(msieve_obj *obj, 

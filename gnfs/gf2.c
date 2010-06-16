@@ -561,11 +561,11 @@ void nfs_solve_linear_system(msieve_obj *obj, mp_t *n) {
 	uint32 i;
 	la_col_t *cols;
 	uint32 nrows, ncols; 
+	uint32 max_ncols; 
+	uint32 start_col;
 	uint32 num_dense_rows;
 	uint32 deps_found;
 	uint64 *dependencies;
-	uint32 *rowperm = NULL;
-	uint32 *colperm = NULL;
 	time_t cpu_time = time(NULL);
 
 	logprintf(obj, "\n");
@@ -573,22 +573,44 @@ void nfs_solve_linear_system(msieve_obj *obj, mp_t *n) {
 
 	/* convert the list of relations from the sieving 
 	   stage into a matrix */
+
 	if (!(obj->flags & MSIEVE_FLAG_NFS_LA_RESTART)) {
+
+		uint32 sparse_weight;
+
+		/* build the initial matrix that is the output from
+		   the filtering */
+
 		build_matrix(obj, n);
+
+		/* read the matrix and the list of cycles into memory
+		   again, now that the underlying relations have been freed */
+
 		read_matrix(obj, &nrows, &num_dense_rows, 
-				&ncols, &cols, NULL, NULL);
+				&ncols, NULL, &cols, NULL, NULL);
+		read_cycles(obj, &ncols, &cols, 0, NULL);
+
 		count_matrix_nonzero(obj, nrows, num_dense_rows, ncols, cols);
-		reduce_matrix(obj, &nrows, num_dense_rows, &ncols, 
-				cols, NUM_EXTRA_RELATIONS);
+
+		/* perform light filtering on the matrix */
+
+		sparse_weight = reduce_matrix(obj, &nrows, num_dense_rows, 
+				&ncols, cols, NUM_EXTRA_RELATIONS);
 		if (ncols == 0) {
 			logprintf(obj, "matrix is corrupt; skipping "
 					"linear algebra\n");
 			free(cols);
 			return;
 		}
-		dump_matrix(obj, nrows, num_dense_rows, ncols, cols);
 
-		/* clear off in-memory structures to defragment the heap */
+		/* save the reduced matrix on disk; if MPI is configured,
+		   also save the file offsets where each MPI process will
+		   begin reading its own slab of matrix columns */
+
+		dump_matrix(obj, nrows, num_dense_rows, 
+				ncols, cols, sparse_weight);
+
+		/* free the matrix */
 		for (i = 0; i < ncols; i++) {
 			free(cols[i].data);
 			free(cols[i].cycle.list);
@@ -597,35 +619,57 @@ void nfs_solve_linear_system(msieve_obj *obj, mp_t *n) {
 
 #if 0
 		/* optimize the layout of large matrices */
-		if (ncols > MIN_REORDER_SIZE)
+		if (ncols > MIN_REORDER_SIZE) {
+
+			uint32 *rowperm;
+			uint32 *colperm;
+
+			/* permute the rows and columns to concentrate
+			   the nonzeros in specific places */
+
 			reorder_matrix(obj, &rowperm, &colperm);
+
+			/* read the matrix back into memory, applying
+			   the permutation in the process */
+
+			read_matrix(obj, &nrows, &num_dense_rows, NULL
+					&ncols, &cols, rowperm, colperm);
+			read_cycles(obj, &ncols, &cols, 0, colperm);
+
+			/* save the permuted matrix */
+
+			dump_matrix(obj, nrows, num_dense_rows, 
+					ncols, cols, sparse_weight);
+
+			/* free everything */
+			free(rowperm);
+			free(colperm);
+			for (i = 0; i < ncols; i++) {
+				free(cols[i].data);
+				free(cols[i].cycle.list);
+			}
+			free(cols);
+		}
 #endif
 	}
 
-	/* read the matrix again; if a permutation was previously
-	   computed, apply it and save the new matrix */
+	/* read the matrix in; if configured for MPI, this reads
+	   in only the columns to be used by MPI process obj->mpi_rank,
+	   starting at index start_col. Without MPI, this reads the 
+	   whole matrix, ncols = max_ncols, and start_col = 0.
+	
+	   Do not read in the relation numbers, the Lanczos code
+	   doesn't need them */
 
-	read_matrix(obj, &nrows, &num_dense_rows, 
-			&ncols, &cols, rowperm, colperm);
+	max_ncols = read_matrix(obj, &nrows, &num_dense_rows, 
+			&ncols, &start_col, &cols, NULL, NULL);
 	count_matrix_nonzero(obj, nrows, num_dense_rows, ncols, cols);
-	if (rowperm != NULL || colperm != NULL) {
-		dump_matrix(obj, nrows, num_dense_rows, ncols, cols);
-		free(rowperm);
-		free(colperm);
-	}
-
-	/* the matrix is read-only from here on, so conserve memory
-	   by deleting the list of relations that comprise each column */
-
-	for (i = 0; i < ncols; i++) {
-		free(cols[i].cycle.list);
-		cols[i].cycle.list = NULL;
-	}
 
 	/* solve the linear system */
 
 	dependencies = block_lanczos(obj, nrows, num_dense_rows,
-					ncols, cols, &deps_found);
+					ncols, max_ncols, start_col,
+					cols, &deps_found);
 	if (deps_found)
 		dump_dependencies(obj, dependencies, ncols);
 	free(dependencies);
