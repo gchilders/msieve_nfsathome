@@ -126,11 +126,11 @@ typedef struct {
 	uint32 cache_size2;       /* bytes in level 2 cache */
 	enum cpu_type cpu;
 	uint32 num_threads;
-#ifdef HAVE_MPI
+
 	uint32 mpi_size;          /* number of MPI processes, each with
                                      num_threads threads */
-	uint32 mpi_id;            /* from 0 to mpi_size - 1 */
-#endif
+	uint32 mpi_rank;          /* from 0 to mpi_size - 1 */
+
 
 	uint32 mem_mb;            /* megabytes usable for NFS filtering */
 

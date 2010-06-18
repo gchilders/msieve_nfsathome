@@ -18,6 +18,10 @@ $Id$
 #include <msieve.h>
 #include <gmp_xface.h>
 
+#ifdef HAVE_MPI
+#include <mpi.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

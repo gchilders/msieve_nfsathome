@@ -15,6 +15,10 @@ $Id$
 #include <msieve.h>
 #include <signal.h>
 
+#ifdef HAVE_MPI
+#include <mpi.h>
+#endif
+
 msieve_obj *g_curr_factorization = NULL;
 
 /*--------------------------------------------------------------------*/
@@ -296,6 +300,12 @@ int main(int argc, char **argv) {
 	        printf("could not install handler on SIGTERM\n");
 	        return -1;
 	}     
+#ifdef HAVE_MPI
+	if ((i = MPI_Init(&argc, &argv)) != MPI_SUCCESS) {
+		printf("error %d initializing MPI, aborting\n", i);
+		MPI_Abort(MPI_COMM_WORLD, i);
+	}
+#endif
 
 	flags = MSIEVE_FLAG_USE_LOGFILE;
 
@@ -546,5 +556,8 @@ int main(int argc, char **argv) {
 		fclose(infile);
 	}
 
+#ifdef HAVE_MPI
+	MPI_Finalize();
+#endif
 	return 0;
 }

@@ -43,6 +43,7 @@ ifeq ($(CUDA),1)
 	# LIBS += -lcuda
 endif
 ifeq ($(MPI),1)
+	CC = mpicc -D_FILE_OFFSET_BITS=64
 	CFLAGS += -DHAVE_MPI
 endif
 

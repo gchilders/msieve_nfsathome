@@ -308,7 +308,7 @@ uint32 read_matrix(msieve_obj *obj,
 			logprintf(obj, "error: can't open matrix index file\n");
 			exit(-1);
 		}
-		fread(num_mpi_procs, sizeof(uint32), (size_t)1, matrix_idx_fp);
+		fread(&num_mpi_procs, sizeof(uint32), (size_t)1, matrix_idx_fp);
 		if (num_mpi_procs != obj->mpi_size) {
 			logprintf(obj, "error: matrix expects MPI procs = %u\n",
 					num_mpi_procs);
