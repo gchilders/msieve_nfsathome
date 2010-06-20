@@ -1477,6 +1477,23 @@ uint64 * block_lanczos(msieve_obj *obj, uint32 nrows,
 	packed_matrix_init(obj, &packed_matrix, B, nrows, 
 			   ncols, max_ncols, start_col, num_dense_rows);
 
+#ifdef HAVE_MPI
+	/* if using a post-lanczos matrix, gather the matrix elements
+	   at the root node since all of them will be necessary at once */
+
+	if (post_lanczos_matrix != NULL) {
+		if (obj->mpi_rank == 0) {
+			post_lanczos_matrix = xrealloc(post_lanczos_matrix,
+						max_ncols * sizeof(uint64));
+		}
+		MPI_TRY(MPI_Gatherv(post_lanczos_matrix, ncols,
+				MPI_LONG_LONG, post_lanczos_matrix, 
+				packed_matrix.col_counts,
+				packed_matrix.col_offsets,
+				MPI_LONG_LONG, 0, MPI_COMM_WORLD));
+	}
+#endif
+
 	/* set up for writing checkpoint files. This only applies
 	   to the largest matrices */
 

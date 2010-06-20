@@ -34,12 +34,7 @@ extern "C" {
    in a matrix multiply, as well as the memory footprint of 
    the matrix */
 
-#ifdef HAVE_MPI   /* MPI would need a gather operation */
-#define POST_LANCZOS_ROWS 0
-#else
 #define POST_LANCZOS_ROWS 48
-#endif
-
 #define MIN_POST_LANCZOS_DIM 10000
 
 /* routines for cache-efficient multiplication of
