@@ -183,16 +183,8 @@ void msieve_run(msieve_obj *obj) {
 	n_string = mp_sprintf(&n, 10, obj->mp_sprintf_buf);
 
 #ifdef HAVE_MPI
-	if ((status = MPI_Comm_size(MPI_COMM_WORLD, 
-			(int *)&obj->mpi_size)) != MPI_SUCCESS) {
-		printf("error in MPI startup\n");
-		MPI_Abort(MPI_COMM_WORLD, status);
-	}
-	if ((status = MPI_Comm_rank(MPI_COMM_WORLD, 
-			(int *)&obj->mpi_rank)) != MPI_SUCCESS) {
-		printf("error in MPI startup\n");
-		MPI_Abort(MPI_COMM_WORLD, status);
-	}
+	MPI_TRY(MPI_Comm_size(MPI_COMM_WORLD, (int *)&obj->mpi_size));
+	MPI_TRY(MPI_Comm_rank(MPI_COMM_WORLD, (int *)&obj->mpi_rank));
 #endif
 
 	/* print startup banner */

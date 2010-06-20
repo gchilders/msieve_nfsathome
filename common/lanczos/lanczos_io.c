@@ -283,7 +283,7 @@ uint32 read_matrix(msieve_obj *obj,
 	sprintf(buf, "%s.mat", obj->savefile.name);
 	matrix_fp = fopen(buf, "rb");
 	if (matrix_fp == NULL) {
-		logprintf(obj, "error: can't open matrix file\n");
+		logprintf(obj, "error: cannot open matrix file\n");
 		exit(-1);
 	}
 
@@ -326,8 +326,8 @@ uint32 read_matrix(msieve_obj *obj,
 		fclose(matrix_idx_fp);
 
 		*start_col_out = mat_block.col_start;
-		ncols = next_mat_block.col_start -
-				mat_block.col_start;
+		*ncols_out = ncols = next_mat_block.col_start -
+					mat_block.col_start;
 		fseeko(matrix_fp, mat_block.mat_file_offset, SEEK_SET);
 #else
 		*start_col_out = 0;

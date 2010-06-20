@@ -34,16 +34,21 @@ extern "C" {
    in a matrix multiply, as well as the memory footprint of 
    the matrix */
 
+#ifdef HAVE_MPI   /* MPI would need a gather operation */
+#define POST_LANCZOS_ROWS 0
+#else
 #define POST_LANCZOS_ROWS 48
+#endif
+
 #define MIN_POST_LANCZOS_DIM 10000
 
 /* routines for cache-efficient multiplication of
    sparse matrices */
 
-/* the smallest number of columns that will be
-   converted to packed format */
+/* the smallest matrix size that will be converted 
+   to packed format */
 
-#define MIN_NCOLS_TO_PACK 30000
+#define MIN_NROWS_TO_PACK 30000
 
 /* the number of moderately dense rows that are
    packed less tightly */
@@ -123,13 +128,15 @@ typedef struct {
 } thread_data_t;
 
 #define MAX_THREADS 32
-#define MIN_NCOLS_TO_THREAD 200000
+#define MIN_NROWS_TO_THREAD 200000
 
 /* struct representing a packed matrix */
 
 typedef struct {
 	uint32 nrows;
 	uint32 ncols;
+	uint32 max_ncols;
+	uint32 start_col;
 	uint32 num_dense_rows;
 	uint32 num_threads;
 
@@ -137,20 +144,28 @@ typedef struct {
 
 	thread_data_t thread_data[MAX_THREADS];
 
+#ifdef HAVE_MPI
+	int32 col_counts[MAX_MPI_PROCS]; /* needed on root node only */
+	int32 col_offsets[MAX_MPI_PROCS]; /* needed on root node only */
+#endif
+
 } packed_matrix_t;
 
 void packed_matrix_init(msieve_obj *obj, 
 			packed_matrix_t *packed_matrix,
 			la_col_t *A, uint32 nrows, uint32 ncols,
+			uint32 max_ncols, uint32 start_col, 
 			uint32 num_dense_rows);
 
 void packed_matrix_free(packed_matrix_t *packed_matrix);
 
 size_t packed_matrix_sizeof(packed_matrix_t *packed_matrix);
 
-void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, uint64 *b);
+void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, 
+			uint64 *b, uint64 *scratch);
 
-void mul_trans_MxN_Nx64(packed_matrix_t *A, uint64 *x, uint64 *b);
+void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x, 
+			uint64 *b, uint64 *scratch);
 
 void mul_Nx64_64x64_acc(uint64 *v, uint64 *x, uint64 *y, uint32 n);
 

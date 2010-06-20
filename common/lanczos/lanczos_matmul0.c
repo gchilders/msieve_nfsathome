@@ -552,6 +552,7 @@ static void stop_worker_thread(thread_data_t *t,
 void packed_matrix_init(msieve_obj *obj,
 			packed_matrix_t *p, la_col_t *A,
 			uint32 nrows, uint32 ncols,
+			uint32 max_ncols, uint32 start_col, 
 			uint32 num_dense_rows) {
 
 	uint32 i, j, k;
@@ -566,9 +567,11 @@ void packed_matrix_init(msieve_obj *obj,
 	p->unpacked_cols = A;
 	p->nrows = nrows;
 	p->ncols = ncols;
+	p->start_col = start_col;
+	p->max_ncols = max_ncols;
 	p->num_dense_rows = num_dense_rows;
 
-	if (ncols <= MIN_NCOLS_TO_PACK)
+	if (nrows <= MIN_NROWS_TO_PACK)
 		return;
 
 	p->unpacked_cols = NULL;
@@ -588,7 +591,7 @@ void packed_matrix_init(msieve_obj *obj,
 	   typically have pretty big caches anyway */
 
 	block_size = obj->cache_size2 / (3 * sizeof(uint64));
-	block_size = MIN(block_size, ncols / 2.5);
+	block_size = MIN(block_size, nrows / 2.5);
 	block_size = MIN(block_size, 65536);
 	if (block_size == 0)
 		block_size = 32768;
@@ -600,7 +603,7 @@ void packed_matrix_init(msieve_obj *obj,
 	/* determine the number of threads to use */
 
 	num_threads = obj->num_threads;
-	if (num_threads < 2 || ncols < MIN_NCOLS_TO_THREAD)
+	if (num_threads < 2 || nrows < MIN_NROWS_TO_THREAD)
 		num_threads = 1;
 	p->num_threads = num_threads = MIN(num_threads, MAX_THREADS);
 
@@ -649,6 +652,16 @@ void packed_matrix_init(msieve_obj *obj,
 		start_worker_thread(p->thread_data + i, 0);
 
 	start_worker_thread(p->thread_data + i, 1);
+
+#ifdef HAVE_MPI
+	/* tell node 0 how many columns we have and the start offset
+	   into a vector of size max_ncols */
+
+	MPI_TRY(MPI_Gather(&ncols, 1, MPI_INT, p->col_counts, 
+				1, MPI_INT, 0, MPI_COMM_WORLD))
+	MPI_TRY(MPI_Gather(&start_col, 1, MPI_INT, p->col_offsets, 
+				1, MPI_INT, 0, MPI_COMM_WORLD))
+#endif
 }
 
 /*-------------------------------------------------------------------*/
@@ -714,26 +727,59 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 }
 
 /*-------------------------------------------------------------------*/
-void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, uint64 *b) {
+void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, 
+			uint64 *b, uint64 *scratch) {
 
 	/* Multiply the vector x[] by the matrix A (stored
 	   columnwise) and put the result in b[]. */
 
+#ifdef HAVE_MPI
+	MPI_TRY(MPI_Bcast(x, A->max_ncols, MPI_LONG_LONG,
+			0, MPI_COMM_WORLD));
+
+	mul_packed(A, x, scratch);
+
+	MPI_TRY(MPI_Reduce(scratch, b, A->max_ncols, MPI_LONG_LONG,
+			MPI_BXOR, 0, MPI_COMM_WORLD));
+#else
 	if (A->unpacked_cols)
 		mul_unpacked(A, x, b);
 	else
 		mul_packed(A, x, b);
+#endif
 }
 
 /*-------------------------------------------------------------------*/
-void mul_trans_MxN_Nx64(packed_matrix_t *A, uint64 *x, uint64 *b) {
+void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x, 
+			uint64 *b, uint64 *scratch) {
 
-	/* Multiply the vector x[] by the transpose of the
-	   matrix A and put the result in b[]. Since A is stored
-	   by columns, this is just a matrix-vector product */
+	/* Multiply x by A and write to scratch, then
+	   multiply scratch by the transpose of A and
+	   write to b */
 
-	if (A->unpacked_cols)
-		mul_trans_unpacked(A, x, b);
-	else
-		mul_trans_packed(A, x, b);
+#ifdef HAVE_MPI
+	MPI_TRY(MPI_Bcast(x, A->max_ncols, MPI_LONG_LONG,
+			0, MPI_COMM_WORLD));
+
+	mul_packed(A, x, scratch);
+
+	MPI_TRY(MPI_Allreduce(scratch, b, A->max_ncols,
+			MPI_LONG_LONG, MPI_BXOR, MPI_COMM_WORLD));
+
+	mul_trans_packed(A, b, scratch);
+
+	MPI_TRY(MPI_Gatherv(scratch, A->ncols, MPI_LONG_LONG, b,
+			A->col_counts, A->col_offsets, 
+			MPI_LONG_LONG, 0, MPI_COMM_WORLD));
+
+#else
+	if (A->unpacked_cols) {
+		mul_unpacked(A, x, scratch);
+		mul_trans_unpacked(A, scratch, b);
+	}
+	else {
+		mul_packed(A, x, scratch);
+		mul_trans_packed(A, scratch, b);
+	}
+#endif
 }

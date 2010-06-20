@@ -19,7 +19,18 @@ $Id$
 #include <gmp_xface.h>
 
 #ifdef HAVE_MPI
-#include <mpi.h>
+	#include <mpi.h>
+
+	#define MAX_MPI_PROCS 32
+
+	#define MPI_TRY(x) \
+	{								\
+		int status;						\
+		if ((status = (x)) != MPI_SUCCESS) {			\
+			printf("MPI error at %s:%d\n", __FILE__, __LINE__);\
+			MPI_Abort(MPI_COMM_WORLD, status);		\
+		}							\
+	}
 #endif
 
 #ifdef __cplusplus

@@ -576,6 +576,20 @@ void nfs_solve_linear_system(msieve_obj *obj, mp_t *n) {
 
 	if (!(obj->flags & MSIEVE_FLAG_NFS_LA_RESTART)) {
 
+		/* build the matrix; if using MPI, only process
+		   0 does this, the rest are stalled. This isn't very
+		   elegant, but avoiding it means either solving the
+		   matrix twice, with the first pass having foreknowledge 
+		   of the number of MPI processes that will eventually 
+		   be used, or doing it in one pass with the matrix build
+		   occurring in parallel. That actually is a nice idea
+		   but would need a lot more more memory (a distributed
+		   hashtable, or multiple copies of all the relations
+		   involved) */
+
+#ifdef HAVE_MPI
+		if (obj->mpi_rank == 0) {
+#endif
 		uint32 sparse_weight;
 
 		/* build the initial matrix that is the output from
@@ -616,7 +630,6 @@ void nfs_solve_linear_system(msieve_obj *obj, mp_t *n) {
 			free(cols[i].cycle.list);
 		}
 		free(cols);
-
 #if 0
 		/* optimize the layout of large matrices */
 		if (ncols > MIN_REORDER_SIZE) {
@@ -650,6 +663,11 @@ void nfs_solve_linear_system(msieve_obj *obj, mp_t *n) {
 			}
 			free(cols);
 		}
+#endif
+
+#ifdef HAVE_MPI
+		}
+		MPI_TRY(MPI_Barrier(MPI_COMM_WORLD));
 #endif
 	}
 
