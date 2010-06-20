@@ -689,7 +689,7 @@ void nfs_solve_linear_system(msieve_obj *obj, mp_t *n) {
 					ncols, max_ncols, start_col,
 					cols, &deps_found);
 	if (deps_found)
-		dump_dependencies(obj, dependencies, ncols);
+		dump_dependencies(obj, dependencies, max_ncols);
 	free(dependencies);
 	free(cols);
 

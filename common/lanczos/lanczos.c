@@ -1362,7 +1362,8 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 			logprintf(obj, "linear algebra failed; retrying...\n");
 #ifdef HAVE_MPI
 		/* MPI cannot restart gracefully, or shut down
-		   gracefully from an interrupt */
+		   gracefully from an interrupt (the latter is
+		   okay, a checkpoint has already been written) */
 		MPI_Abort(MPI_COMM_WORLD, MPI_ERR_ASSERT);
 #endif
 		return NULL;

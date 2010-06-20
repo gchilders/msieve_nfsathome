@@ -14,6 +14,7 @@ $Id$
 
 #include "lanczos.h"
 
+#ifndef HAVE_MPI
 /*-------------------------------------------------------------------*/
 static void mul_unpacked(packed_matrix_t *matrix,
 			  uint64 *x, uint64 *b) {
@@ -87,6 +88,7 @@ static void mul_trans_unpacked(packed_matrix_t *matrix,
 		}
 	}
 }
+#endif /* !HAVE_MPI */
 
 /*-------------------------------------------------------------------*/
 static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
@@ -104,7 +106,7 @@ static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
 		t->x = x;
 		if (i == 0)
 			t->b = b;
-		memset(t->b, 0, ncols * sizeof(uint64));
+		memset(t->b, 0, matrix->max_ncols * sizeof(uint64));
 
 		/* fire off each part of the matrix multiply
 		   in a separate thread from the thread pool, 
@@ -567,7 +569,6 @@ void packed_matrix_init(msieve_obj *obj,
 	p->unpacked_cols = A;
 	p->nrows = nrows;
 	p->ncols = ncols;
-	p->start_col = start_col;
 	p->max_ncols = max_ncols;
 	p->num_dense_rows = num_dense_rows;
 
@@ -731,11 +732,14 @@ void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x,
 			uint64 *b, uint64 *scratch) {
 
 	/* Multiply the vector x[] by the matrix A (stored
-	   columnwise) and put the result in b[]. */
+	   columnwise) and put the result in b[]. The MPI 
+	   version needs a scratch array because MPI reduction
+	   operations apparently cannot be performed in-place */
 
 #ifdef HAVE_MPI
-	MPI_TRY(MPI_Bcast(x, A->max_ncols, MPI_LONG_LONG,
-			0, MPI_COMM_WORLD));
+	MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
+			MPI_LONG_LONG, x, A->ncols,
+			MPI_LONG_LONG, 0, MPI_COMM_WORLD));
 
 	mul_packed(A, x, scratch);
 
@@ -755,11 +759,13 @@ void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x,
 
 	/* Multiply x by A and write to scratch, then
 	   multiply scratch by the transpose of A and
-	   write to b */
+	   write to b. x may alias b, but the two must
+	   be distinct from scratch */
 
 #ifdef HAVE_MPI
-	MPI_TRY(MPI_Bcast(x, A->max_ncols, MPI_LONG_LONG,
-			0, MPI_COMM_WORLD));
+	MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
+			MPI_LONG_LONG, x, A->ncols,
+			MPI_LONG_LONG, 0, MPI_COMM_WORLD));
 
 	mul_packed(A, x, scratch);
 

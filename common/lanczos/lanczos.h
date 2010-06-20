@@ -136,7 +136,6 @@ typedef struct {
 	uint32 nrows;
 	uint32 ncols;
 	uint32 max_ncols;
-	uint32 start_col;
 	uint32 num_dense_rows;
 	uint32 num_threads;
 
