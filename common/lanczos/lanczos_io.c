@@ -14,10 +14,135 @@ $Id$
 
 #include "lanczos.h"
 
+/*--------------------------------------------------------------------*/
+#ifdef HAVE_MPI
+
 typedef struct {
 	uint32 col_start;
 	uint64 mat_file_offset;
 } mat_block_t;
+
+typedef struct {
+	uint32 sparse_per_proc;
+	uint32 curr_mpi;
+	uint32 curr_sparse;
+	uint32 target_sparse;
+	uint32 curr_col;
+	mat_block_t idx_entries[MAX_MPI_PROCS + 1];
+} mat_idx_t;
+
+static mat_idx_t * mat_idx_init(uint32 num_sparse) {
+
+	uint32 i;
+	mat_idx_t *m = (mat_idx_t *)xcalloc(MAX_MPI_PROCS,
+					sizeof(mat_idx_t));
+
+	for (i = 1; i <= MAX_MPI_PROCS; i++)
+		m[i-1].sparse_per_proc = num_sparse / i + 100;
+
+	return m;
+}
+
+static void mat_idx_update(mat_idx_t *m, FILE *mat_fp,
+			uint32 curr_sparse) {
+
+	uint32 i;
+
+	for (i = 0; i < MAX_MPI_PROCS; i++) {
+		mat_idx_t *curr_m = m + i;
+
+		if (curr_m->curr_sparse >= curr_m->target_sparse) {
+			mat_block_t *curr_block = curr_m->idx_entries +
+							curr_m->curr_mpi++;
+			curr_block->col_start = curr_m->curr_col;
+			curr_block->mat_file_offset = ftello(mat_fp);
+
+			curr_m->target_sparse = curr_m->curr_sparse +
+						curr_m->sparse_per_proc;
+		}
+
+		curr_m->curr_col++;
+		curr_m->curr_sparse += curr_sparse;
+	}
+}
+
+static void mat_idx_final(msieve_obj *obj, mat_idx_t *m,
+			uint32 ncols, uint64 mat_file_size) {
+
+	uint32 i;
+	char buf[256];
+	FILE *idx_fp;
+
+	sprintf(buf, "%s.mat.idx", obj->savefile.name);
+	idx_fp = fopen(buf, "wb");
+	if (idx_fp == NULL) {
+		logprintf(obj, "error: can't open matrix index file\n");
+		exit(-1);
+	}
+
+	i = MAX_MPI_PROCS;
+	fwrite(&i, sizeof(uint32), (size_t)1, idx_fp);
+
+	for (i = 1; i <= MAX_MPI_PROCS; i++) {
+		mat_idx_t *curr_m = m + (i-1);
+
+		curr_m->idx_entries[i].col_start = ncols;
+		curr_m->idx_entries[i].mat_file_offset = mat_file_size;
+
+		fwrite(curr_m->idx_entries, sizeof(mat_block_t), 
+					(size_t)(i+1), idx_fp);
+
+	}
+
+	fclose(idx_fp);
+	free(m);
+}
+
+static void find_submatrix_bounds(msieve_obj *obj, uint32 *ncols,
+			uint32 *start_col, uint64 *mat_file_offset) {
+
+	mat_block_t mat_block;
+	mat_block_t next_mat_block;
+	char buf[256];
+	FILE *matrix_idx_fp;
+	uint32 num_mpi_procs;
+
+	sprintf(buf, "%s.mat.idx", obj->savefile.name);
+	matrix_idx_fp = fopen(buf, "rb");
+	if (matrix_idx_fp == NULL) {
+		logprintf(obj, "error: can't open matrix index file\n");
+		exit(-1);
+	}
+
+	fread(&num_mpi_procs, sizeof(uint32), (size_t)1, matrix_idx_fp);
+	if (num_mpi_procs < obj->mpi_size) {
+		logprintf(obj, "error: matrix expects MPI procs <= %u\n",
+				num_mpi_procs);
+		exit(-1);
+	}
+
+	/* get the matrix file offset for MPI process obj->mpi_rank 
+	   Also fast-forward to the list specific to obj->mpi_size
+	   MPI processes */
+
+	fseek(matrix_idx_fp, 
+		(long)((obj->mpi_size *
+		        (obj->mpi_size + 1) / 2 - 1 +
+			obj->mpi_rank) * sizeof(mat_block_t)), 
+		SEEK_CUR);
+
+	fread(&mat_block, sizeof(mat_block_t), 
+				(size_t)1, matrix_idx_fp);
+	fread(&next_mat_block, sizeof(mat_block_t), 
+				(size_t)1, matrix_idx_fp);
+	fclose(matrix_idx_fp);
+
+	*start_col = mat_block.col_start;
+	*ncols = next_mat_block.col_start - mat_block.col_start;
+	*mat_file_offset = mat_block.mat_file_offset;
+}
+
+#endif
 
 /*--------------------------------------------------------------------*/
 void dump_cycles(msieve_obj *obj, la_col_t *cols, uint32 ncols) {
@@ -55,27 +180,8 @@ void dump_matrix(msieve_obj *obj,
 	uint32 dense_row_words;
 	char buf[256];
 	FILE *matrix_fp;
-
 #ifdef HAVE_MPI
-	FILE *matrix_idx_fp;
-	uint32 num_blocks = 1;
-	uint32 sparse_block_weight = sparse_weight;
-	uint32 curr_sparse = 0;
-	uint32 next_block = 0;
-	mat_block_t new_block;
-
-	if (obj->mpi_size > 1) {
-		num_blocks = obj->mpi_size;
-		sparse_block_weight = sparse_weight / num_blocks + 100;
-	}
-
-	sprintf(buf, "%s.mat.idx", obj->savefile.name);
-	matrix_idx_fp = fopen(buf, "wb");
-	if (matrix_idx_fp == NULL) {
-		logprintf(obj, "error: can't open matrix index file\n");
-		exit(-1);
-	}
-	fwrite(&num_blocks, sizeof(uint32), (size_t)1, matrix_idx_fp);
+	mat_idx_t *mpi_idx_data = mat_idx_init(sparse_weight);
 #endif
 
 	dump_cycles(obj, cols, ncols);
@@ -97,28 +203,15 @@ void dump_matrix(msieve_obj *obj,
 		uint32 num = c->weight + dense_row_words;
 
 #ifdef HAVE_MPI
-		if (curr_sparse >= next_block) {
-			new_block.col_start = i;
-			new_block.mat_file_offset = ftello(matrix_fp);
-			fwrite(&new_block, sizeof(mat_block_t), 
-					(size_t)1, matrix_idx_fp);
-			next_block = curr_sparse + sparse_block_weight;
-
-		}
-		curr_sparse += c->weight;
+		mat_idx_update(mpi_idx_data, matrix_fp, c->weight);
 #endif
-
 		fwrite(&c->weight, sizeof(uint32), (size_t)1, matrix_fp);
 		fwrite(c->data, sizeof(uint32), (size_t)num, matrix_fp);
 	}
 
 #ifdef HAVE_MPI
-	new_block.col_start = i;
-	new_block.mat_file_offset = ftello(matrix_fp);
-	fwrite(&new_block, sizeof(mat_block_t), (size_t)1, matrix_idx_fp);
-	fclose(matrix_idx_fp);
+	mat_idx_final(obj, mpi_idx_data, ncols, ftello(matrix_fp));
 #endif
-
 	fclose(matrix_fp);
 }
 
@@ -290,45 +383,18 @@ uint32 read_matrix(msieve_obj *obj,
 	fread(nrows_out, sizeof(uint32), (size_t)1, matrix_fp);
 	fread(num_dense_rows_out, sizeof(uint32), (size_t)1, matrix_fp);
 	dense_row_words = (*num_dense_rows_out + 31) / 32;
-	fread(ncols_out, sizeof(uint32), (size_t)1, matrix_fp);
-	max_ncols = ncols = *ncols_out;
+	fread(&max_ncols, sizeof(uint32), (size_t)1, matrix_fp);
+	ncols = max_ncols;
 
 	if (start_col_out != NULL) {
 #ifdef HAVE_MPI
 		/* read in only a subset of the matrix */
 
-		mat_block_t mat_block;
-		mat_block_t next_mat_block;
-		FILE *matrix_idx_fp;
-		uint32 num_mpi_procs;
+		uint64 mat_file_offset;
 
-		sprintf(buf, "%s.mat.idx", obj->savefile.name);
-		matrix_idx_fp = fopen(buf, "rb");
-		if (matrix_idx_fp == NULL) {
-			logprintf(obj, "error: can't open matrix index file\n");
-			exit(-1);
-		}
-		fread(&num_mpi_procs, sizeof(uint32), (size_t)1, matrix_idx_fp);
-		if (num_mpi_procs != obj->mpi_size) {
-			logprintf(obj, "error: matrix expects MPI procs = %u\n",
-					num_mpi_procs);
-			exit(-1);
-		}
-
-		/* get the matrix file offset for MPI process obj->mpi_rank */
-
-		fseek(matrix_idx_fp, (long)(obj->mpi_rank * 
-				sizeof(mat_block_t)), SEEK_CUR);
-		fread(&mat_block, sizeof(mat_block_t), 
-					(size_t)1, matrix_idx_fp);
-		fread(&next_mat_block, sizeof(mat_block_t), 
-					(size_t)1, matrix_idx_fp);
-		fclose(matrix_idx_fp);
-
-		*start_col_out = mat_block.col_start;
-		*ncols_out = ncols = next_mat_block.col_start -
-					mat_block.col_start;
-		fseeko(matrix_fp, mat_block.mat_file_offset, SEEK_SET);
+		find_submatrix_bounds(obj, &ncols, start_col_out,
+					&mat_file_offset);
+		fseeko(matrix_fp, mat_file_offset, SEEK_SET);
 #else
 		*start_col_out = 0;
 #endif
@@ -362,6 +428,7 @@ uint32 read_matrix(msieve_obj *obj,
 		}
 	}
 	fclose(matrix_fp);
+	*ncols_out = ncols;
 	*cols_out = cols;
 	return max_ncols;
 }
