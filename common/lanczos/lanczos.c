@@ -1474,10 +1474,18 @@ uint64 * block_lanczos(msieve_obj *obj, uint32 nrows,
 					num_dense_rows);
 	}
 
-	packed_matrix_init(obj, &packed_matrix, B, nrows, 
-			   ncols, max_ncols, start_col, num_dense_rows);
+	memset(&packed_matrix, 0, sizeof(packed_matrix_t));
 
 #ifdef HAVE_MPI
+
+	/* tell node 0 how many columns we have and the start offset
+	   into a vector of size max_ncols */
+
+	MPI_TRY(MPI_Gather(&ncols, 1, MPI_INT, packed_matrix.col_counts, 
+				1, MPI_INT, 0, MPI_COMM_WORLD))
+	MPI_TRY(MPI_Gather(&start_col, 1, MPI_INT, packed_matrix.col_offsets, 
+				1, MPI_INT, 0, MPI_COMM_WORLD))
+
 	/* if using a post-lanczos matrix, gather the matrix elements
 	   at the root node since all of them will be necessary at once */
 
@@ -1486,17 +1494,22 @@ uint64 * block_lanczos(msieve_obj *obj, uint32 nrows,
 			post_lanczos_matrix = xrealloc(post_lanczos_matrix,
 						max_ncols * sizeof(uint64));
 		}
+
 		MPI_TRY(MPI_Gatherv(post_lanczos_matrix, ncols,
 				MPI_LONG_LONG, post_lanczos_matrix, 
 				packed_matrix.col_counts,
 				packed_matrix.col_offsets,
 				MPI_LONG_LONG, 0, MPI_COMM_WORLD));
-	}
-	if (obj->mpi_rank != 0) {
-		free(post_lanczos_matrix);
-		post_lanczos_matrix = NULL;
+
+		if (obj->mpi_rank != 0) {
+			free(post_lanczos_matrix);
+			post_lanczos_matrix = NULL;
+		}
 	}
 #endif
+
+	packed_matrix_init(obj, &packed_matrix, B, nrows, 
+			   ncols, max_ncols, start_col, num_dense_rows);
 
 	/* set up for writing checkpoint files. This only applies
 	   to the largest matrices */

@@ -565,7 +565,6 @@ void packed_matrix_init(msieve_obj *obj,
 
 	/* initialize */
 
-	memset(p, 0, sizeof(packed_matrix_t));
 	p->unpacked_cols = A;
 	p->nrows = nrows;
 	p->ncols = ncols;
@@ -654,16 +653,6 @@ void packed_matrix_init(msieve_obj *obj,
 		start_worker_thread(p->thread_data + i, 0);
 
 	start_worker_thread(p->thread_data + i, 1);
-
-#ifdef HAVE_MPI
-	/* tell node 0 how many columns we have and the start offset
-	   into a vector of size max_ncols */
-
-	MPI_TRY(MPI_Gather(&ncols, 1, MPI_INT, p->col_counts, 
-				1, MPI_INT, 0, MPI_COMM_WORLD))
-	MPI_TRY(MPI_Gather(&start_col, 1, MPI_INT, p->col_offsets, 
-				1, MPI_INT, 0, MPI_COMM_WORLD))
-#endif
 }
 
 /*-------------------------------------------------------------------*/
