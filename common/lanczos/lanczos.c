@@ -1492,6 +1492,10 @@ uint64 * block_lanczos(msieve_obj *obj, uint32 nrows,
 				packed_matrix.col_offsets,
 				MPI_LONG_LONG, 0, MPI_COMM_WORLD));
 	}
+	if (obj->mpi_rank != 0) {
+		free(post_lanczos_matrix);
+		post_lanczos_matrix = NULL;
+	}
 #endif
 
 	/* set up for writing checkpoint files. This only applies
