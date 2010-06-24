@@ -94,7 +94,7 @@ static void mul_trans_unpacked(packed_matrix_t *matrix,
 static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
 
 	uint32 i;
-	uint32 ncols = matrix->ncols;
+	uint32 max_ncols = matrix->max_ncols;
 
 	for (i = 0; i < matrix->num_threads; i++) {
 		thread_data_t *t = matrix->thread_data + i;
@@ -106,7 +106,7 @@ static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
 		t->x = x;
 		if (i == 0)
 			t->b = b;
-		memset(t->b, 0, matrix->max_ncols * sizeof(uint64));
+		memset(t->b, 0, max_ncols * sizeof(uint64));
 
 		/* fire off each part of the matrix multiply
 		   in a separate thread from the thread pool, 
@@ -149,7 +149,7 @@ static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
 			uint64 *curr_b = t->b;
 			uint32 j;
 
-			for (j = 0; j < ncols; j++)
+			for (j = 0; j < max_ncols; j++)
 				b[j] ^= curr_b[j];
 		}
 	}
@@ -259,7 +259,7 @@ static void matrix_thread_init(thread_data_t *t) {
 	   scratch space, it's provided by calling code */
 
 	if (t->my_oid > 0)
-		t->b = (uint64 *)xmalloc(t->ncols_in * sizeof(uint64));
+		t->b = (uint64 *)xmalloc(t->max_ncols * sizeof(uint64));
 
 	/* pack the dense rows 64 at a time */
 
@@ -630,6 +630,7 @@ void packed_matrix_init(msieve_obj *obj,
 			t->initial_cols = A;
 			t->col_min = j;
 			t->col_max = i;
+			t->max_ncols = max_ncols;
 			t->nrows_in = nrows;
 			t->ncols_in = ncols;
 			t->block_size = block_size;

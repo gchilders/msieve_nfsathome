@@ -97,6 +97,7 @@ typedef struct {
 	/* items used during matrix multiplies */
 
 	uint32 ncols;		/* number of columns used by this thread */
+	uint32 max_ncols;	/* vector size (same for all threads) */
 	uint32 num_dense_rows;  /* number of rows packed by dense_blocks */
 	uint64 **dense_blocks;  /* for holding dense matrix rows; 
 				   dense_blocks[i] holds the i_th batch of
