@@ -19,9 +19,15 @@ $Id$
 #include <gmp_xface.h>
 
 #ifdef HAVE_MPI
-	#include <mpi.h>
+#include <mpi.h>
+#endif
 
-	#define MAX_MPI_PROCS 32
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifdef HAVE_MPI
+	#define MAX_MPI_PROCS 64
 
 	#define MPI_TRY(x) \
 	{								\
@@ -31,10 +37,6 @@ $Id$
 			MPI_Abort(MPI_COMM_WORLD, status);		\
 		}							\
 	}
-#endif
-
-#ifdef __cplusplus
-extern "C" {
 #endif
 
 /*---------------- SAVEFILE RELATED DECLARATIONS ---------------------*/
