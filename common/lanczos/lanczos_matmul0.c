@@ -690,17 +690,20 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 
 	if (p->unpacked_cols) {
 		la_col_t *A = p->unpacked_cols;
-		mem_use = p->ncols * sizeof(la_col_t);
+		mem_use = p->ncols * (sizeof(la_col_t) +
+				(p->num_dense_rows + 31) / 32);
 		for (i = 0; i < p->ncols; i++) {
 			mem_use += A[i].weight * sizeof(uint32);
 		}
 	}
 	else {
+		mem_use = p->max_ncols * sizeof(uint64) *
+				(p->num_threads - 1);
+
 		for (i = 0; i < p->num_threads; i++) {
 			thread_data_t *t = p->thread_data + i;
 
-			mem_use += p->ncols * sizeof(uint64) +
-				   t->num_blocks * sizeof(packed_block_t) +
+			mem_use += t->num_blocks * sizeof(packed_block_t) +
 				   t->ncols * sizeof(uint64) *
 					((t->num_dense_rows + 63) / 64);
 
