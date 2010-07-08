@@ -121,14 +121,10 @@ static void find_submatrix_bounds(msieve_obj *obj, uint32 *ncols,
 		exit(-1);
 	}
 
-	/* get the matrix file offset for MPI process obj->mpi_rank 
-	   Also fast-forward to the list specific to obj->mpi_size
-	   MPI processes */
-
 	fseek(matrix_idx_fp, 
-		(long)((obj->mpi_size *
-		        (obj->mpi_size + 1) / 2 - 1 +
-			obj->mpi_rank) * sizeof(mat_block_t)), 
+		(long)((obj->mpi_ncols *
+		        (obj->mpi_ncols + 1) / 2 - 1 +
+			obj->mpi_la_col_rank) * sizeof(mat_block_t)), 
 		SEEK_CUR);
 
 	fread(&mat_block, sizeof(mat_block_t), 
@@ -355,20 +351,27 @@ static int compare_uint32(const void *x, const void *y) {
 }
 
 /*--------------------------------------------------------------------*/
-uint32 read_matrix(msieve_obj *obj, 
-		uint32 *nrows_out, uint32 *num_dense_rows_out,
-		uint32 *ncols_out, uint32 *start_col_out, 
+void read_matrix(msieve_obj *obj, 
+		uint32 *nrows_out, uint32 *max_nrows_out, 
+		uint32 *start_row_out,
+		uint32 *dense_rows_out,
+		uint32 *ncols_out, uint32 *max_ncols_out,
+		uint32 *start_col_out, 
 		la_col_t **cols_out, uint32 *rowperm, uint32 *colperm) {
 
-	uint32 i, j;
-	uint32 dense_row_words;
-	uint32 ncols;
-	uint32 max_ncols;
+	uint32 i, j, k;
+	uint32 dense_rows, dense_row_words;
+	uint32 ncols, max_ncols, start_col;
+	uint32 nrows, max_nrows, start_row;
+	uint32 mpi_resclass, mpi_nrows;
+	uint32 num_static_rows;
 	la_col_t *cols;
 	char buf[256];
 	FILE *matrix_fp;
+	uint32 read_submatrix = (start_row_out != NULL &&
+				start_col_out != NULL);
 
-	if (start_col_out != NULL && colperm != NULL) {
+	if (read_submatrix && colperm != NULL) {
 		logprintf(obj, "error: cannot read submatrix with permute\n");
 		exit(-1);
 	}
@@ -380,29 +383,70 @@ uint32 read_matrix(msieve_obj *obj,
 		exit(-1);
 	}
 
-	fread(nrows_out, sizeof(uint32), (size_t)1, matrix_fp);
-	fread(num_dense_rows_out, sizeof(uint32), (size_t)1, matrix_fp);
-	dense_row_words = (*num_dense_rows_out + 31) / 32;
+	fread(&max_nrows, sizeof(uint32), (size_t)1, matrix_fp);
+	fread(&dense_rows, sizeof(uint32), (size_t)1, matrix_fp);
 	fread(&max_ncols, sizeof(uint32), (size_t)1, matrix_fp);
-	ncols = max_ncols;
 
-	if (start_col_out != NULL) {
+	/* default bounding rectangle on matrix read in */
+
+	dense_row_words = (dense_rows + 31) / 32;
+	nrows = max_nrows;
+	ncols = max_ncols;
+	start_row = start_col = 0;
+	mpi_resclass = 0;
+	mpi_nrows = 1;
+
+	num_static_rows = POST_LANCZOS_ROWS;
+	while (num_static_rows < dense_rows)
+		num_static_rows += 64;
+	num_static_rows = MAX(64, num_static_rows);
+
 #ifdef HAVE_MPI
+	if (read_submatrix) {
 		/* read in only a subset of the matrix */
 
 		uint64 mat_file_offset;
 
-		find_submatrix_bounds(obj, &ncols, start_col_out,
+		find_submatrix_bounds(obj, &ncols, &start_col,
 					&mat_file_offset);
 		fseeko(matrix_fp, mat_file_offset, SEEK_SET);
-#else
-		*start_col_out = 0;
-#endif
+
+		mpi_resclass = obj->mpi_la_row_rank;
+		mpi_nrows = obj->mpi_nrows;
+
+		/* we perform an on-the-fly permutation of the rows,
+		   so that row i winds up in MPI process row
+		   (i % mpi_nrows). This is basically a scatter
+		   of the initial row ordering across all the MPI
+		   rows. 
+
+		   While this will distribute the nonzeros across
+		   the MPI rows approximately evenly, we can only
+		   remove the densest rows from the top row of MPI
+		   processes. Hence the first few row numbers must
+		   not be permuted */
+
+		/* make the remaining number of rows a multiple 
+		   of mpi_nrows */
+
+		num_static_rows += mpi_nrows - (nrows - 
+					num_static_rows) % mpi_nrows;
+
+		/* finally, compute the starting row number for the
+		   current MPI process */
+
+		nrows = (nrows - num_static_rows) / mpi_nrows;
+		if (mpi_resclass == 0)
+			nrows += num_static_rows;
+		else
+			start_row = num_static_rows + mpi_resclass * nrows;
 	}
+#endif
 	cols = (la_col_t *)xcalloc((size_t)ncols, sizeof(la_col_t));
 
 	for (i = 0; i < ncols; i++) {
 		la_col_t *c;
+		uint32 tmp_col[MAX_CYCLE_SIZE];
 		uint32 num;
 		
 		if (colperm != NULL)
@@ -410,14 +454,58 @@ uint32 read_matrix(msieve_obj *obj,
 		else
 			c = cols + i;
 
+		/* read the whole column */
+
 		fread(&num, sizeof(uint32), (size_t)1, matrix_fp);
-		c->weight = num;
-		c->data = (uint32 *)xmalloc((num + dense_row_words) * 
-					sizeof(uint32));
-		fread(c->data, sizeof(uint32), (size_t)(num + 
+		if (num + dense_row_words > MAX_CYCLE_SIZE) {
+			printf("error: column too large; corrupt file?\n");
+			exit(-1);
+		}
+		fread(tmp_col, sizeof(uint32), (size_t)(num + 
 				dense_row_words), matrix_fp);
 
+		/* pull out the row numbers that belong in this MPI
+		   process */
+
+		for (j = k = 0; j < num; j++) {
+			uint32 curr_row = tmp_col[j];
+
+			if (curr_row < num_static_rows) {
+				if (start_row == 0)
+					tmp_col[k++] = curr_row;
+			}
+			else {
+				uint32 curr_resclass;
+
+				curr_row -= num_static_rows;
+				curr_resclass = curr_row % mpi_nrows;
+
+				if (curr_resclass == mpi_resclass) {
+					tmp_col[k] = curr_row / mpi_nrows;
+					if (start_row == 0)
+						tmp_col[k] += num_static_rows;
+					k++;
+				}
+			}
+		}
+		c->weight = k;
+		c->data = NULL;
+
+		if (start_row == 0) {
+			for (j = 0; j < dense_row_words; j++)
+				tmp_col[k + j] = tmp_col[num + j];
+			k += dense_row_words;
+		}
+		if (k == 0)
+			continue;
+
+		c->data = (uint32 *)xmalloc(k * sizeof(uint32));
+		memcpy(c->data, tmp_col, k * sizeof(uint32));
+
+		/* possibly permute the row numbers */
+
 		if (rowperm != NULL) {
+			num = c->weight;
 			for (j = 0; j < num; j++)
 				c->data[j] = rowperm[c->data[j]];
 	
@@ -427,10 +515,18 @@ uint32 read_matrix(msieve_obj *obj,
 			}
 		}
 	}
+
 	fclose(matrix_fp);
-	*ncols_out = ncols;
 	*cols_out = cols;
-	return max_ncols;
+	*ncols_out = ncols;
+	*nrows_out = nrows;
+	*dense_rows_out = (start_row == 0) ? dense_rows : 0;
+	if (read_submatrix) {
+		*max_nrows_out = max_nrows;
+		*start_row_out = start_row;
+		*max_ncols_out = max_ncols;
+		*start_col_out = start_col;
+	}
 }
 
 /*--------------------------------------------------------------------*/

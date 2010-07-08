@@ -94,7 +94,7 @@ static void mul_trans_unpacked(packed_matrix_t *matrix,
 static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
 
 	uint32 i;
-	uint32 max_ncols = matrix->max_ncols;
+	uint32 nrows = matrix->nrows;
 
 	for (i = 0; i < matrix->num_threads; i++) {
 		thread_data_t *t = matrix->thread_data + i;
@@ -106,7 +106,7 @@ static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
 		t->x = x;
 		if (i == 0)
 			t->b = b;
-		memset(t->b, 0, max_ncols * sizeof(uint64));
+		memset(t->b, 0, nrows * sizeof(uint64));
 
 		/* fire off each part of the matrix multiply
 		   in a separate thread from the thread pool, 
@@ -149,7 +149,7 @@ static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
 			uint64 *curr_b = t->b;
 			uint32 j;
 
-			for (j = 0; j < max_ncols; j++)
+			for (j = 0; j < nrows; j++)
 				b[j] ^= curr_b[j];
 		}
 	}
@@ -248,32 +248,37 @@ static void matrix_thread_init(thread_data_t *t) {
 	entry_idx_t *e;
 
 	la_col_t *A = t->initial_cols;
-	uint32 nrows = t->nrows_in;
 	uint32 col_min = t->col_min;
 	uint32 col_max = t->col_max;
+	uint32 nrows = t->nrows_in;
+	uint32 ncols = col_max - col_min + 1;
 	uint32 block_size = t->block_size;
 	uint32 num_dense_rows = t->num_dense_rows;
+	uint32 first_block_size = t->first_block_size;
+
+	t->nrows = nrows;
+	t->ncols = ncols;
 
 	/* each thread needs scratch space to store
 	   matrix products. The first thread doesn't need
 	   scratch space, it's provided by calling code */
 
 	if (t->my_oid > 0)
-		t->b = (uint64 *)xmalloc(t->max_ncols * sizeof(uint64));
+		t->b = (uint64 *)xmalloc(MAX(nrows, ncols) * 
+					sizeof(uint64));
 
 	/* pack the dense rows 64 at a time */
 
-	t->ncols = col_max - col_min + 1;
 	dense_row_blocks = (num_dense_rows + 63) / 64;
 	if (dense_row_blocks) {
 		t->dense_blocks = (uint64 **)xmalloc(dense_row_blocks *
 						sizeof(uint64 *));
 		for (i = 0; i < dense_row_blocks; i++) {
-			t->dense_blocks[i] = (uint64 *)xmalloc(t->ncols *
+			t->dense_blocks[i] = (uint64 *)xmalloc(ncols *
 							sizeof(uint64));
 		}
 
-		for (i = 0; i < t->ncols; i++) {
+		for (i = 0; i < ncols; i++) {
 			la_col_t *c = A + col_min + i;
 			uint32 *src = c->data + c->weight;
 			for (j = 0; j < dense_row_blocks; j++) {
@@ -285,12 +290,14 @@ static void matrix_thread_init(thread_data_t *t) {
 	}
 
 	/* allocate blocks in row-major order; a 'stripe' is
-	   a vertical column of blocks */
+	   a vertical column of blocks. If packing the lowest
+	   row indices, the first block has NUM_MEDIUM_ROWS rows
+	   instead of block_size */
 
-	num_row_blocks = (nrows - NUM_MEDIUM_ROWS + 
+	num_col_blocks = (ncols + (block_size-1)) / block_size;
+	num_row_blocks = (nrows - first_block_size +
 				(block_size-1)) / block_size + 1;
-	num_col_blocks = ((col_max - col_min + 1) + 
-				(block_size-1)) / block_size;
+
 	t->num_blocks = num_row_blocks * num_col_blocks;
 	t->blocks = curr_stripe = (packed_block_t *)xcalloc(
 						(size_t)t->num_blocks,
@@ -302,22 +309,19 @@ static void matrix_thread_init(thread_data_t *t) {
 
 	for (i = 0; i < num_col_blocks; i++, curr_stripe++) {
 
-		uint32 curr_cols = MIN(block_size, (col_max - col_min + 1) - 
-						i * block_size);
+		uint32 curr_cols = MIN(block_size, ncols - i * block_size);
 		packed_block_t *b;
 
-		/* initialize the blocks in stripe i. The first
-		   block has NUM_MEDIUM_ROWS rows, and all the
-		   rest have block_size rows */
+		/* initialize the blocks in stripe i */
 
 		for (j = 0, b = curr_stripe; j < num_row_blocks; j++) {
 
 			if (j == 0) {
 				b->start_row = 0;
-				b->num_rows = NUM_MEDIUM_ROWS;
+				b->num_rows = first_block_size;
 			}
 			else {
-				b->start_row = NUM_MEDIUM_ROWS +
+				b->start_row = first_block_size +
 						(j - 1) * block_size;
 				b->num_rows = block_size;
 			}
@@ -379,7 +383,7 @@ static void matrix_thread_init(thread_data_t *t) {
 			c->data = NULL;
 		}
 
-		/* now convert the first block in the stripe to
+		/* convert the first block in the stripe to
 		   a somewhat-compressed format. Entries in this
 		   first block are stored by row, and all rows
 		   are concatenated into a single 16-bit array */
@@ -553,9 +557,9 @@ static void stop_worker_thread(thread_data_t *t,
 /*-------------------------------------------------------------------*/
 void packed_matrix_init(msieve_obj *obj,
 			packed_matrix_t *p, la_col_t *A,
-			uint32 nrows, uint32 ncols,
-			uint32 max_ncols, uint32 start_col, 
-			uint32 num_dense_rows) {
+			uint32 nrows, uint32 max_nrows, uint32 start_row, 
+			uint32 ncols, uint32 max_ncols, uint32 start_col, 
+			uint32 num_dense_rows, uint32 first_block_size) {
 
 	uint32 i, j, k;
 	uint32 block_size;
@@ -567,11 +571,14 @@ void packed_matrix_init(msieve_obj *obj,
 
 	p->unpacked_cols = A;
 	p->nrows = nrows;
+	p->max_nrows = max_nrows;
+	p->start_row = start_row;
 	p->ncols = ncols;
 	p->max_ncols = max_ncols;
+	p->start_col = start_col;
 	p->num_dense_rows = num_dense_rows;
 
-	if (nrows <= MIN_NROWS_TO_PACK)
+	if (max_nrows <= MIN_NROWS_TO_PACK)
 		return;
 
 	p->unpacked_cols = NULL;
@@ -591,9 +598,9 @@ void packed_matrix_init(msieve_obj *obj,
 	   typically have pretty big caches anyway */
 
 	block_size = obj->cache_size2 / (3 * sizeof(uint64));
-	block_size = MIN(block_size, nrows / 2.5);
+	block_size = MIN(block_size, max_nrows / 2.5);
 #ifdef LARGEBLOCKS
-	block_size = MIN(block_size, 172032);	/* remains to be tested on different CPUs */
+	block_size = MIN(block_size, 172032);	/* needs more tesing */
 #else
 	block_size = MIN(block_size, 65536);
 #endif
@@ -607,7 +614,7 @@ void packed_matrix_init(msieve_obj *obj,
 	/* determine the number of threads to use */
 
 	num_threads = obj->num_threads;
-	if (num_threads < 2 || nrows < MIN_NROWS_TO_THREAD)
+	if (num_threads < 2 || max_nrows < MIN_NROWS_TO_THREAD)
 		num_threads = 1;
 	p->num_threads = num_threads = MIN(num_threads, MAX_THREADS);
 
@@ -633,10 +640,9 @@ void packed_matrix_init(msieve_obj *obj,
 			t->initial_cols = A;
 			t->col_min = j;
 			t->col_max = i;
-			t->max_ncols = max_ncols;
 			t->nrows_in = nrows;
-			t->ncols_in = ncols;
 			t->block_size = block_size;
+			t->first_block_size = first_block_size;
 			t->num_dense_rows = num_dense_rows;
 			j = i + 1;
 			num_nonzero = 0;
@@ -686,18 +692,27 @@ void packed_matrix_free(packed_matrix_t *p) {
 size_t packed_matrix_sizeof(packed_matrix_t *p) {
 
 	uint32 i, j;
-	size_t mem_use = 0;
+	size_t mem_use;
+
+	/* account for the vectors used in the lanczos iteration */
+
+	if (p->start_row + p->start_col == 0)
+		mem_use = 7 * p->max_ncols;
+	else
+		mem_use = 2 * MAX(p->nrows, p->ncols);
+
+	/* and for the matrix */
 
 	if (p->unpacked_cols) {
 		la_col_t *A = p->unpacked_cols;
-		mem_use = p->ncols * (sizeof(la_col_t) +
+		mem_use += p->ncols * (sizeof(la_col_t) +
 				(p->num_dense_rows + 31) / 32);
 		for (i = 0; i < p->ncols; i++) {
 			mem_use += A[i].weight * sizeof(uint32);
 		}
 	}
 	else {
-		mem_use = p->max_ncols * sizeof(uint64) *
+		mem_use += MAX(p->nrows, p->ncols) * sizeof(uint64) *
 				(p->num_threads - 1);
 
 		for (i = 0; i < p->num_threads; i++) {
@@ -725,7 +740,7 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 }
 
 /*-------------------------------------------------------------------*/
-void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, 
+void mul_MxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x, 
 			uint64 *b, uint64 *scratch) {
 
 	/* Multiply the vector x[] by the matrix A (stored
@@ -734,14 +749,38 @@ void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x,
 	   operations apparently cannot be performed in-place */
 
 #ifdef HAVE_MPI
-	MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
-			MPI_LONG_LONG, x, A->ncols,
-			MPI_LONG_LONG, 0, MPI_COMM_WORLD));
+	/* push x to the top row of MPI processes */
+
+	if (obj->mpi_ncols > 1 && obj->mpi_la_row_rank == 0) {
+		MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
+				MPI_LONG_LONG, x, A->ncols,
+				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
+	}
+
+	/* replicate each column's portion of x */
+
+	if (obj->mpi_nrows > 1) {
+		MPI_TRY(MPI_Bcast(x, A->ncols, MPI_LONG_LONG,
+				0, obj->mpi_la_col_grid))
+	}
 
 	mul_packed(A, x, scratch);
 
-	MPI_TRY(MPI_Reduce(scratch, b, A->max_ncols, MPI_LONG_LONG,
-			MPI_BXOR, 0, MPI_COMM_WORLD));
+	/* make each MPI row combine its own part of A*x into the
+	   leftmost column */
+
+	MPI_TRY(MPI_Reduce(scratch, b, A->nrows,
+			MPI_LONG_LONG, MPI_BXOR, 0,
+			obj->mpi_la_row_grid));
+
+	/* pull the result into the root node */
+
+	if (obj->mpi_nrows > 1 && obj->mpi_la_col_rank == 0) {
+		MPI_TRY(MPI_Gatherv(b, A->nrows, MPI_LONG_LONG, b,
+				A->row_counts, A->row_offsets, 
+				MPI_LONG_LONG, 0, obj->mpi_la_col_grid))
+	}
+
 #else
 	if (A->unpacked_cols)
 		mul_unpacked(A, x, b);
@@ -751,7 +790,7 @@ void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x,
 }
 
 /*-------------------------------------------------------------------*/
-void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x, 
+void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x, 
 			uint64 *b, uint64 *scratch) {
 
 	/* Multiply x by A and write to scratch, then
@@ -760,20 +799,45 @@ void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x,
 	   be distinct from scratch */
 
 #ifdef HAVE_MPI
-	MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
-			MPI_LONG_LONG, x, A->ncols,
-			MPI_LONG_LONG, 0, MPI_COMM_WORLD));
+	/* push x to the top row of MPI processes */
+
+	if (obj->mpi_ncols > 1 && obj->mpi_la_row_rank == 0) {
+		MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
+				MPI_LONG_LONG, x, A->ncols,
+				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
+	}
+
+	/* replicate each column's portion of x */
+
+	if (obj->mpi_nrows > 1) {
+		MPI_TRY(MPI_Bcast(x, A->ncols, MPI_LONG_LONG,
+				0, obj->mpi_la_col_grid))
+	}
 
 	mul_packed(A, x, scratch);
 
-	MPI_TRY(MPI_Allreduce(scratch, b, A->max_ncols,
-			MPI_LONG_LONG, MPI_BXOR, MPI_COMM_WORLD));
+	/* make each MPI row combine its own part of A*x */
+
+	MPI_TRY(MPI_Allreduce(scratch, b, A->nrows,
+			MPI_LONG_LONG, MPI_BXOR, 
+			obj->mpi_la_row_grid));
 
 	mul_trans_packed(A, b, scratch);
 
-	MPI_TRY(MPI_Gatherv(scratch, A->ncols, MPI_LONG_LONG, b,
-			A->col_counts, A->col_offsets, 
-			MPI_LONG_LONG, 0, MPI_COMM_WORLD));
+	/* make each MPI column combine its own part of A^T * A*x 
+	   into the top row of MPI processes */
+
+	MPI_TRY(MPI_Reduce(scratch, b, A->ncols, 
+			MPI_LONG_LONG, MPI_BXOR, 0,
+			obj->mpi_la_col_grid))
+
+	/* pull the result into the root node */
+
+	if (obj->mpi_ncols > 1 && obj->mpi_la_row_rank == 0) {
+		MPI_TRY(MPI_Gatherv(b, A->ncols, MPI_LONG_LONG, b,
+				A->col_counts, A->col_offsets, 
+				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
+	}
 
 #else
 	if (A->unpacked_cols) {

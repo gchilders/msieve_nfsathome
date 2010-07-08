@@ -100,13 +100,13 @@ typedef struct {
 	uint32 col_min;
 	uint32 col_max;		/* range of column indices to handle */
 	uint32 nrows_in;	/* number of rows in the matrix */
-	uint32 ncols_in;	/* number of columns in the matrix */
 	uint32 block_size;	/* used to pack the column entries */
+	uint32 first_block_size;/* block size for the smallest row numbers */
 
 	/* items used during matrix multiplies */
 
+	uint32 nrows;		/* number of rows used by this thread */
 	uint32 ncols;		/* number of columns used by this thread */
-	uint32 max_ncols;	/* vector size (same for all threads) */
 	uint32 num_dense_rows;  /* number of rows packed by dense_blocks */
 	uint64 **dense_blocks;  /* for holding dense matrix rows; 
 				   dense_blocks[i] holds the i_th batch of
@@ -139,8 +139,11 @@ typedef struct {
 
 typedef struct {
 	uint32 nrows;
+	uint32 max_nrows;
+	uint32 start_row;
 	uint32 ncols;
 	uint32 max_ncols;
+	uint32 start_col;
 	uint32 num_dense_rows;
 	uint32 num_threads;
 
@@ -149,26 +152,30 @@ typedef struct {
 	thread_data_t thread_data[MAX_THREADS];
 
 #ifdef HAVE_MPI
-	int32 col_counts[MAX_MPI_PROCS]; /* needed on root node only */
-	int32 col_offsets[MAX_MPI_PROCS]; /* needed on root node only */
+	/* needed on root node only */
+	int32 col_counts[MAX_MPI_PROCS];
+	int32 col_offsets[MAX_MPI_PROCS]; 
+	int32 row_counts[MAX_MPI_PROCS];
+	int32 row_offsets[MAX_MPI_PROCS];
 #endif
 
 } packed_matrix_t;
 
 void packed_matrix_init(msieve_obj *obj, 
 			packed_matrix_t *packed_matrix,
-			la_col_t *A, uint32 nrows, uint32 ncols,
-			uint32 max_ncols, uint32 start_col, 
-			uint32 num_dense_rows);
+			la_col_t *A, 
+			uint32 nrows, uint32 max_nrows, uint32 start_row, 
+			uint32 ncols, uint32 max_ncols, uint32 start_col, 
+			uint32 num_dense_rows, uint32 first_block_size);
 
 void packed_matrix_free(packed_matrix_t *packed_matrix);
 
 size_t packed_matrix_sizeof(packed_matrix_t *packed_matrix);
 
-void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, 
+void mul_MxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x, 
 			uint64 *b, uint64 *scratch);
 
-void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x, 
+void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x, 
 			uint64 *b, uint64 *scratch);
 
 void mul_Nx64_64x64_acc(uint64 *v, uint64 *x, uint64 *y, uint32 n);

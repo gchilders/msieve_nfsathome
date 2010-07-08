@@ -18,10 +18,6 @@ $Id$
 #include <msieve.h>
 #include <gmp_xface.h>
 
-#ifdef HAVE_MPI
-#include <mpi.h>
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -282,13 +278,10 @@ uint32 merge_relations(uint32 *merge_array,
 		  uint32 *src2, uint32 n2);
 
 uint64 * block_lanczos(msieve_obj *obj,
-			uint32 nrows, 
+			uint32 nrows, uint32 max_nrows, uint32 start_row,
 			uint32 num_dense_rows,
-			uint32 ncols, 
-			uint32 max_ncols,
-			uint32 start_col,
-			la_col_t *cols,
-			uint32 *deps_found);
+			uint32 ncols, uint32 max_ncols, uint32 start_col,
+			la_col_t *cols, uint32 *deps_found);
 
 uint32 count_matrix_nonzero(msieve_obj *obj,
 			uint32 nrows, uint32 num_dense_rows,
@@ -311,9 +304,10 @@ void dump_matrix(msieve_obj *obj,
 		uint32 ncols, la_col_t *cols,
 		uint32 num_nonzero);
 
-uint32 read_matrix(msieve_obj *obj, 
-		uint32 *nrows_out, uint32 *num_dense_rows_out,
-		uint32 *ncols_out, uint32 *start_col_out,
+void read_matrix(msieve_obj *obj, 
+		uint32 *nrows, uint32 *max_nrows, uint32 *start_row,
+		uint32 *num_dense_rows_out,
+		uint32 *ncols, uint32 *max_ncols, uint32 *start_col,
 		la_col_t **cols_out,
 		uint32 *rowperm, uint32 *colperm);
 
