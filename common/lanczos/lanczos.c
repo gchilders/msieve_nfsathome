@@ -1242,14 +1242,13 @@ uint64 * block_lanczos(msieve_obj *obj,
 	/* give the bounds for scatter-gather operations 
 	   to the MPI root node */
 
-	if (obj->mpi_la_row_rank == 0) {
-		MPI_TRY(MPI_Gather(&ncols, 1, MPI_INT, 
-				packed_matrix.col_counts, 
-				1, MPI_INT, 0, obj->mpi_la_row_grid))
-		MPI_TRY(MPI_Gather(&start_col, 1, MPI_INT, 
-				packed_matrix.col_offsets, 
-				1, MPI_INT, 0, obj->mpi_la_row_grid))
-	}
+	MPI_TRY(MPI_Gather(&ncols, 1, MPI_INT, 
+			packed_matrix.col_counts, 
+			1, MPI_INT, 0, obj->mpi_la_grid))
+	MPI_TRY(MPI_Gather(&start_col, 1, MPI_INT, 
+			packed_matrix.col_offsets, 
+			1, MPI_INT, 0, obj->mpi_la_grid))
+
 	if (obj->mpi_la_col_rank == 0) {
 		MPI_TRY(MPI_Gather(&nrows, 1, MPI_INT, 
 				packed_matrix.row_counts, 

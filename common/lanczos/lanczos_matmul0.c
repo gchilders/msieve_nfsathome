@@ -14,7 +14,6 @@ $Id$
 
 #include "lanczos.h"
 
-#ifndef HAVE_MPI
 /*-------------------------------------------------------------------*/
 static void mul_unpacked(packed_matrix_t *matrix,
 			  uint64 *x, uint64 *b) {
@@ -88,7 +87,6 @@ static void mul_trans_unpacked(packed_matrix_t *matrix,
 		}
 	}
 }
-#endif /* !HAVE_MPI */
 
 /*-------------------------------------------------------------------*/
 static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
@@ -761,20 +759,21 @@ void mul_MxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 	   operations apparently cannot be performed in-place */
 
 #ifdef HAVE_MPI
-	/* push x to the top row of MPI processes */
+	if (obj->mpi_size <= 1) {
+#endif
+		if (A->unpacked_cols)
+			mul_unpacked(A, x, b);
+		else
+			mul_packed(A, x, b);
+#ifdef HAVE_MPI
+		return;
+	}
 
-	if (obj->mpi_ncols > 1 && obj->mpi_la_row_rank == 0) {
-		MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
+	/* push x to the whole grid */
+
+	MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
 				MPI_LONG_LONG, x, A->ncols,
-				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
-	}
-
-	/* replicate each column's portion of x */
-
-	if (obj->mpi_nrows > 1) {
-		MPI_TRY(MPI_Bcast(x, A->ncols, MPI_LONG_LONG,
-				0, obj->mpi_la_col_grid))
-	}
+				MPI_LONG_LONG, 0, obj->mpi_la_grid))
 
 	mul_packed(A, x, scratch);
 
@@ -792,12 +791,6 @@ void mul_MxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 				A->row_counts, A->row_offsets, 
 				MPI_LONG_LONG, 0, obj->mpi_la_col_grid))
 	}
-
-#else
-	if (A->unpacked_cols)
-		mul_unpacked(A, x, b);
-	else
-		mul_packed(A, x, b);
 #endif
 }
 
@@ -811,20 +804,25 @@ void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 	   be distinct from scratch */
 
 #ifdef HAVE_MPI
-	/* push x to the top row of MPI processes */
+	if (obj->mpi_size <= 1) {
+#endif
+		if (A->unpacked_cols) {
+			mul_unpacked(A, x, scratch);
+			mul_trans_unpacked(A, scratch, b);
+		}
+		else {
+			mul_packed(A, x, scratch);
+			mul_trans_packed(A, scratch, b);
+		}
+#ifdef HAVE_MPI
+		return;
+	}
 
-	if (obj->mpi_ncols > 1 && obj->mpi_la_row_rank == 0) {
-		MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
+	/* push x to the whole grid */
+
+	MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
 				MPI_LONG_LONG, x, A->ncols,
-				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
-	}
-
-	/* replicate each column's portion of x */
-
-	if (obj->mpi_nrows > 1) {
-		MPI_TRY(MPI_Bcast(x, A->ncols, MPI_LONG_LONG,
-				0, obj->mpi_la_col_grid))
-	}
+				MPI_LONG_LONG, 0, obj->mpi_la_grid))
 
 	mul_packed(A, x, scratch);
 
@@ -849,16 +847,6 @@ void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 		MPI_TRY(MPI_Gatherv(b, A->ncols, MPI_LONG_LONG, b,
 				A->col_counts, A->col_offsets, 
 				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
-	}
-
-#else
-	if (A->unpacked_cols) {
-		mul_unpacked(A, x, scratch);
-		mul_trans_unpacked(A, scratch, b);
-	}
-	else {
-		mul_packed(A, x, scratch);
-		mul_trans_packed(A, scratch, b);
 	}
 #endif
 }
