@@ -84,8 +84,10 @@ typedef struct {
 enum thread_command {
 	COMMAND_INIT,
 	COMMAND_WAIT,
-	COMMAND_RUN,
-	COMMAND_RUN_TRANS,
+	COMMAND_MATMUL,
+	COMMAND_MATMUL_TRANS,
+	COMMAND_INNER_PRODUCT,
+	COMMAND_OUTER_PRODUCT,
 	COMMAND_END
 };
 
@@ -115,6 +117,11 @@ typedef struct {
 	uint64 *x;
 	uint64 *b;
 	packed_block_t *blocks; /* sparse part of matrix, in block format */
+
+	/* items for vector-vector operations */
+
+	uint64 *y;
+	uint32 vsize;
 
 	/* fields for thread pool synchronization */
 
@@ -178,16 +185,34 @@ void mul_MxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x, 
 			uint64 *b, uint64 *scratch);
 
-void mul_Nx64_64x64_acc(uint64 *v, uint64 *x, uint64 *y, uint32 n);
-
-void mul_64xN_Nx64(uint64 *x, uint64 *y, uint64 *xy, uint32 n);
-
 /* for big jobs, we use a multithreaded framework that calls
    these two routines for the heavy lifting */
 
 void mul_packed_core(thread_data_t *t);
 
 void mul_trans_packed_core(thread_data_t *t);
+
+/* top-level calls for vector-vector operations */
+
+/* multi-threaded */
+
+void tmul_Nx64_64x64_acc(packed_matrix_t *A, uint64 *v, uint64 *x, 
+			uint64 *y, uint32 n);
+
+void tmul_64xN_Nx64(packed_matrix_t *A, uint64 *x, uint64 *y, 
+			uint64 *xy, uint32 n);
+
+/* single-threaded */
+
+void mul_Nx64_64x64_acc(uint64 *v, uint64 *x, uint64 *y, uint32 n);
+
+void mul_64xN_Nx64(uint64 *x, uint64 *y, uint64 *xy, uint32 n);
+
+/* vector-vector heavy lifting */
+
+void core_Nx64_64x64_acc(uint64 *v, uint64 *c, uint64 *y, uint32 n);
+
+void core_64xN_Nx64(uint64 *x, uint64 *c, uint64 *y, uint32 n);
 
 #ifdef __cplusplus
 }

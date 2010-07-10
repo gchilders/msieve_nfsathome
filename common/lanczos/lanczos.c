@@ -795,8 +795,8 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 
 		MPI_NODE_0_START
 
-		mul_64xN_Nx64(v[0], vnext, vt_a_v[0], n);
-		mul_64xN_Nx64(vnext, vnext, vt_a2_v[0], n);
+		tmul_64xN_Nx64(packed_matrix, v[0], vnext, vt_a_v[0], n);
+		tmul_64xN_Nx64(packed_matrix, vnext, vnext, vt_a2_v[0], n);
 
 		/* if the former is orthogonal to itself, then
 		   the iteration has finished */
@@ -884,7 +884,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		   and is stored in vt_v0_next. */
 
 		if (iter < 4) {
-			mul_64xN_Nx64(v[0], v0, vt_v0[0], n);
+			tmul_64xN_Nx64(packed_matrix, v[0], v0, vt_v0[0], n);
 		}
 		else if (iter == 4) {
 			/* v0 is not needed from now on; recycle it 
@@ -904,7 +904,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		    dim_solved >= next_dump ||
 		    obj->flags & MSIEVE_FLAG_STOP_SIEVING)) {
 
-			mul_64xN_Nx64(v0, vnext, d, n);
+			tmul_64xN_Nx64(packed_matrix, v0, vnext, d, n);
 			for (i = 0; i < 64; i++) {
 				if (d[i] != (uint64)0) {
 					printf("\nerror: corrupt state, please "
@@ -933,7 +933,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		for (i = 0; i < 64; i++)
 			d[i] = d[i] ^ bitmask[i];
 
-		mul_Nx64_64x64_acc(v[0], d, vnext, n);
+		tmul_Nx64_64x64_acc(packed_matrix, v[0], d, vnext, n);
 
 		transpose_64x64(d, d);
 		mul_64x64_64x64(d, vt_v0[0], vt_v0_next);
@@ -945,7 +945,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		for (i = 0; i < 64; i++)
 			e[i] = e[i] & mask0;
 
-		mul_Nx64_64x64_acc(v[1], e, vnext, n);
+		tmul_Nx64_64x64_acc(packed_matrix, v[1], e, vnext, n);
 
 		transpose_64x64(e, e);
 		mul_64x64_64x64(e, vt_v0[1], e);
@@ -970,7 +970,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 
 			mul_64x64_64x64(f, f2, f);
 
-			mul_Nx64_64x64_acc(v[2], f, vnext, n);
+			tmul_Nx64_64x64_acc(packed_matrix, v[2], f, vnext, n);
 
 			transpose_64x64(f, f);
 			mul_64x64_64x64(f, vt_v0[2], f);
@@ -981,7 +981,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		/* update the computed solution 'x' */
 
 		mul_64x64_64x64(winv[0], vt_v0[0], d);
-		mul_Nx64_64x64_acc(v[0], d, x, n);
+		tmul_Nx64_64x64_acc(packed_matrix, v[0], d, x, n);
 
 		/* rotate all the variables */
 
@@ -1127,6 +1127,9 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 #endif
 
 	MPI_NODE_0_START
+
+	/* make sure the last few words of the above matrix products
+	   are zero, since the postprocessing will be using them */
 
 	for (i = packed_matrix->max_nrows; i < n; i++) {
 		v[1][i] = v[2][i] = 0;

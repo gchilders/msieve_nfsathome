@@ -15,44 +15,10 @@ $Id$
 #include "lanczos.h"
 
 /*-------------------------------------------------------------------*/
-void mul_Nx64_64x64_acc(uint64 *v, uint64 *x,
+void core_Nx64_64x64_acc(uint64 *v, uint64 *c,
 			uint64 *y, uint32 n) {
 
-	/* let v[][] be a n x 64 matrix with elements in GF(2), 
-	   represented as an array of n 64-bit words. Let c[][]
-	   be an 8 x 256 scratch matrix of 64-bit words.
-	   This code multiplies v[][] by the 64x64 matrix 
-	   x[][], then XORs the n x 64 result into y[][] */
-
-	uint32 i, j, k;
-	uint64 c[8 * 256];
-
-	/* fill c[][] with a bunch of "partial matrix multiplies". 
-	   For 0<=i<256, the j_th row of c[][] contains the matrix 
-	   product
-
-	   	( i << (8*j) ) * x[][]
-
-	   where the quantity in parentheses is considered a 
-	   1 x 64 vector of elements in GF(2). The resulting
-	   table will dramatically speed up matrix multiplies
-	   by x[][]. */
-
-	for (i = 0; i < 8; i++) {
-		uint64 *xtmp = x + 8 * i;
-		uint64 *ctmp = c + 256 * i;
-
-		for (j = 0; j < 256; j++) {
-			uint64 accum = 0;
-			uint32 index = j;
-
-			for (k = 0; k < 8; k++) {
-				if (index & ((uint32)1 << k))
-					accum ^= xtmp[k];
-			}
-			ctmp[j] = accum;
-		}
-	}
+	uint32 i;
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX) && defined(NDEBUG)
 	i = 0;
@@ -145,16 +111,122 @@ void mul_Nx64_64x64_acc(uint64 *v, uint64 *x,
 }
 
 /*-------------------------------------------------------------------*/
-void mul_64xN_Nx64(uint64 *x, uint64 *y,
-		   uint64 *xy, uint32 n) {
+void mul_Nx64_64x64_acc(uint64 *v, uint64 *x,
+			uint64 *y, uint32 n) {
 
-	/* Let x and y be n x 64 matrices. This routine computes
-	   the 64 x 64 matrix xy[][] given by transpose(x) * y */
+	/* let v[][] be a n x 64 matrix with elements in GF(2), 
+	   represented as an array of n 64-bit words. Let c[][]
+	   be an 8 x 256 scratch matrix of 64-bit words.
+	   This code multiplies v[][] by the 64x64 matrix 
+	   x[][], then XORs the n x 64 result into y[][] */
+
+	uint32 i, j, k;
+	uint64 c[8 * 256];
+
+	/* fill c[][] with a bunch of "partial matrix multiplies". 
+	   For 0<=i<256, the j_th row of c[][] contains the matrix 
+	   product
+
+	   	( i << (8*j) ) * x[][]
+
+	   where the quantity in parentheses is considered a 
+	   1 x 64 vector of elements in GF(2). The resulting
+	   table will dramatically speed up matrix multiplies
+	   by x[][]. */
+
+	for (i = 0; i < 8; i++) {
+		uint64 *xtmp = x + 8 * i;
+		uint64 *ctmp = c + 256 * i;
+
+		for (j = 0; j < 256; j++) {
+			uint64 accum = 0;
+			uint32 index = j;
+
+			for (k = 0; k < 8; k++) {
+				if (index & ((uint32)1 << k))
+					accum ^= xtmp[k];
+			}
+			ctmp[j] = accum;
+		}
+	}
+
+	core_Nx64_64x64_acc(v, c, y, n);
+}
+
+/*-------------------------------------------------------------------*/
+void tmul_Nx64_64x64_acc(packed_matrix_t *matrix, 
+			uint64 *v, uint64 *x,
+			uint64 *y, uint32 n) {
+
+	uint32 i, j, k;
+	uint64 c[8 * 256];
+	uint64 *tmp_b[MAX_THREADS];
+	uint32 vsize = n / matrix->num_threads;
+	uint32 off;
+
+	for (i = 0; i < 8; i++) {
+		uint64 *xtmp = x + 8 * i;
+		uint64 *ctmp = c + 256 * i;
+
+		for (j = 0; j < 256; j++) {
+			uint64 accum = 0;
+			uint32 index = j;
+
+			for (k = 0; k < 8; k++) {
+				if (index & ((uint32)1 << k))
+					accum ^= xtmp[k];
+			}
+			ctmp[j] = accum;
+		}
+	}
+
+	for (i = off = 0; i < matrix->num_threads - 1; i++, off += vsize) {
+
+		thread_data_t *t = matrix->thread_data + i;
+
+		/* fire off each part of the operation in
+		   a separate thread from the thread pool, 
+		   except the last part. The current thread 
+		   does the last vector piece, and this 
+		   saves one synchronize operation */
+
+		tmp_b[i] = t->b;
+		t->command = COMMAND_OUTER_PRODUCT;
+		t->x = v + off;
+		t->b = c;
+		t->y = y + off;
+		t->vsize = vsize;
+#if defined(WIN32) || defined(_WIN64)
+		SetEvent(t->run_event);
+#else
+		pthread_cond_signal(&t->run_cond);
+		pthread_mutex_unlock(&t->run_lock);
+#endif
+	}
+
+	core_Nx64_64x64_acc(v + off, c, y + off, n - off);
+
+	for (i = 0; i < matrix->num_threads - 1; i++) {
+		thread_data_t *t = matrix->thread_data + i;
+
+#if defined(WIN32) || defined(_WIN64)
+		WaitForSingleObject(t->finish_event, INFINITE);
+#else
+		pthread_mutex_lock(&t->run_lock);
+		while (t->command != COMMAND_WAIT)
+			pthread_cond_wait(&t->run_cond, &t->run_lock);
+#endif
+		t->b = tmp_b[i];
+	}
+}
+
+/*-------------------------------------------------------------------*/
+void core_64xN_Nx64(uint64 *x, uint64 *c, 
+			uint64 *y, uint32 n) {
 
 	uint32 i;
-	uint64 c[8 * 256] = {0};
 
-	memset(xy, 0, 64 * sizeof(uint64));
+	memset(c, 0, 8 * 256 * sizeof(uint64));
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX) && defined(NDEBUG)
 	i = 0;
@@ -272,8 +344,21 @@ void mul_64xN_Nx64(uint64 *x, uint64 *y,
 		c[ 7*256 + ((uint8)(xi >> 56)) ] ^= yi;
 	}
 #endif
+}
 
-	for(i = 0; i < 8; i++) {
+/*-------------------------------------------------------------------*/
+void mul_64xN_Nx64(uint64 *x, uint64 *y,
+		   uint64 *xy, uint32 n) {
+
+	/* Let x and y be n x 64 matrices. This routine computes
+	   the 64 x 64 matrix xy[][] given by transpose(x) * y */
+
+	uint32 i;
+	uint64 c[8 * 256];
+
+	core_64xN_Nx64(x, c, y, n);
+
+	for (i = 0; i < 8; i++) {
 
 		uint32 j;
 		uint64 a0, a1, a2, a3, a4, a5, a6, a7;
@@ -299,3 +384,85 @@ void mul_64xN_Nx64(uint64 *x, uint64 *y,
 		xy++;
 	}
 }
+
+/*-------------------------------------------------------------------*/
+void tmul_64xN_Nx64(packed_matrix_t *matrix,
+		   uint64 *x, uint64 *y,
+		   uint64 *xy, uint32 n) {
+
+
+	uint32 i, j;
+	uint64 c[8 * 256];
+	uint64 btmp[8 * 256];
+	uint32 vsize = n / matrix->num_threads;
+	uint32 off;
+
+	for (i = off = 0; i < matrix->num_threads - 1; i++, off += vsize) {
+		thread_data_t *t = matrix->thread_data + i;
+
+		/* use each thread's scratch vector, except the
+		   first thead, which has no scratch vector but
+		   uses one we supply */
+
+		t->command = COMMAND_INNER_PRODUCT;
+		t->x = x + off;
+		t->y = y + off;
+		t->vsize = vsize;
+		if (i == 0)
+			t->b = btmp;
+
+#if defined(WIN32) || defined(_WIN64)
+		SetEvent(t->run_event);
+#else
+		pthread_cond_signal(&t->run_cond);
+		pthread_mutex_unlock(&t->run_lock);
+#endif
+	}
+
+	core_64xN_Nx64(x + off, c, y + off, n - off);
+
+	/* wait for each thread to finish. All the scratch
+	   vectors used by threads get xor-ed into the final c
+	   vector */
+
+	for (i = 0; i < matrix->num_threads - 1; i++) {
+		thread_data_t *t = matrix->thread_data + i;
+		uint64 *curr_c = t->b;
+
+#if defined(WIN32) || defined(_WIN64)
+		WaitForSingleObject(t->finish_event, INFINITE);
+#else
+		pthread_mutex_lock(&t->run_lock);
+		while (t->command != COMMAND_WAIT)
+			pthread_cond_wait(&t->run_cond, &t->run_lock);
+#endif
+		for (j = 0; j < 8 * 256; j++)
+			c[j] ^= curr_c[j];
+	}
+
+	for (i = 0; i < 8; i++) {
+
+		uint64 a0, a1, a2, a3, a4, a5, a6, a7;
+
+		a0 = a1 = a2 = a3 = 0;
+		a4 = a5 = a6 = a7 = 0;
+
+		for (j = 0; j < 256; j++) {
+			if ((j >> i) & 1) {
+				a0 ^= c[0*256 + j];
+				a1 ^= c[1*256 + j];
+				a2 ^= c[2*256 + j];
+				a3 ^= c[3*256 + j];
+				a4 ^= c[4*256 + j];
+				a5 ^= c[5*256 + j];
+				a6 ^= c[6*256 + j];
+				a7 ^= c[7*256 + j];
+			}
+		}
+
+		xy[ 0] = a0; xy[ 8] = a1; xy[16] = a2; xy[24] = a3;
+		xy[32] = a4; xy[40] = a5; xy[48] = a6; xy[56] = a7;
+		xy++;
+	}
+}
+

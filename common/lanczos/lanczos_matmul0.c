@@ -118,7 +118,7 @@ static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
 			mul_packed_core(t);
 		}
 		else {
-			t->command = COMMAND_RUN;
+			t->command = COMMAND_MATMUL;
 #if defined(WIN32) || defined(_WIN64)
 			SetEvent(t->run_event);
 #else
@@ -191,7 +191,7 @@ void mul_trans_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
 			mul_trans_packed_core(t);
 		}
 		else {
-			t->command = COMMAND_RUN_TRANS;
+			t->command = COMMAND_MATMUL_TRANS;
 #if defined(WIN32) || defined(_WIN64)
 			SetEvent(t->run_event);
 #else
@@ -466,14 +466,25 @@ static void *worker_thread_main(void *thread_data) {
 #endif
 		/* do work */
 
-		if (t->command == COMMAND_RUN)
-			mul_packed_core(t);
-		else if (t->command == COMMAND_RUN_TRANS)
-			mul_trans_packed_core(t);
-		else if (t->command == COMMAND_INIT)
+		switch (t->command) {
+		case COMMAND_INIT:
 			matrix_thread_init(t);
-		else if (t->command == COMMAND_END)
 			break;
+		case COMMAND_MATMUL:
+			mul_packed_core(t);
+			break;
+		case COMMAND_MATMUL_TRANS:
+			mul_trans_packed_core(t);
+			break;
+		case COMMAND_INNER_PRODUCT:
+			core_64xN_Nx64(t->x, t->b, t->y, t->vsize);
+			break;
+		case COMMAND_OUTER_PRODUCT:
+			core_Nx64_64x64_acc(t->x, t->b, t->y, t->vsize);
+			break;
+		default:
+			goto thread_done;
+		}
 
 		/* signal completion */
 
@@ -486,6 +497,7 @@ static void *worker_thread_main(void *thread_data) {
 #endif
 	}
 
+thread_done:
 	matrix_thread_free(t);
 
 #if defined(WIN32) || defined(_WIN64)
