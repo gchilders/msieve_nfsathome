@@ -135,9 +135,17 @@ void print_usage(char *progname) {
 		 "             if 0 or unspecified) and will only use the \n"
 		 "             first Y relations (or all relations, if 0 \n"
 		 "             or unspecified)\n"
+#ifdef HAVE_MPI
+		 "   -nc2 [X,Y] perform only NFS linear algebra\n"
+		 "   -ncr [X,Y] perform only NFS linear algebra, restarting\n"
+		 "             from a previous checkpoint\n"
+		 "             The X,Y arguments create a X x Y MPI grid,\n"
+		 "             with default of 1 x (argument to mpirun)\n"
+#else
 		 "   -nc2      perform only NFS linear algebra\n"
 		 "   -ncr      perform only NFS linear algebra, restarting\n"
 		 "             from a previous checkpoint\n"
+#endif
 		 "   -nc3 [X,Y] perform only NFS square root (compute \n"
 		 "             dependency numbers X through Y, 1<=X<=Y<=64)\n",
 		 MSIEVE_DEFAULT_SAVEFILE, MSIEVE_DEFAULT_LOGFILE,
