@@ -480,15 +480,44 @@ static uint32 combine_cols(uint32 ncols,
 
 /*-----------------------------------------------------------------------*/
 static void dump_lanczos_state(msieve_obj *obj, 
+			packed_matrix_t *packed_matrix,
 			uint64 *x, uint64 **vt_v0, uint64 **v, uint64 *v0,
 			uint64 **vt_a_v, uint64 **vt_a2_v, uint64 **winv,
-			uint32 n, uint32 dim_solved, uint32 iter,
+			uint32 n, uint32 max_n, uint32 dim_solved, uint32 iter,
 			uint32 s[2][64], uint32 dim1) {
 
 	char buf[256];
 	char buf_old[256];
 	FILE *dump_fp;
 	uint32 status = 1;
+
+#ifdef HAVE_MPI
+	/* pull the full-size vectors into rank 0 */
+	if (obj->mpi_la_row_rank == 0) {
+		MPI_TRY(MPI_Gatherv(x, n, MPI_LONG_LONG, x,
+				packed_matrix->col_counts,
+				packed_matrix->col_offsets,
+				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
+		MPI_TRY(MPI_Gatherv(v[0], n, MPI_LONG_LONG, v[0],
+				packed_matrix->col_counts,
+				packed_matrix->col_offsets,
+				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
+		MPI_TRY(MPI_Gatherv(v[1], n, MPI_LONG_LONG, v[1],
+				packed_matrix->col_counts,
+				packed_matrix->col_offsets,
+				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
+		MPI_TRY(MPI_Gatherv(v[2], n, MPI_LONG_LONG, v[2],
+				packed_matrix->col_counts,
+				packed_matrix->col_offsets,
+				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
+		MPI_TRY(MPI_Gatherv(v0, n, MPI_LONG_LONG, v0,
+				packed_matrix->col_counts,
+				packed_matrix->col_offsets,
+				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
+	}
+#endif
+
+	MPI_NODE_0_START
 
 	sprintf(buf, "%s.chk0", obj->savefile.name);
 	sprintf(buf_old, "%s.chk", obj->savefile.name);
@@ -498,7 +527,7 @@ static void dump_lanczos_state(msieve_obj *obj,
 		exit(-1);
 	}
 
-	status &= (fwrite(&n, sizeof(uint32), (size_t)1, dump_fp)==1);
+	status &= (fwrite(&max_n, sizeof(uint32), (size_t)1, dump_fp)==1);
 	status &= (fwrite(&dim_solved, sizeof(uint32), (size_t)1, dump_fp)==1);
 	status &= (fwrite(&iter, sizeof(uint32), (size_t)1, dump_fp)==1);
 
@@ -512,11 +541,11 @@ static void dump_lanczos_state(msieve_obj *obj,
 	status &= (fwrite(s[1], sizeof(uint32), (size_t)64, dump_fp) == 64);
 	status &= (fwrite(&dim1, sizeof(uint32), (size_t)1, dump_fp) == 1);
 
-	status &= (fwrite(x, sizeof(uint64), (size_t)n, dump_fp) == n);
-	status &= (fwrite(v[0], sizeof(uint64), (size_t)n, dump_fp) == n);
-	status &= (fwrite(v[1], sizeof(uint64), (size_t)n, dump_fp) == n);
-	status &= (fwrite(v[2], sizeof(uint64), (size_t)n, dump_fp) == n);
-	status &= (fwrite(v0, sizeof(uint64), (size_t)n, dump_fp) == n);
+	status &= (fwrite(x, sizeof(uint64), (size_t)max_n, dump_fp)==max_n);
+	status &= (fwrite(v[0], sizeof(uint64), (size_t)max_n, dump_fp)==max_n);
+	status &= (fwrite(v[1], sizeof(uint64), (size_t)max_n, dump_fp)==max_n);
+	status &= (fwrite(v[2], sizeof(uint64), (size_t)max_n, dump_fp)==max_n);
+	status &= (fwrite(v0, sizeof(uint64), (size_t)max_n, dump_fp)==max_n);
 	fclose(dump_fp);
 
 	/* only delete an old checkpoint file if the current 
@@ -534,14 +563,17 @@ static void dump_lanczos_state(msieve_obj *obj,
 		printf("error: cannot update checkpoint file\n");
 		exit(-1);
 	}
+
+	MPI_NODE_0_END
 }
 
 /*-----------------------------------------------------------------------*/
 static void read_lanczos_state(msieve_obj *obj, 
+			packed_matrix_t *packed_matrix,
 			uint64 *x, uint64 **vt_v0, uint64 **v, uint64 *v0,
 			uint64 **vt_a_v, uint64 **vt_a2_v, uint64 **winv,
-			uint32 n, uint32 *dim_solved, uint32 *iter,
-			uint32 s[2][64], uint32 *dim1) {
+			uint32 n, uint32 max_n, uint32 *dim_solved, 
+			uint32 *iter, uint32 s[2][64], uint32 *dim1) {
 
 	uint32 read_n;
 	uint32 status;
@@ -557,7 +589,7 @@ static void read_lanczos_state(msieve_obj *obj,
 
 	status = 1;
 	fread(&read_n, sizeof(uint32), (size_t)1, dump_fp);
-	if (read_n != n) {
+	if (read_n != max_n) {
 		printf("error: unexpected vector size\n");
 		exit(-1);
 	}
@@ -574,11 +606,37 @@ static void read_lanczos_state(msieve_obj *obj,
 	status &= (fread(s[1], sizeof(uint32), (size_t)64, dump_fp) == 64);
 	status &= (fread(dim1, sizeof(uint32), (size_t)1, dump_fp) == 1);
 
-	status &= (fread(x, sizeof(uint64), (size_t)n, dump_fp) == n);
-	status &= (fread(v[0], sizeof(uint64), (size_t)n, dump_fp) == n);
-	status &= (fread(v[1], sizeof(uint64), (size_t)n, dump_fp) == n);
-	status &= (fread(v[2], sizeof(uint64), (size_t)n, dump_fp) == n);
-	status &= (fread(v0, sizeof(uint64), (size_t)n, dump_fp) == n);
+	MPI_NODE_0_START
+	status &= (fread(x, sizeof(uint64), (size_t)max_n, dump_fp)==max_n);
+	status &= (fread(v[0], sizeof(uint64), (size_t)max_n, dump_fp)==max_n);
+	status &= (fread(v[1], sizeof(uint64), (size_t)max_n, dump_fp)==max_n);
+	status &= (fread(v[2], sizeof(uint64), (size_t)max_n, dump_fp)==max_n);
+	status &= (fread(v0, sizeof(uint64), (size_t)max_n, dump_fp)==max_n);
+	MPI_NODE_0_END
+
+#ifdef HAVE_MPI
+	/* push the full-size vectors to the whole grid */
+	MPI_TRY(MPI_Scatterv(x, packed_matrix->col_counts,
+			packed_matrix->col_offsets,
+			MPI_LONG_LONG, x, n, MPI_LONG_LONG, 0, 
+			obj->mpi_la_grid))
+	MPI_TRY(MPI_Scatterv(v[0], packed_matrix->col_counts,
+			packed_matrix->col_offsets,
+			MPI_LONG_LONG, v[0], n, MPI_LONG_LONG, 0, 
+			obj->mpi_la_grid))
+	MPI_TRY(MPI_Scatterv(v[1], packed_matrix->col_counts,
+			packed_matrix->col_offsets,
+			MPI_LONG_LONG, v[1], n, MPI_LONG_LONG, 0, 
+			obj->mpi_la_grid))
+	MPI_TRY(MPI_Scatterv(v[2], packed_matrix->col_counts,
+			packed_matrix->col_offsets,
+			MPI_LONG_LONG, v[2], n, MPI_LONG_LONG, 0, 
+			obj->mpi_la_grid))
+	MPI_TRY(MPI_Scatterv(v0, packed_matrix->col_counts,
+			packed_matrix->col_offsets,
+			MPI_LONG_LONG, v0, n, MPI_LONG_LONG, 0, 
+			obj->mpi_la_grid))
+#endif
 
 	fclose(dump_fp);
 	if (status == 0) {
@@ -600,17 +658,27 @@ static void init_lanczos_state(msieve_obj *obj,
 	   and v[0] starts off as B*x. This initial copy
 	   of v[0] must be saved off separately */
 
-	MPI_NODE_0_START
-	for (i = 0; i < n; i++) {
-		x[i] = v[0][i] = 
+#ifdef HAVE_MPI
+	if (obj->mpi_la_row_rank == 0) {
+#endif
+		for (i = 0; i < n; i++) {
+			x[i] = v[0][i] = 
 			  (uint64)(get_rand(&obj->seed1, &obj->seed2)) << 32 |
 		          (uint64)(get_rand(&obj->seed1, &obj->seed2));
+		}
+#ifdef HAVE_MPI
 	}
-	MPI_NODE_0_END
+
+	/* replicate x and v[0] down each MPI column */
+
+	MPI_TRY(MPI_Bcast(x, n, MPI_LONG_LONG, 0,
+			obj->mpi_la_col_grid))
+	MPI_TRY(MPI_Bcast(v[0], n, MPI_LONG_LONG, 0,
+			obj->mpi_la_col_grid))
+#endif
 
 	mul_sym_NxN_Nx64(obj, packed_matrix, v[0], v[0], scratch);
 
-	MPI_NODE_0_START
 	memcpy(v0, v[0], n * sizeof(uint64));
 
 	/* Subscripts larger than zero represent past versions of 
@@ -631,7 +699,6 @@ static void init_lanczos_state(msieve_obj *obj,
 		vt_v0[2][i] = 0;
 	}
 	*dim1 = 64;
-	MPI_NODE_0_END
 }
 
 /*-----------------------------------------------------------------------*/
@@ -645,7 +712,9 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 	   solution, containing up to 64 of these nullspace
 	   vectors, is returned */
 
-	uint32 n = packed_matrix->max_ncols;
+	uint32 n = packed_matrix->ncols;
+	uint32 max_n = packed_matrix->max_ncols;
+	uint32 alloc_n = MAX(packed_matrix->nrows, packed_matrix->ncols);
 	uint64 *vnext, *v[3], *x, *v0;
 	uint64 *winv[3], *vt_v0_next;
 	uint64 *vt_a_v[2], *vt_a2_v[2], *vt_v0[3];
@@ -674,29 +743,20 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 	else
 		logprintf(obj, "commencing Lanczos iteration\n");
 
-#ifdef HAVE_MPI
-	/* MPI processes that are not the root need two scratch buffers */
-
-	if (obj->mpi_la_row_rank + obj->mpi_la_col_rank != 0) {
-		i = MAX(packed_matrix->nrows, packed_matrix->ncols);
-		scratch = (uint64 *)xmalloc(i * sizeof(uint64));
-		v[0] = (uint64 *)xmalloc(i * sizeof(uint64));
-	}
-#endif
-
-	/* do more for the root node */
+	/* size-n data; the vectors for node 0 are the maximum size
+	   but we can limit the vector size for all the other ranks */
 
 	MPI_NODE_0_START
+	alloc_n = max_n;
+	MPI_NODE_0_END
 
-	/* size-n data */
-
-	scratch = (uint64 *)xmalloc(n * sizeof(uint64));
-	v[0] = (uint64 *)xmalloc(n * sizeof(uint64));
-	v[1] = (uint64 *)xmalloc(n * sizeof(uint64));
-	v[2] = (uint64 *)xmalloc(n * sizeof(uint64));
-	vnext = (uint64 *)xmalloc(n * sizeof(uint64));
-	x = (uint64 *)xmalloc(n * sizeof(uint64));
-	v0 = (uint64 *)xmalloc(n * sizeof(uint64));
+	scratch = (uint64 *)xmalloc(alloc_n * sizeof(uint64));
+	v[0] = (uint64 *)xmalloc(alloc_n * sizeof(uint64));
+	v[1] = (uint64 *)xmalloc(alloc_n * sizeof(uint64));
+	v[2] = (uint64 *)xmalloc(alloc_n * sizeof(uint64));
+	vnext = (uint64 *)xmalloc(alloc_n * sizeof(uint64));
+	x = (uint64 *)xmalloc(alloc_n * sizeof(uint64));
+	v0 = (uint64 *)xmalloc(alloc_n * sizeof(uint64));
 
 	/* 64x64 data */
 
@@ -712,23 +772,21 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 	vt_v0[2] = (uint64 *)xmalloc(64 * sizeof(uint64));
 	vt_v0_next = (uint64 *)xmalloc(64 * sizeof(uint64));
 
-	MPI_NODE_0_END
-
 	logprintf(obj, "memory use: %.1f MB\n", (double)
 			(packed_matrix_sizeof(packed_matrix)) / 1048576);
 
 	/* initialize */
 
+	*num_deps_found = 0;
 	iter = 0;
 	dim0 = 0;
 
 	if (obj->flags & MSIEVE_FLAG_NFS_LA_RESTART) {
-		MPI_NODE_0_START
-		read_lanczos_state(obj, x, vt_v0, v, v0, vt_a_v, vt_a2_v,
-				winv, n, &dim_solved, &iter, s, &dim1);
+		read_lanczos_state(obj, packed_matrix, 
+				x, vt_v0, v, v0, vt_a_v, vt_a2_v,
+				winv, n, max_n, &dim_solved, &iter, s, &dim1);
 		logprintf(obj, "restarting at iteration %u (dim = %u)\n",
 				iter, dim_solved);
-		MPI_NODE_0_END
 	}
 	else {
 		/* starting the iteration requires a matrix multiply,
@@ -739,8 +797,6 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 				winv, n, s, &dim1);
 	}
 
-	MPI_NODE_0_START
-
 	mask1 = 0;
 	for (i = 0; i < dim1; i++)
 		mask1 |= bitmask[s[1][i]];
@@ -749,14 +805,14 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 	   it would be worthwhile to report progress */
 
 	first_time = time(NULL);
-	if (n > 60000 &&
+	if (max_n > 60000 &&
 	    obj->flags & (MSIEVE_FLAG_USE_LOGFILE |
 	    		  MSIEVE_FLAG_LOG_TO_STDOUT)) {
-		if (n > 1000000)
+		if (max_n > 1000000)
 			report_interval = 200;
-		else if (n > 500000)
+		else if (max_n > 500000)
 			report_interval = 500;
-		else if (n > 100000)
+		else if (max_n > 100000)
 			report_interval = 2000;
 		else
 			report_interval = 8000;
@@ -772,9 +828,6 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 					check_interval;
 	}
 
-	MPI_NODE_0_END
-
-
 	/* perform the iteration */
 
 	while (1) {
@@ -784,19 +837,13 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		   to vnext. For MPI this is a little tricky, because
 		   vnext is allocated for the root node but not for the
 		   others */
-#ifdef HAVE_MPI
-		mul_sym_NxN_Nx64(obj, packed_matrix, v[0], 
-				(obj->mpi_rank == 0 ? vnext : v[0]), 
-				scratch);
-#else
+
 		mul_sym_NxN_Nx64(obj, packed_matrix, v[0], vnext, scratch);
-#endif
+
 		/* compute v0'*A*v0 and (A*v0)'(A*v0) */
 
-		MPI_NODE_0_START
-
-		tmul_64xN_Nx64(packed_matrix, v[0], vnext, vt_a_v[0], n);
-		tmul_64xN_Nx64(packed_matrix, vnext, vnext, vt_a2_v[0], n);
+		tmul_64xN_Nx64(obj, packed_matrix, v[0], vnext, vt_a_v[0], n);
+		tmul_64xN_Nx64(obj, packed_matrix, vnext, vnext, vt_a2_v[0], n);
 
 		/* if the former is orthogonal to itself, then
 		   the iteration has finished */
@@ -805,27 +852,8 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 			if (vt_a_v[0][i] != 0)
 				break;
 		}
-		MPI_NODE_0_END
-
-		/* for MPI, the rest of the loop is meant for the root
-		   node only. Unfortunately the other nodes have no way
-		   of knowing whether to wait for the next matrix multiply
-		   or to quit the iteration, since the above inner products
-		   are performed on the root node only. Hence we need to
-		   broadcast the result so they can decide for themselves
-		   what to do. Hopefully this doesn't affect the total
-		   runtime, since the root node will be busy for a while
-		   with the rest of the work while the broadcast completes */
-
-#ifdef HAVE_MPI
-		MPI_TRY(MPI_Bcast(&i, 1, MPI_INT, 0, obj->mpi_la_grid));
-#endif
 		if (i == 64)
 			break;
-#ifdef HAVE_MPI
-		else if (obj->mpi_la_row_rank + obj->mpi_la_col_rank != 0)
-			continue;
-#endif
 
 		/* Find the size-'dim0' nonsingular submatrix
 		   of v0'*A*v0, invert it, and list the column
@@ -858,7 +886,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		   slightly less than the number of rows, not the number
 		   of columns (=n) */
 	
-		if (dim_solved < packed_matrix->nrows - 64) {
+		if (dim_solved < packed_matrix->max_nrows - 64) {
 			if ((mask0 | mask1) != (uint64)(-1)) {
 				logprintf(obj, "lanczos error (dim = %u): "
 						"not all columns used\n",
@@ -884,7 +912,8 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		   and is stored in vt_v0_next. */
 
 		if (iter < 4) {
-			tmul_64xN_Nx64(packed_matrix, v[0], v0, vt_v0[0], n);
+			tmul_64xN_Nx64(obj, packed_matrix, 
+					v[0], v0, vt_v0[0], n);
 		}
 		else if (iter == 4) {
 			/* v0 is not needed from now on; recycle it 
@@ -901,10 +930,12 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		   right before a checkpoint file is written */
 
 		if (check_interval && (dim_solved >= next_check ||
-		    dim_solved >= next_dump ||
-		    obj->flags & MSIEVE_FLAG_STOP_SIEVING)) {
+#ifndef HAVE_MPI
+		    obj->flags & MSIEVE_FLAG_STOP_SIEVING ||
+#endif
+		    dim_solved >= next_dump)) {
 
-			tmul_64xN_Nx64(packed_matrix, v0, vnext, d, n);
+			tmul_64xN_Nx64(obj, packed_matrix, v0, vnext, d, n);
 			for (i = 0; i < 64; i++) {
 				if (d[i] != (uint64)0) {
 					printf("\nerror: corrupt state, please "
@@ -1010,20 +1041,22 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		mask1 = mask0;
 		dim1 = dim0;
 
+		MPI_NODE_0_START
+
 		/* possibly print a status update */
 
 		if (report_interval) {
 			if (dim_solved >= next_report) {
 				time_t curr_time = time(NULL);
 				double elapsed = curr_time - first_time;
-				uint32 eta = elapsed * (n - dim_solved) /
+				uint32 eta = elapsed * (max_n - dim_solved) /
 						(dim_solved - first_dim_solved);
 
 				fprintf(stderr, "linear algebra completed %u "
 					"of %u dimensions (%1.1f%%, ETA "
 					"%dh%2dm)    \r",
-					dim_solved, n, 100.0 * dim_solved / n,
-					eta / 3600, (eta % 3600) / 60);
+					dim_solved, max_n, 100.0 * dim_solved / 
+					max_n, eta / 3600, (eta % 3600) / 60);
 
 				/* report the ETA to the logfile once 
 				   (wait 3 intervals for a better ETA) */
@@ -1031,7 +1064,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 				if (++log_eta_once == 3) {
 					logprintf(obj, "linear algebra at "
 						   "%1.1f%%, ETA %dh%2dm\n",
-						100.0 * dim_solved / n,
+						100.0 * dim_solved / max_n,
 						eta / 3600, 
 						(eta % 3600) / 60);
 				}
@@ -1040,27 +1073,43 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 			}
 		}
 
-		/* possibly dump a checkpoint file, check for interrupt */
+		MPI_NODE_0_END
+
+		/* possibly dump a checkpoint file, check for interrupt.
+
+		   Note that MPI cannot reliably dump a checkpoint when
+		   interrupted, because multiple MPI processes must 
+		   participate in the dump process but there is no real
+		   way to signal them all to enter the following at the
+		   same time, short of a logical-or of all the obj->flags
+		   fields on every iteration. That costs about 3% of the
+		   total runtime, and grows with increasing grid size */
 
 		if (dump_interval) {
-			if (dim_solved >= next_dump ||
-			    obj->flags & MSIEVE_FLAG_STOP_SIEVING) {
+			if (
+#ifndef HAVE_MPI
+			    obj->flags & MSIEVE_FLAG_STOP_SIEVING ||
+#endif
+			    dim_solved >= next_dump) {
 
-				dump_lanczos_state(obj, x, vt_v0, v, v0, 
-						   vt_a_v, vt_a2_v, winv, n, 
-						   dim_solved, iter, s, dim1);
+				dump_lanczos_state(obj, packed_matrix, 
+						   x, vt_v0, v, v0, 
+						   vt_a_v, vt_a2_v, winv, 
+						   n, max_n, dim_solved, 
+						   iter, s, dim1);
 				next_dump = (dim_solved / dump_interval + 1) * 
 							dump_interval;
 			}
 			if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
 				break;
 		}
+
 	}
 
 	MPI_NODE_0_START
-
 	if (report_interval)
 		fprintf(stderr, "\n");
+	MPI_NODE_0_END
 
 	logprintf(obj, "lanczos halted after %u iterations (dim = %u)\n", 
 					iter, dim_solved);
@@ -1084,6 +1133,8 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 	/* if a recoverable failure occurred, start everything
 	   over again */
 
+	MPI_NODE_0_START
+
 	if (dim0 == 0 || (obj->flags & MSIEVE_FLAG_STOP_SIEVING)) {
 		free(x);
 		free(scratch);
@@ -1094,8 +1145,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 			logprintf(obj, "linear algebra failed; retrying...\n");
 #ifdef HAVE_MPI
 		/* MPI cannot restart gracefully, or shut down
-		   gracefully from an interrupt (the latter is
-		   okay, a checkpoint has already been written) */
+		   gracefully from an interrupt */
 		MPI_Abort(MPI_COMM_WORLD, MPI_ERR_ASSERT);
 #endif
 		return NULL;
@@ -1108,22 +1158,34 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 	   collection of nullspace vectors. Begin by multiplying
 	   the output from the iteration by B */
 
-#ifdef HAVE_MPI
-	if (obj->mpi_la_row_rank + obj->mpi_la_col_rank == 0)
-		mul_MxN_Nx64(obj, packed_matrix, x, v[1], scratch);
-	else
-		mul_MxN_Nx64(obj, packed_matrix, v[0], v[0], scratch);
-#else
-	mul_MxN_Nx64(obj, packed_matrix, x, v[1], NULL);
-#endif
+	mul_MxN_Nx64(obj, packed_matrix, x, v[1], scratch);
+	mul_MxN_Nx64(obj, packed_matrix, v[0], v[2], scratch);
 
 #ifdef HAVE_MPI
-	if (obj->mpi_la_row_rank + obj->mpi_la_col_rank == 0)
-		mul_MxN_Nx64(obj, packed_matrix, v[0], v[2], scratch);
-	else
-		mul_MxN_Nx64(obj, packed_matrix, v[0], v[0], scratch);
-#else
-	mul_MxN_Nx64(obj, packed_matrix, v[0], v[2], NULL);
+	/* pull the result vectors into rank 0 */
+
+	if (obj->mpi_la_row_rank == 0) {
+		MPI_TRY(MPI_Gatherv(x, n, MPI_LONG_LONG, x,
+				packed_matrix->col_counts,
+				packed_matrix->col_offsets,
+				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
+		MPI_TRY(MPI_Gatherv(v[0], n, MPI_LONG_LONG, v[0],
+				packed_matrix->col_counts,
+				packed_matrix->col_offsets,
+				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
+	}
+	if (obj->mpi_la_col_rank == 0) {
+		MPI_TRY(MPI_Gatherv(v[1], packed_matrix->nrows, 
+				MPI_LONG_LONG, v[1],
+				packed_matrix->row_counts,
+				packed_matrix->row_offsets,
+				MPI_LONG_LONG, 0, obj->mpi_la_col_grid))
+		MPI_TRY(MPI_Gatherv(v[2], packed_matrix->nrows, 
+				MPI_LONG_LONG, v[2],
+				packed_matrix->row_counts,
+				packed_matrix->row_offsets,
+				MPI_LONG_LONG, 0, obj->mpi_la_col_grid))
+	}
 #endif
 
 	MPI_NODE_0_START
@@ -1131,7 +1193,8 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 	/* make sure the last few words of the above matrix products
 	   are zero, since the postprocessing will be using them */
 
-	for (i = packed_matrix->max_nrows; i < n; i++) {
+	for (i = packed_matrix->max_nrows; 
+			i < packed_matrix->max_ncols; i++) {
 		v[1][i] = v[2][i] = 0;
 	}
 
@@ -1147,7 +1210,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 			uint64 accum1 = 0;
 			uint32 j;
 			mask0 = bitmask[i];
-			for (j = 0; j < n; j++) {
+			for (j = 0; j < max_n; j++) {
 				if (post_lanczos_matrix[j] & mask0) {
 					accum0 ^= x[j];
 					accum1 ^= v[0][j];
@@ -1158,7 +1221,8 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		}
 	}
 
-	*num_deps_found = combine_cols(n, x, v[0], v[1], v[2]);
+	*num_deps_found = combine_cols(max_n, x, v[0], v[1], v[2]);
+	MPI_NODE_0_END
 
 	free(scratch);
 	free(v[0]);
@@ -1172,18 +1236,6 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		logprintf(obj, "recovered %u nontrivial dependencies\n", 
 				*num_deps_found);
 	return x;
-
-	MPI_NODE_0_END
-
-#ifdef HAVE_MPI
-	/* MPI nodes that are not the root should never say that they
-	   found dependencies, though they should return allocated 
-	   memory to allow graceful shutdown */
-
-	free(v[0]);
-	*num_deps_found = 0;
-	return scratch;
-#endif
 }
 
 /*-----------------------------------------------------------------------*/

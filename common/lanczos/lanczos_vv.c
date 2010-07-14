@@ -386,7 +386,8 @@ void mul_64xN_Nx64(uint64 *x, uint64 *y,
 }
 
 /*-------------------------------------------------------------------*/
-void tmul_64xN_Nx64(packed_matrix_t *matrix,
+void tmul_64xN_Nx64(msieve_obj *obj, 
+		   packed_matrix_t *matrix,
 		   uint64 *x, uint64 *y,
 		   uint64 *xy, uint32 n) {
 
@@ -439,6 +440,14 @@ void tmul_64xN_Nx64(packed_matrix_t *matrix,
 		for (j = 0; j < 8 * 256; j++)
 			c[j] ^= curr_c[j];
 	}
+
+#ifdef HAVE_MPI
+	/* xor the lookup table across an entire MPI row */
+
+	MPI_TRY(MPI_Allreduce(c, btmp, 8 * 256, MPI_LONG_LONG,
+			MPI_BXOR, obj->mpi_la_row_grid))
+	memcpy(c, btmp, sizeof(btmp));
+#endif
 
 	for (i = 0; i < 8; i++) {
 

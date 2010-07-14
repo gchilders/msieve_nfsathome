@@ -194,12 +194,13 @@ void mul_trans_packed_core(thread_data_t *t);
 
 /* top-level calls for vector-vector operations */
 
-/* multi-threaded */
+/* multi-threaded plus MPI */
 
 void tmul_Nx64_64x64_acc(packed_matrix_t *A, uint64 *v, uint64 *x, 
 			uint64 *y, uint32 n);
 
-void tmul_64xN_Nx64(packed_matrix_t *A, uint64 *x, uint64 *y, 
+void tmul_64xN_Nx64(msieve_obj *obj, 
+			packed_matrix_t *A, uint64 *x, uint64 *y, 
 			uint64 *xy, uint32 n);
 
 /* single-threaded */

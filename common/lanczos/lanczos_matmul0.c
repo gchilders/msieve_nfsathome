@@ -709,7 +709,7 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 	if (p->start_row + p->start_col == 0)
 		mem_use = 7 * p->max_ncols;
 	else
-		mem_use = 2 * MAX(p->nrows, p->ncols);
+		mem_use = 7 * MAX(p->nrows, p->ncols);
 
 	/* and for the matrix */
 
@@ -769,28 +769,11 @@ void mul_MxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 		return;
 	}
 
-	/* push x to the whole grid */
-
-	MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
-				MPI_LONG_LONG, x, A->ncols,
-				MPI_LONG_LONG, 0, obj->mpi_la_grid))
-
 	mul_packed(A, x, scratch);
 
-	/* make each MPI row combine its own part of A*x into the
-	   leftmost column */
-
-	MPI_TRY(MPI_Reduce(scratch, b, A->nrows,
-			MPI_LONG_LONG, MPI_BXOR, 0,
+	MPI_TRY(MPI_Allreduce(scratch, b, A->nrows,
+			MPI_LONG_LONG, MPI_BXOR,
 			obj->mpi_la_row_grid));
-
-	/* pull the result into the root node */
-
-	if (obj->mpi_nrows > 1 && obj->mpi_la_col_rank == 0) {
-		MPI_TRY(MPI_Gatherv(b, A->nrows, MPI_LONG_LONG, b,
-				A->row_counts, A->row_offsets, 
-				MPI_LONG_LONG, 0, obj->mpi_la_col_grid))
-	}
 #endif
 }
 
@@ -818,12 +801,6 @@ void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 		return;
 	}
 
-	/* push x to the whole grid */
-
-	MPI_TRY(MPI_Scatterv(x, A->col_counts, A->col_offsets, 
-				MPI_LONG_LONG, x, A->ncols,
-				MPI_LONG_LONG, 0, obj->mpi_la_grid))
-
 	mul_packed(A, x, scratch);
 
 	/* make each MPI row combine its own part of A*x */
@@ -837,16 +814,9 @@ void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 	/* make each MPI column combine its own part of A^T * A*x 
 	   into the top row of MPI processes */
 
-	MPI_TRY(MPI_Reduce(scratch, b, A->ncols, 
-			MPI_LONG_LONG, MPI_BXOR, 0,
-			obj->mpi_la_col_grid))
+	MPI_TRY(MPI_Allreduce(scratch, b, A->ncols,
+			MPI_LONG_LONG, MPI_BXOR, 
+			obj->mpi_la_col_grid));
 
-	/* pull the result into the root node */
-
-	if (obj->mpi_ncols > 1 && obj->mpi_la_row_rank == 0) {
-		MPI_TRY(MPI_Gatherv(b, A->ncols, MPI_LONG_LONG, b,
-				A->col_counts, A->col_offsets, 
-				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
-	}
 #endif
 }
