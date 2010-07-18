@@ -309,9 +309,13 @@ int main(int argc, char **argv) {
 	        return -1;
 	}     
 #ifdef HAVE_MPI
-	if ((i = MPI_Init(&argc, &argv)) != MPI_SUCCESS) {
-		printf("error %d initializing MPI, aborting\n", i);
-		MPI_Abort(MPI_COMM_WORLD, i);
+	{
+		int32 level;
+		if ((i = MPI_Init_thread(&argc, &argv,
+				MPI_THREAD_FUNNELED, &level)) != MPI_SUCCESS) {
+			printf("error %d initializing MPI, aborting\n", i);
+			MPI_Abort(MPI_COMM_WORLD, i);
+		}
 	}
 #endif
 
