@@ -14,6 +14,8 @@ $Id$
 
 #include "lanczos.h"
 
+#define DEFAULT_DUMP_INTERVAL 2000
+
 #ifdef HAVE_MPI
 	#define MPI_NODE_0_START if (obj->mpi_la_row_rank + \
 				obj->mpi_la_col_rank == 0) {
@@ -1059,9 +1061,9 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 					max_n, eta / 3600, (eta % 3600) / 60);
 
 				/* report the ETA to the logfile once 
-				   (wait 3 intervals for a better ETA) */
+				   (wait 6 intervals for a better ETA) */
 
-				if (++log_eta_once == 3) {
+				if (++log_eta_once == 6) {
 					logprintf(obj, "linear algebra at "
 						   "%1.1f%%, ETA %dh%2dm\n",
 						100.0 * dim_solved / max_n,
@@ -1086,6 +1088,37 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		   total runtime, and grows with increasing grid size */
 
 		if (dump_interval) {
+			if (dim_solved >= next_dump &&
+			    dump_interval == DEFAULT_DUMP_INTERVAL) {
+
+				/* the dump interval is the initial one,
+				   chosen to accumulate some timing information.
+				   Now compute the real dump interval, 
+				   calibrated to happen about once per hour.
+
+				   For MPI, the root node computes the
+				   dump interval used by everyone */
+
+				MPI_NODE_0_START
+				time_t curr_time = time(NULL);
+				double elapsed = curr_time - first_time;
+
+				dump_interval = (3600.0 / elapsed) *
+					       (dim_solved - first_dim_solved); 
+				dump_interval = MAX(dump_interval,
+						   DEFAULT_DUMP_INTERVAL + 1);
+				logprintf(obj, "checkpointing every %u "
+					   "dimensions\n", dump_interval);
+				MPI_NODE_0_END
+#ifdef HAVE_MPI
+				MPI_TRY(MPI_Bcast(&dump_interval, 1, 
+						MPI_INT, 0, obj->mpi_la_grid))
+#endif
+				next_dump = (dim_solved / dump_interval + 1) * 
+							dump_interval;
+				continue;
+			}
+
 			if (
 #ifndef HAVE_MPI
 			    obj->flags & MSIEVE_FLAG_STOP_SIEVING ||
@@ -1346,15 +1379,12 @@ uint64 * block_lanczos(msieve_obj *obj,
 			   );
 
 	/* set up for writing checkpoint files. This only applies
-	   to the largest matrices */
+	   to the largest matrices. The initial dump interval is
+	   just to establish timing information */
 
 	dump_interval = 0;
 	if (max_nrows > 1000000) {
-		if (max_nrows > 2000000) /* ~ once an hour */
-			dump_interval = 10000 * ((12500000 *
-				packed_matrix.num_threads) / max_nrows + 1);
-		else
-			dump_interval = 500000;
+		dump_interval = DEFAULT_DUMP_INTERVAL;
 		obj->flags |= MSIEVE_FLAG_SIEVING_IN_PROGRESS;
 	}
 
