@@ -397,6 +397,9 @@ void tmul_64xN_Nx64(msieve_obj *obj,
 	uint64 btmp[8 * 256];
 	uint32 vsize = n / matrix->num_threads;
 	uint32 off;
+#ifdef HAVE_MPI
+	uint64 xytmp[64];
+#endif
 
 	for (i = off = 0; i < matrix->num_threads - 1; i++, off += vsize) {
 		thread_data_t *t = matrix->thread_data + i;
@@ -441,17 +444,10 @@ void tmul_64xN_Nx64(msieve_obj *obj,
 			c[j] ^= curr_c[j];
 	}
 
-#ifdef HAVE_MPI
-	/* xor the lookup table across an entire MPI row */
-
-	MPI_TRY(MPI_Allreduce(c, btmp, 8 * 256, MPI_LONG_LONG,
-			MPI_BXOR, obj->mpi_la_row_grid))
-	memcpy(c, btmp, sizeof(btmp));
-#endif
-
 	for (i = 0; i < 8; i++) {
 
 		uint64 a0, a1, a2, a3, a4, a5, a6, a7;
+		uint64 *xyi = xy + i;
 
 		a0 = a1 = a2 = a3 = 0;
 		a4 = a5 = a6 = a7 = 0;
@@ -469,9 +465,16 @@ void tmul_64xN_Nx64(msieve_obj *obj,
 			}
 		}
 
-		xy[ 0] = a0; xy[ 8] = a1; xy[16] = a2; xy[24] = a3;
-		xy[32] = a4; xy[40] = a5; xy[48] = a6; xy[56] = a7;
-		xy++;
+		xyi[ 0] = a0; xyi[ 8] = a1; xyi[16] = a2; xyi[24] = a3;
+		xyi[32] = a4; xyi[40] = a5; xyi[48] = a6; xyi[56] = a7;
 	}
+
+#ifdef HAVE_MPI
+	/* combine the results across an entire MPI row */
+
+	MPI_TRY(MPI_Allreduce(xy, xytmp, 64, MPI_LONG_LONG,
+			MPI_BXOR, obj->mpi_la_row_grid))
+	memcpy(xy, xytmp, sizeof(xytmp));
+#endif
 }
 
