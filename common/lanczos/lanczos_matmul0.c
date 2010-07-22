@@ -587,6 +587,11 @@ void packed_matrix_init(msieve_obj *obj,
 	p->max_ncols = max_ncols;
 	p->start_col = start_col;
 	p->num_dense_rows = num_dense_rows;
+#ifdef HAVE_MPI
+	p->mpi_size = obj->mpi_size;
+	p->mpi_la_row_grid = obj->mpi_la_row_grid;
+	p->mpi_la_col_grid = obj->mpi_la_col_grid;
+#endif
 
 	if (max_nrows <= MIN_NROWS_TO_PACK)
 		return;
@@ -750,7 +755,7 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 }
 
 /*-------------------------------------------------------------------*/
-void mul_MxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x, 
+void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, 
 			uint64 *b, uint64 *scratch) {
 
 	/* Multiply the vector x[] by the matrix A (stored
@@ -759,7 +764,7 @@ void mul_MxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 	   operations apparently cannot be performed in-place */
 
 #ifdef HAVE_MPI
-	if (obj->mpi_size <= 1) {
+	if (A->mpi_size <= 1) {
 #endif
 		if (A->unpacked_cols)
 			mul_unpacked(A, x, b);
@@ -773,12 +778,12 @@ void mul_MxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 
 	MPI_TRY(MPI_Allreduce(scratch, b, A->nrows,
 			MPI_LONG_LONG, MPI_BXOR,
-			obj->mpi_la_row_grid));
+			A->mpi_la_row_grid));
 #endif
 }
 
 /*-------------------------------------------------------------------*/
-void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x, 
+void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x, 
 			uint64 *b, uint64 *scratch) {
 
 	/* Multiply x by A and write to scratch, then
@@ -787,7 +792,7 @@ void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 	   be distinct from scratch */
 
 #ifdef HAVE_MPI
-	if (obj->mpi_size <= 1) {
+	if (A->mpi_size <= 1) {
 #endif
 		if (A->unpacked_cols) {
 			mul_unpacked(A, x, scratch);
@@ -807,7 +812,7 @@ void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 
 	MPI_TRY(MPI_Allreduce(scratch, b, A->nrows,
 			MPI_LONG_LONG, MPI_BXOR, 
-			obj->mpi_la_row_grid));
+			A->mpi_la_row_grid));
 
 	mul_trans_packed(A, b, scratch);
 
@@ -816,7 +821,7 @@ void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x,
 
 	MPI_TRY(MPI_Allreduce(scratch, b, A->ncols,
 			MPI_LONG_LONG, MPI_BXOR, 
-			obj->mpi_la_col_grid));
+			A->mpi_la_col_grid));
 
 #endif
 }

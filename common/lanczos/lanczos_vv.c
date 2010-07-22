@@ -386,8 +386,7 @@ void mul_64xN_Nx64(uint64 *x, uint64 *y,
 }
 
 /*-------------------------------------------------------------------*/
-void tmul_64xN_Nx64(msieve_obj *obj, 
-		   packed_matrix_t *matrix,
+void tmul_64xN_Nx64(packed_matrix_t *matrix,
 		   uint64 *x, uint64 *y,
 		   uint64 *xy, uint32 n) {
 
@@ -473,7 +472,7 @@ void tmul_64xN_Nx64(msieve_obj *obj,
 	/* combine the results across an entire MPI row */
 
 	MPI_TRY(MPI_Allreduce(xy, xytmp, 64, MPI_LONG_LONG,
-			MPI_BXOR, obj->mpi_la_row_grid))
+			MPI_BXOR, matrix->mpi_la_row_grid))
 	memcpy(xy, xytmp, sizeof(xytmp));
 #endif
 }

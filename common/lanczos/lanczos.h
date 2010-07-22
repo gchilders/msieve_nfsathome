@@ -159,6 +159,10 @@ typedef struct {
 	thread_data_t thread_data[MAX_THREADS];
 
 #ifdef HAVE_MPI
+	uint32 mpi_size;
+	MPI_Comm mpi_la_row_grid;
+	MPI_Comm mpi_la_col_grid;
+
 	/* needed on root node only */
 	int32 col_counts[MAX_MPI_PROCS];
 	int32 col_offsets[MAX_MPI_PROCS]; 
@@ -179,10 +183,10 @@ void packed_matrix_free(packed_matrix_t *packed_matrix);
 
 size_t packed_matrix_sizeof(packed_matrix_t *packed_matrix);
 
-void mul_MxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x, 
+void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, 
 			uint64 *b, uint64 *scratch);
 
-void mul_sym_NxN_Nx64(msieve_obj *obj, packed_matrix_t *A, uint64 *x, 
+void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x, 
 			uint64 *b, uint64 *scratch);
 
 /* for big jobs, we use a multithreaded framework that calls
@@ -199,8 +203,7 @@ void mul_trans_packed_core(thread_data_t *t);
 void tmul_Nx64_64x64_acc(packed_matrix_t *A, uint64 *v, uint64 *x, 
 			uint64 *y, uint32 n);
 
-void tmul_64xN_Nx64(msieve_obj *obj, 
-			packed_matrix_t *A, uint64 *x, uint64 *y, 
+void tmul_64xN_Nx64(packed_matrix_t *A, uint64 *x, uint64 *y, 
 			uint64 *xy, uint32 n);
 
 /* single-threaded */

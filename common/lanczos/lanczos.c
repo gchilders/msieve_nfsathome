@@ -679,7 +679,7 @@ static void init_lanczos_state(msieve_obj *obj,
 			obj->mpi_la_col_grid))
 #endif
 
-	mul_sym_NxN_Nx64(obj, packed_matrix, v[0], v[0], scratch);
+	mul_sym_NxN_Nx64(packed_matrix, v[0], v[0], scratch);
 
 	memcpy(v0, v[0], n * sizeof(uint64));
 
@@ -840,12 +840,12 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		   vnext is allocated for the root node but not for the
 		   others */
 
-		mul_sym_NxN_Nx64(obj, packed_matrix, v[0], vnext, scratch);
+		mul_sym_NxN_Nx64(packed_matrix, v[0], vnext, scratch);
 
 		/* compute v0'*A*v0 and (A*v0)'(A*v0) */
 
-		tmul_64xN_Nx64(obj, packed_matrix, v[0], vnext, vt_a_v[0], n);
-		tmul_64xN_Nx64(obj, packed_matrix, vnext, vnext, vt_a2_v[0], n);
+		tmul_64xN_Nx64(packed_matrix, v[0], vnext, vt_a_v[0], n);
+		tmul_64xN_Nx64(packed_matrix, vnext, vnext, vt_a2_v[0], n);
 
 		/* if the former is orthogonal to itself, then
 		   the iteration has finished */
@@ -914,8 +914,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		   and is stored in vt_v0_next. */
 
 		if (iter < 4) {
-			tmul_64xN_Nx64(obj, packed_matrix, 
-					v[0], v0, vt_v0[0], n);
+			tmul_64xN_Nx64(packed_matrix, v[0], v0, vt_v0[0], n);
 		}
 		else if (iter == 4) {
 			/* v0 is not needed from now on; recycle it 
@@ -937,7 +936,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 #endif
 		    dim_solved >= next_dump)) {
 
-			tmul_64xN_Nx64(obj, packed_matrix, v0, vnext, d, n);
+			tmul_64xN_Nx64(packed_matrix, v0, vnext, d, n);
 			for (i = 0; i < 64; i++) {
 				if (d[i] != (uint64)0) {
 					printf("\nerror: corrupt state, please "
@@ -1191,8 +1190,8 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 	   collection of nullspace vectors. Begin by multiplying
 	   the output from the iteration by B */
 
-	mul_MxN_Nx64(obj, packed_matrix, x, v[1], scratch);
-	mul_MxN_Nx64(obj, packed_matrix, v[0], v[2], scratch);
+	mul_MxN_Nx64(packed_matrix, x, v[1], scratch);
+	mul_MxN_Nx64(packed_matrix, v[0], v[2], scratch);
 
 #ifdef HAVE_MPI
 	/* pull the result vectors into rank 0 */
