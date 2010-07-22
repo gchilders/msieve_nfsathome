@@ -426,11 +426,10 @@ void read_matrix(msieve_obj *obj,
 		   processes. Hence the first few row numbers must
 		   not be permuted */
 
-		/* make the remaining number of rows a multiple 
-		   of mpi_nrows */
+		/* increase the number of static rows until the
+		   remaining number of rows a multiple of mpi_nrows */
 
-		num_static_rows += mpi_nrows - (nrows - 
-					num_static_rows) % mpi_nrows;
+		num_static_rows += (nrows - num_static_rows) % mpi_nrows;
 
 		/* finally, compute the starting row number for the
 		   current MPI process */
