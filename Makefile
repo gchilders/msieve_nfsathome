@@ -263,6 +263,7 @@ all:
 	@echo "generic   portable code"
 	@echo "add 'ECM=1' if GMP-ECM is available (enables ECM)"
 	@echo "add 'CUDA=1' for Nvidia graphics card support"
+	@echo "add 'MPI=1' for parallel processing using MPI"
 
 x86: $(COMMON_OBJS) $(QS_OBJS) $(QS_CORE_OBJS) \
 		$(QS_CORE_OBJS_X86) $(NFS_OBJS) $(GPU_OBJS)
