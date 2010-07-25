@@ -338,9 +338,12 @@ int main(int argc, char **argv) {
 				    argv[i+1][0] != '-') {
 					if (tolower(argv[i][1]) == 'i')
 						infile_name = argv[i+1];
-					else if (tolower(argv[i][1]) == 's')
-						savefile_name = argv[i+1];
-					else
+					else if (tolower(argv[i][1]) == 's') {
+						char *p;
+						savefile_name = strdup(argv[i+1]);
+						if((p=strstr(savefile_name, ".gz")))
+							*p=0;
+					} else
 						logfile_name = argv[i+1];
 					i += 2;
 				}

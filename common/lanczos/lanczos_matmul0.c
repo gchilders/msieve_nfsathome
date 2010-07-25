@@ -587,6 +587,7 @@ void packed_matrix_init(msieve_obj *obj,
 	p->max_ncols = max_ncols;
 	p->start_col = start_col;
 	p->num_dense_rows = num_dense_rows;
+	p->num_threads = 1;
 #ifdef HAVE_MPI
 	p->mpi_size = obj->mpi_size;
 	p->mpi_la_row_grid = obj->mpi_la_row_grid;

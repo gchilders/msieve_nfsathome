@@ -33,6 +33,10 @@ extern "C" {
 			MPI_Abort(MPI_COMM_WORLD, status);		\
 		}							\
 	}
+
+	#ifndef MPI_ERR_ASSERT  /* MPI library may not have this */
+	#define MPI_ERR_ASSERT 22
+	#endif
 #endif
 
 /*---------------- SAVEFILE RELATED DECLARATIONS ---------------------*/

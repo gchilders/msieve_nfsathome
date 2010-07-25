@@ -836,9 +836,7 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		iter++;
 
 		/* multiply the current v[0] by the matrix and write
-		   to vnext. For MPI this is a little tricky, because
-		   vnext is allocated for the root node but not for the
-		   others */
+		   to vnext */
 
 		mul_sym_NxN_Nx64(packed_matrix, v[0], vnext, scratch);
 
@@ -1304,7 +1302,11 @@ uint64 * block_lanczos(msieve_obj *obj,
 
 	memset(&packed_matrix, 0, sizeof(packed_matrix_t));
 
-#ifdef HAVE_MPI
+#ifndef HAVE_MPI
+	if (have_post_lanczos)
+		max_nrows -= POST_LANCZOS_ROWS;
+
+#else
 	/* tell all the MPI processes whether a post lanczos matrix
 	   was constructed */
 
@@ -1316,7 +1318,7 @@ uint64 * block_lanczos(msieve_obj *obj,
 		   that the matrix is now POST_LANCZOS_ROWS smaller.
 		   Fortunately, MPI processes below the top row of
 		   the grid have their row numbers relative to offset
-		   start_row, so they don't all have to be adjusted */
+		   start_row, so we don't have to adjust all the data */
 		
 		max_nrows -= POST_LANCZOS_ROWS;
 		if (obj->mpi_la_row_rank > 0)
