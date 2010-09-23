@@ -194,7 +194,14 @@ search_coeffs_core(msieve_obj *obj, poly_search_t *poly,
 		mpz_set_d(c->mp_sieve_size, c->sieve_size);
 	}
 
-	sieve_lattice(obj, poly, num_poly * deadline);
+#ifdef HAVE_CUDA
+	if (degree == 5)
+		sieve_lattice_specialq(obj, poly, num_poly * deadline);
+	else
+		sieve_lattice(obj, poly, num_poly * deadline);
+#else
+	sieve_lattice_specialq(obj, poly, num_poly * deadline);
+#endif
 }
 
 /*------------------------------------------------------------------------*/
@@ -208,7 +215,11 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly,
 	uint32 digits = mpz_sizeinbase(poly->N, 10);
 	double start_time = get_cpu_time();
 	uint32 deadline_per_coeff = 800;
+#ifdef HAVE_CUDA
 	uint32 batch_size = (poly->degree == 5) ? POLY_BATCH_SIZE : 1;
+#else
+	uint32 batch_size = 1;
+#endif
 
 	if (digits <= 100)
 		deadline_per_coeff = 5;

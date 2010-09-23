@@ -17,7 +17,7 @@
 CC = gcc -D_FILE_OFFSET_BITS=64
 WARN_FLAGS = -Wall -W
 OPT_FLAGS = -O3 -fomit-frame-pointer -march=athlon-xp -DNDEBUG
-#OPT_FLAGS = -O3 -fomit-frame-pointer -march=k8 -DNDEBUG -D_LARGEFILE64_SOURCE
+OPT_FLAGS = -O3 -fomit-frame-pointer -march=k8 -DNDEBUG -D_LARGEFILE64_SOURCE
 
 CFLAGS = $(OPT_FLAGS) $(MACHINE_FLAGS) $(WARN_FLAGS) \
 		-I. -Iinclude -Ignfs -Ignfs/poly -Ignfs/poly/stage1
@@ -235,7 +235,8 @@ NFS_GPU_SRCS = \
 	gnfs/poly/stage1/stage1_core_gpu/stage1_sieve_deg5_64.c \
 	gnfs/poly/stage1/stage1_core_gpu/stage1_sieve_deg5_96.c \
 	gnfs/poly/stage1/stage1_core_gpu/stage1_sieve_deg6_128.c \
-	gnfs/poly/stage1/stage1_core_gpu/stage1_sieve_deg6_96.c
+	gnfs/poly/stage1/stage1_core_gpu/stage1_sieve_deg6_96.c \
+	gnfs/poly/stage1/stage1_sieve_specialq_gpu_64.c
 
 NFS_GPU_OBJS = $(NFS_GPU_SRCS:.c=.no)
 
@@ -245,7 +246,8 @@ NFS_NOGPU_SRCS = \
 	gnfs/poly/stage1/stage1_core/stage1_sieve_deg5_64.c \
 	gnfs/poly/stage1/stage1_core/stage1_sieve_deg5_96.c \
 	gnfs/poly/stage1/stage1_core/stage1_sieve_deg6_128.c \
-	gnfs/poly/stage1/stage1_core/stage1_sieve_deg6_96.c
+	gnfs/poly/stage1/stage1_core/stage1_sieve_deg6_96.c \
+	gnfs/poly/stage1/stage1_sieve_specialq_64.c
 
 NFS_NOGPU_OBJS = $(NFS_NOGPU_SRCS:.c=.no)
 
