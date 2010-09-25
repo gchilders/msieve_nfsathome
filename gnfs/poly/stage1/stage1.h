@@ -112,8 +112,8 @@ void poly_search_free(poly_search_t *poly);
 /*-----------------------------------------------------------------------*/
 
 /* Rational leading coeffs of NFS polynomials are assumed 
-   to be the product of two groups of factors p; each group 
-   can be up to 64 bits in size and the product of (powers 
+   to be the product of three groups of factors p; each group 
+   can be up to 32 bits in size and the product of (powers 
    of) up to MAX_P_FACTORS distinct primes */
 
 #define MAX_P_FACTORS 7
@@ -176,6 +176,7 @@ typedef struct {
 	uint32 num_roots_max;
 	uint32 avail_algos;
 	uint32 fb_only;
+	uint32 res_mod4;
 	uint32 degree;
 	uint64 p_min, p_max;
 
@@ -195,7 +196,7 @@ typedef struct {
 void sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 			uint32 factor_min, uint32 factor_max,
 			uint32 fb_roots_min, uint32 fb_roots_max,
-			uint32 fb_only);
+			uint32 fb_only, uint32 res_mod4);
 
 void sieve_fb_free(sieve_fb_t *s);
 
@@ -214,9 +215,10 @@ uint64 sieve_fb_next(sieve_fb_t *s,
 /*-----------------------------------------------------------------------*/
 
 typedef struct {
-	uint32 fill_p;
 	void *p_array;
 	void *q_array;
+	void *special_q_array;
+	void *fill_which_array;
 
 #ifdef HAVE_CUDA
 	CUdeviceptr gpu_p_array;
@@ -241,16 +243,19 @@ typedef struct {
 
 uint32
 sieve_lattice_deg46_64(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
-		uint32 small_p_min, uint32 small_p_max, 
+		sieve_fb_t *sieve_special_q, 
+		sieve_fb_t *sieve_large_p1, sieve_fb_t *sieve_large_p2, 
+		uint32 special_q_min, uint32 special_q_max, 
 		uint32 large_p_min, uint32 large_p_max);
 
 uint32
 sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
-		uint32 small_p_min, uint32 small_p_max, 
+		sieve_fb_t *sieve_special_q,
+		sieve_fb_t *sieve_large_p1, sieve_fb_t *sieve_large_p2,
+		uint32 special_q_min, uint32 special_q_max,
 		uint32 large_p_min, uint32 large_p_max);
 
+#if 0
 uint32
 sieve_lattice_deg5_96(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
@@ -274,14 +279,21 @@ sieve_lattice_deg6_128(msieve_obj *obj, lattice_fb_t *L,
 		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
 		uint64 small_p_min, uint64 small_p_max, 
 		uint64 large_p_min, uint64 large_p_max);
+#endif
 
 void
 handle_collision(poly_search_t *poly, uint32 which_poly,
-		uint64 p, uint128 proot, uint128 res, uint64 q);
+			uint32 p1, uint32 p2, uint32 special_q,
+			uint64 special_q_root, uint64 res);
 
-/* main search routine */
+/* main search routines */
 
-void sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline); 
+// original method (with special_q), GPU and CPU versions
+void sieve_lattice(msieve_obj *obj, poly_search_t *poly, 
+				uint32 deadline);
+// hashtable method (with special_q), CPU only
+void sieve_lattice_hashtable(msieve_obj *obj, poly_search_t *poly, 
+				uint32 deadline);
 
 #ifdef __cplusplus
 }

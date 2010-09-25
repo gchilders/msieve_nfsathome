@@ -100,6 +100,7 @@ poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 
 	switch (poly->degree) {
 	case 4:
+	case 6:
 		CUDA_TRY(cuModuleLoad(&poly->gpu_module48, 
 				"stage1_core_deg46_48.ptx"))
 		CUDA_TRY(cuModuleLoad(&poly->gpu_module64, 
@@ -111,25 +112,6 @@ poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 				"stage1_core_deg5_48.ptx"))
 		CUDA_TRY(cuModuleLoad(&poly->gpu_module64, 
 				"stage1_core_deg5_64.ptx"))
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module72, 
-				"stage1_core_deg5_72.ptx"))
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module96, 
-				"stage1_core_deg5_96.ptx"))
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module128, 
-				"stage1_core_deg5_128.ptx"))
-		break;
-
-	case 6:
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module48, 
-				"stage1_core_deg46_48.ptx"))
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module64, 
-				"stage1_core_deg46_64.ptx"))
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module72, 
-				"stage1_core_deg6_72.ptx"))
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module96, 
-				"stage1_core_deg6_96.ptx"))
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module128, 
-				"stage1_core_deg6_128.ptx"))
 		break;
 	}
 #endif
@@ -195,12 +177,12 @@ search_coeffs_core(msieve_obj *obj, poly_search_t *poly,
 	}
 
 #ifdef HAVE_CUDA
-	if (degree == 5)
-		sieve_lattice_specialq(obj, poly, num_poly * deadline);
-	else
-		sieve_lattice(obj, poly, num_poly * deadline);
+	sieve_lattice(obj, poly, num_poly * deadline);
 #else
-	sieve_lattice_specialq(obj, poly, num_poly * deadline);
+	/* TODO: add logic to choose between using sieve_lattice()
+         * and sieve_lattice_hashtable() based on which is most
+         * likely to be fastest */
+	sieve_lattice_hashtable(obj, poly, num_poly * deadline);
 #endif
 }
 

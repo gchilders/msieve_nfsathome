@@ -159,7 +159,7 @@ void
 sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 		uint32 factor_min, uint32 factor_max,
 		uint32 fb_roots_min, uint32 fb_roots_max,
-		uint32 fb_only)
+		uint32 fb_only, uint32 res_mod4)
 {
 	uint32 i, j;
 	prime_sieve_t prime_sieve;
@@ -169,6 +169,7 @@ sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 	memset(s, 0, sizeof(sieve_fb_t));
 	s->degree = poly->degree;
 	s->fb_only = fb_only;
+	s->res_mod4 = res_mod4;
 
 	mpz_init(s->p);
 	mpz_init(s->p2);
@@ -208,6 +209,9 @@ sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 			break;
 		}
 		else if (p <= factor_min) {
+			sieve_add_prime(&p_sieve->bad_primes, p, 0);
+		}
+		else if (res_mod4 > 0 && (p % 4 != res_mod4)) {
 			sieve_add_prime(&p_sieve->bad_primes, p, 0);
 		}
 		else if (!sieve_add_aprog(s, poly, p,
@@ -737,6 +741,10 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 
 			if (p >= s->p_max) {
 				s->avail_algos &= ~ALGO_PRIME;
+
+				continue;
+			}
+			else if (s->res_mod4 > 0 && (p % 4 != s->res_mod4)) {
 
 				continue;
 			}

@@ -478,7 +478,8 @@ get_poly_params(double bits, sieve_fb_param_t *params)
 
 /*------------------------------------------------------------------------*/
 void
-sieve_lattice_specialq(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
+sieve_lattice_hashtable(msieve_obj *obj, poly_search_t *poly, 
+			uint32 deadline)
 {
 	lattice_fb_t L;
 	sieve_fb_t sieve_small, sieve_large;
@@ -516,9 +517,9 @@ sieve_lattice_specialq(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 			large_p_min, large_p_max);
 
 	sieve_fb_init(&sieve_small, poly, 
-			5, 100, 1, degree, 1);
+			5, 100, 1, degree, 1, 0);
 	sieve_fb_init(&sieve_large, poly, 
-			101, large_fb_max, 1, degree, 1);
+			101, large_fb_max, 1, degree, 1, 0);
 
 	L.poly = poly;
 	L.start_time = time(NULL);
