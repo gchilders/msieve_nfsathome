@@ -147,6 +147,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L)
 						off.w[2] = 0;
 						off.w[3] = 0;
 
+// TODO: update this for specialq support
 /*						handle_collision(L->poly, 0,
 								(uint64)p, 
 								r, off, 

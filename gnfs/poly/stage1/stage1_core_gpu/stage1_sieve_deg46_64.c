@@ -375,6 +375,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 						offset.w[1] = 
 						      (uint32)(f->offset >> 32);
 
+// TODO: update this for specialq support
 /*						handle_collision(L->poly, 
 								which_poly,
 								(uint64)f->p, 

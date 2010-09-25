@@ -185,6 +185,11 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 
 	get_poly_params(bits, &params);
 
+	if (degree != 5) {
+		printf("error: degree %u not currently supported in special_q mode\n", degree);
+		exit (-1);
+	}
+
 	p_scale = params.p_scale;
 	num_pieces = params.num_pieces;
 	special_q_min = params.special_q_min;
