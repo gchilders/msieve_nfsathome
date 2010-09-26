@@ -230,7 +230,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 
 		special_q_min2 = special_q_min;
 		if (special_q_min2 <= special_q_max / p_scale)
-			special_q_max2 = special_q_min2 * p_scale;
+			special_q_max2 = special_q_min2 * p_scale - 1;
 		else
 			break;
 
@@ -282,7 +282,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		if (done)
 			break;
 
-		special_q_min *= p_scale + 1;
+		special_q_min *= p_scale;
 	}
 
 	sieve_fb_free(&sieve_special_q);
