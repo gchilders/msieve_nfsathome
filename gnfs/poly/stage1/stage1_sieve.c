@@ -224,13 +224,13 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		   special_q_min, special_q_max);
 
 	if (num_pieces > 1) { /* randomize special_q */
-		uint32 piece_len = (special_q_max - special_q_min)
-						/ num_pieces;
+		double piece_ratio = pow((double)special_q_max / special_q_min,
+					 (double)1 / num_pieces);
 		uint32 piece = get_rand(&obj->seed1,
 					&obj->seed2) % num_pieces;
 
-		special_q_min += piece * piece_len;
-		special_q_max = special_q_min + piece_len;
+		special_q_min *= pow(piece_ratio, (double)piece);
+		special_q_max = special_q_min * piece_ratio;
 	}
 
 	while (1) {
