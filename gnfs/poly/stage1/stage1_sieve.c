@@ -32,12 +32,12 @@ typedef struct {
 
 static const sieve_fb_param_t sieve_fb_params[] = {
 
-	{ 40, 1.3,  1,       7,     2500},
-	{ 48, 1.2,  1,       7,     7500},
-	{ 56, 1.1,  5,     350,    35000},
-	{ 64, 1.1, 10,   75000,   250000},
-	{ 72, 1.1, 25,  750000,  2500000},
-	{ 80, 1.1, 50, 5000000, 25000000},
+	{ 40, 1.3,    1,       7,     2500},
+	{ 48, 1.2,    1,       7,     7500},
+	{ 56, 1.1,   25,     350,    35000},
+	{ 64, 1.1,  100,   75000,   250000},
+	{ 72, 1.1,  500,  750000,  2500000},
+	{ 80, 1.1, 2500, 5000000, 25000000},
 };
 
 #define NUM_SIEVE_FB_PARAMS (sizeof(sieve_fb_params) / \
@@ -223,32 +223,36 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		   poly->batch[0].high_coeff, last_poly->high_coeff,
 		   special_q_min, special_q_max);
 
+	if (num_pieces > 1) { /* randomize special_q */
+		uint32 piece_len = (special_q_max - special_q_min)
+						/ num_pieces;
+		uint32 piece = get_rand(&obj->seed1,
+					&obj->seed2) % num_pieces;
+
+		special_q_min += piece * piece_len;
+		special_q_max = special_q_min + piece_len;
+	}
+
 	while (1) {
 		uint32 done;
 		uint32 special_q_min2, special_q_max2;
 		uint32 large_p_min, large_p_max;
 
+		if (special_q_min >= special_q_max)
+			break;
+
 		special_q_min2 = special_q_min;
 		if (special_q_min2 <= special_q_max / p_scale)
 			special_q_max2 = special_q_min2 * p_scale - 1;
 		else
-			break;
+			special_q_max2 = special_q_max;
 
 		large_p_max = sqrt(middle_poly->p_size_max / special_q_min2);
 		large_p_min = large_p_max / p_scale;
-		if (large_p_min <= special_q_max) { /* shouldn't happen */
+		if (large_p_min <= params.special_q_max) {
+			/* shouldn't happen */
 			printf("error: special_q is too large\n");
 			exit (-1);
-		}
-
-		if (num_pieces > 1) { /* randomize special_q */
-			uint32 piece_len = (special_q_max2 - special_q_min2)
-							/ num_pieces;
-			uint32 piece = get_rand(&obj->seed1,
-						&obj->seed2) % num_pieces;
-
-			special_q_min2 += piece * piece_len;
-			special_q_max2 = special_q_min2 + piece_len;
 		}
 
 #ifdef HAVE_CUDA
