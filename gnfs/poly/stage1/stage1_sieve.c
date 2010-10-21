@@ -20,7 +20,7 @@ $Id$
    32 bits, and candidates must satisfy a condition modulo p^2 */
 
 #define MAX_P_BITS 32
-#define MAX_P ((uint64)1 << MAX_P_BITS - 1)
+#define MAX_P (((uint64)1 << MAX_P_BITS) - 1)
 
 typedef struct {
 	uint32 bits; /* in leading rational coeff */
@@ -202,14 +202,14 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 			0, 0);
 
 	sieve_fb_init(&sieve_large_p1, poly,
-			5, large_fb_max,
+			0, 0,
 			1, max_roots,
-			0, 1 /* 1 (mod 4) */);
+			0, 0);
 
 	sieve_fb_init(&sieve_large_p2, poly,
 			5, large_fb_max,
 			1, max_roots,
-			0, 3 /* 3 (mod 4) */);
+			0, 0);
 
 	L.poly = poly;
 	L.start_time = time(NULL);
@@ -236,10 +236,8 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 	while (1) {
 		uint32 done;
 		uint32 special_q_min2, special_q_max2;
-		uint32 large_p_min, large_p_max;
-
-		if (special_q_min >= special_q_max)
-			break;
+		uint32 large_p1_min, large_p1_max;
+		uint32 large_p2_min, large_p2_max;
 
 		special_q_min2 = special_q_min;
 		if (special_q_min2 <= special_q_max / p_scale)
@@ -247,48 +245,77 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		else
 			special_q_max2 = special_q_max;
 
-		large_p_max = sqrt(middle_poly->p_size_max / special_q_min2);
-		large_p_min = large_p_max / p_scale;
-		if (large_p_min <= params.special_q_max) {
-			/* shouldn't happen */
-			printf("error: special_q is too large\n");
-			exit (-1);
-		}
+		large_p1_min = sqrt(middle_poly->p_size_max / special_q_max2);
+		if (large_p1_min < MAX_P / p_scale)
+			large_p1_max = large_p1_min * p_scale;
+		else
+			large_p1_max = MAX_P;
+
+		large_p2_max = large_p1_min - 1;
+		if (params.special_q_max <= large_p2_max / p_scale)
+			large_p2_min = large_p2_max / p_scale;
+		else
+			large_p2_min = params.special_q_max;
+
+		while (1) {
 
 #ifdef HAVE_CUDA
-		if (large_p_max < ((uint32)1 << 24))
-			L.gpu_module = poly->gpu_module48;
-		else
-			L.gpu_module = poly->gpu_module64;
+			if (large_p1_max < ((uint32)1 << 24))
+				L.gpu_module = poly->gpu_module48;
+			else
+				L.gpu_module = poly->gpu_module64;
 
-		CUDA_TRY(cuModuleGetFunction(&L.gpu_kernel, 
-				L.gpu_module, "sieve_kernel"))
-		if (degree != 5)
-			CUDA_TRY(cuModuleGetGlobal(&L.gpu_p_array, 
-				NULL, L.gpu_module, "pbatch"))
+			CUDA_TRY(cuModuleGetFunction(&L.gpu_kernel, 
+					L.gpu_module, "sieve_kernel"))
+			if (degree != 5)
+				CUDA_TRY(cuModuleGetGlobal(&L.gpu_p_array, 
+					NULL, L.gpu_module, "pbatch"))
 #endif
 
-		if (degree != 5) {
-			done = sieve_lattice_deg46_64(obj, &L,
+			if (degree != 5) {
+				done = sieve_lattice_deg46_64(obj, &L,
 					&sieve_special_q,
 					&sieve_large_p1, &sieve_large_p2,
 					special_q_min2, special_q_max2,
-					large_p_min, large_p_max);
-		}
-		else { /* degree 5 */
-			done = sieve_lattice_deg5_64(obj, &L,
+					large_p1_min, large_p1_max,
+					large_p2_min, large_p2_max);
+			}
+			else { /* degree 5 */
+				done = sieve_lattice_deg5_64(obj, &L,
 					&sieve_special_q,
 					&sieve_large_p1, &sieve_large_p2,
 					special_q_min2, special_q_max2,
-					large_p_min, large_p_max);
+					large_p1_min, large_p1_max,
+					large_p2_min, large_p2_max);
+			}
+
+			if (done)
+				goto finished;
+
+			if (large_p1_max == MAX_P ||
+			    large_p2_min == params.special_q_max)
+				break;
+
+			large_p1_min = large_p1_max + 1;
+			if (large_p1_min < MAX_P / p_scale)
+				large_p1_max = large_p1_min * p_scale;
+			else
+				large_p1_max = MAX_P;
+
+			large_p2_max = large_p2_min - 1;
+			if (params.special_q_max <= large_p2_max / p_scale)
+				large_p2_min = large_p2_max / p_scale;
+			else
+				large_p2_min = params.special_q_max;
 		}
 
-		if (done)
+		if (special_q_max == special_q_max2)
 			break;
 
 		special_q_min *= p_scale;
 	}
 
+finished:
 	sieve_fb_free(&sieve_special_q);
 	sieve_fb_free(&sieve_large_p1);
 	sieve_fb_free(&sieve_large_p2);

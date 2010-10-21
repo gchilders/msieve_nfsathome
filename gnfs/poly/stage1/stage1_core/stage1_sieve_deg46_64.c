@@ -179,10 +179,11 @@ sieve_lattice_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 		sieve_fb_t *sieve_special_q,
 		sieve_fb_t *sieve_large_p1, sieve_fb_t *sieve_large_p2,
 		uint32 special_q_min, uint32 special_q_max,
-		uint32 large_p_min, uint32 large_p_max)
+		uint32 large_p1_min, uint32 large_p1_max,
+		uint32 large_p2_min, uint32 large_p2_max)
 {
 	uint32 i;
-	uint32 min_large_p, min_large_q, min_special_q;
+	uint32 min_large_p2, min_large_p1, min_special_q;
 	uint32 quit = 0;
 	p_soa_var_t * p_array;
 	p_soa_var_t * q_array;
@@ -193,38 +194,39 @@ sieve_lattice_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 	q_array = L->q_array = (p_soa_var_t *)xmalloc(
 					sizeof(p_soa_var_t));
 
-	printf("------- %u-%u %u-%u\n",
+	printf("------- %u-%u %u-%u %u-%u\n",
 			special_q_min, special_q_max,
-			large_p_min, large_p_max);
+			large_p2_min, large_p2_max,
+			large_p1_min, large_p1_max);
 
-	min_large_q = large_p_min;
-	sieve_fb_reset(sieve_large_p1, (uint64)large_p_min, 
-			(uint64)large_p_max, 4, MAX_ROOTS);
+	min_large_q = large_p1_min;
+	sieve_fb_reset(sieve_large_p1, (uint64)large_p1_min, 
+			(uint64)large_p1_max, 4, MAX_ROOTS);
 
-	while (min_large_q < large_p_max) {
+	while (min_large_p1 < large_p1_max) {
 
 		L->fill_which_array = q_array;
 		p_soa_var_reset(q_array);
 		for (i = 0; i < HOST_BATCH_SIZE && 
-				min_large_q != (uint32)P_SEARCH_DONE; i++) {
-			min_large_q = sieve_fb_next(sieve_large_p1, L->poly,
+				min_large_p1 != (uint32)P_SEARCH_DONE; i++) {
+			min_large_p1 = sieve_fb_next(sieve_large_p1, L->poly,
 						store_p_soa, L);
 		}
 		if (q_array->num_p == 0)
 			goto finished;
 
-		min_large_p = large_p_min;
+		min_large_p2 = large_p2_min;
 		sieve_fb_reset(sieve_large_p2, 
-				(uint64)large_p_min, (uint64)large_p_max,
+				(uint64)large_p2_min, (uint64)large_p2_max,
 				4, MAX_ROOTS);
 
-		while (min_large_p < large_p_max) {
+		while (min_large_p2 < large_p2_max) {
 
 			L->fill_which_array = p_array;
 			p_soa_var_reset(p_array);
 			for (i = 0; i < HOST_BATCH_SIZE && 
-				    min_large_p != (uint32)P_SEARCH_DONE; i++) {
-				min_large_p = sieve_fb_next(sieve_large_p2, L->poly,
+				   min_large_p2 != (uint32)P_SEARCH_DONE; i++) {
+				min_large_p2 = sieve_fb_next(sieve_large_p2, L->poly,
 							store_p_soa, L);
 			}
 			if (p_array->num_p == 0)

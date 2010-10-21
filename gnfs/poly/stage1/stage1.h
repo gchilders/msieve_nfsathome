@@ -246,14 +246,16 @@ sieve_lattice_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 		sieve_fb_t *sieve_special_q, 
 		sieve_fb_t *sieve_large_p1, sieve_fb_t *sieve_large_p2, 
 		uint32 special_q_min, uint32 special_q_max, 
-		uint32 large_p_min, uint32 large_p_max);
+		uint32 large_p1_min, uint32 large_p1_max,
+		uint32 large_p2_min, uint32 large_p2_max);
 
 uint32
 sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_special_q,
 		sieve_fb_t *sieve_large_p1, sieve_fb_t *sieve_large_p2,
 		uint32 special_q_min, uint32 special_q_max,
-		uint32 large_p_min, uint32 large_p_max);
+		uint32 large_p1_min, uint32 large_p1_max,
+		uint32 large_p2_min, uint32 large_p2_max);
 
 #if 0
 uint32
