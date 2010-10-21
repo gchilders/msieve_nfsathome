@@ -199,7 +199,7 @@ sieve_lattice_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 			large_p2_min, large_p2_max,
 			large_p1_min, large_p1_max);
 
-	min_large_q = large_p1_min;
+	min_large_p1 = large_p1_min;
 	sieve_fb_reset(sieve_large_p1, (uint64)large_p1_min, 
 			(uint64)large_p1_max, 4, MAX_ROOTS);
 
