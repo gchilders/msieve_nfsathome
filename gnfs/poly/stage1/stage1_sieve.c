@@ -32,12 +32,12 @@ typedef struct {
 
 static const sieve_fb_param_t sieve_fb_params[] = {
 
-	{ 40, 1.3,    1,       7,     2500},
-	{ 48, 1.2,    1,       7,     7500},
-	{ 56, 1.1,   25,     350,    35000},
-	{ 64, 1.1,  100,   75000,   250000},
-	{ 72, 1.1,  500,  750000,  2500000},
-	{ 80, 1.1, 2500, 5000000, 25000000},
+	{ 40, 1.3,    1,       1,        1},
+	{ 48, 1.2,    1,       1,      500},
+	{ 56, 1.1,   25,     500,   100000},
+	{ 64, 1.1,  100,  100000,  1000000},
+	{ 72, 1.1,  500,  750000,  7500000},
+	{ 80, 1.1, 2500, 5000000, 50000000},
 };
 
 #define NUM_SIEVE_FB_PARAMS (sizeof(sieve_fb_params) / \
@@ -241,7 +241,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 
 		special_q_min2 = special_q_min;
 		if (special_q_min2 <= special_q_max / p_scale)
-			special_q_max2 = special_q_min2 * p_scale - 1;
+			special_q_max2 = special_q_min2 * p_scale;
 		else
 			special_q_max2 = special_q_max;
 
@@ -312,7 +312,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		if (special_q_max == special_q_max2)
 			break;
 
-		special_q_min *= p_scale;
+		special_q_min = special_q_max2 + 1;
 	}
 
 finished:
