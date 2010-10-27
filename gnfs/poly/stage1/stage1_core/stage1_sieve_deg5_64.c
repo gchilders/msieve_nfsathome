@@ -201,9 +201,9 @@ create_special_q_lattice(lattice_fb_t *L, uint32 which_special_q)
 			p_array->roots[j][i] = res;
 		}
 
-		p_array->lattice_size[i] = (uint32)
-			(2 * L->poly->batch[num_poly - 1].sieve_size /
-					((double)special_q2 * p2));
+		p_array->lattice_size[i] = MIN((uint32)(-1),
+			(2 * L->poly->batch[num_poly / 2].sieve_size /
+					((double)special_q2 * p2)));
 	}
 
 	for (i = 0; i < q_array->num_p; i++) {
@@ -256,11 +256,11 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 			large_p2_min, large_p2_max,
 			large_p1_min, large_p1_max);
 
-	if (2 * L->poly->batch[num_poly - 1].sieve_size /
+	if (2 * L->poly->batch[num_poly / 2].sieve_size /
 				((double)large_p2_min * large_p2_min
-					* special_q_min * special_q_min)
-			> (uint32)(-1))
-		goto finished;
+				 * special_q_min * special_q_min)
+							> (uint32)(-1))
+		logprintf(obj, "warning: sieve_size too large\n");
 
 	min_large_p1 = large_p1_min;
 	sieve_fb_reset(sieve_large_p1, (uint64)large_p1_min, 
@@ -301,9 +301,10 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 				for (i = 0; i < p_array->num_p; i++) {
 					uint32 p = p_array->p[i];
 
-					p_array->lattice_size[i] = (uint32)
-						(2 * L->poly->batch[num_poly - 
-						1].sieve_size / ((double)p * p));
+					p_array->lattice_size[i] = MIN(
+					    (uint32)(-1),
+					    (2 * L->poly->batch[num_poly / 
+					     2].sieve_size / ((double)p * p)));
 				}
 
 				for (j = 0; j < num_poly; j++) {
