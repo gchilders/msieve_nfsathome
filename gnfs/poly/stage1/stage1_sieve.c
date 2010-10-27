@@ -22,9 +22,12 @@ $Id$
 #define MAX_P_BITS 32
 #define MAX_P (((uint64)1 << MAX_P_BITS) - 1)
 
+#define MIN_SPECIAL_Q 17
+
 typedef struct {
 	uint32 bits; /* in leading rational coeff */
 	double p_scale;
+	uint32 max_diverge;
 	uint32 num_pieces; /* for randomization */
 	uint32 special_q_min;
 	uint32 special_q_max;
@@ -32,85 +35,16 @@ typedef struct {
 
 static const sieve_fb_param_t sieve_fb_params[] = {
 
-	{ 40, 1.3,    1,       1,        1},
-	{ 48, 1.2,    1,       1,      500},
-	{ 56, 1.1,   25,     500,   100000},
-	{ 64, 1.1,  100,  100000,  1000000},
-	{ 72, 1.1,  500,  750000,  7500000},
-	{ 80, 1.1, 2500, 5000000, 50000000},
+	{ 40, 1.3, 100,    1,       1,        1},
+	{ 48, 1.3,  25,    1,       1,     1500},
+	{ 56, 1.2,  10,   25,    1000,   250000},
+	{ 64, 1.2,   5,  100,  150000,  1500000},
+	{ 72, 1.1,   5,  500,  750000,  7500000},
+	{ 80, 1.1,   5, 2500, 5000000, 50000000},
 };
 
 #define NUM_SIEVE_FB_PARAMS (sizeof(sieve_fb_params) / \
 				sizeof(sieve_fb_params[0]))
-
-/*------------------------------------------------------------------------*/
-void
-handle_collision(poly_search_t *poly, uint32 which_poly,
-		uint32 p1, uint32 p2, uint32 special_q,
-		uint64 special_q_root, uint64 res)
-{
-	curr_poly_t *c = poly->batch + which_poly;
-
-	/* p1, p2, and special_q should always be pairwise coprime
-         * when we get here, but let's be defensive and check anyway. */
-	if (mp_gcd_1(special_q, p1) != 1)
-		return;
-	if (mp_gcd_1(special_q, p2) != 1)
-		return;
-	if (mp_gcd_1(p1, p2) != 1)
-		return;
-
-	mpz_set_ui(poly->p, (unsigned long)p1);
-	mpz_mul_ui(poly->p, poly->p, (unsigned long)p2);
-	mpz_mul_ui(poly->p, poly->p, (unsigned long)special_q);
-
-	mpz_gcd(poly->tmp3, poly->p, c->high_coeff);
-	if (mpz_cmp_ui(poly->tmp3, 1))
-		return;
-
-	uint64_2gmp(special_q_root, poly->tmp1);
-	uint64_2gmp(res, poly->tmp2);
-	mpz_set_ui(poly->tmp3, (unsigned long)special_q);
-
-	mpz_mul(poly->tmp3, poly->tmp3, poly->tmp3);
-	mpz_addmul(poly->tmp1, poly->tmp2, poly->tmp3);
-	mpz_sub(poly->tmp1, poly->tmp1, c->mp_sieve_size);
-	mpz_add(poly->m0, c->trans_m0, poly->tmp1);
-
-	/* check */
-	mpz_pow_ui(poly->tmp1, poly->m0, (mp_limb_t)poly->degree);
-	mpz_mul(poly->tmp2, poly->p, poly->p);
-	mpz_sub(poly->tmp1, c->trans_N, poly->tmp1);
-	mpz_tdiv_r(poly->tmp3, poly->tmp1, poly->tmp2);
-	if (mpz_cmp_ui(poly->tmp3, (mp_limb_t)0)) {
-		gmp_printf("poly %u %u %u %u %Zd\n",
-				which_poly, special_q, p1, p2, poly->m0);
-		printf("crap\n");
-		return;
-	}
-
-	mpz_mul_ui(poly->tmp1, c->high_coeff, (mp_limb_t)poly->degree);
-	mpz_tdiv_qr(poly->m0, poly->tmp2, poly->m0, poly->tmp1);
-	mpz_invert(poly->tmp3, poly->tmp1, poly->p);
-
-	mpz_sub(poly->tmp4, poly->tmp3, poly->p);
-	if (mpz_cmpabs(poly->tmp3, poly->tmp4) < 0)
-		mpz_set(poly->tmp4, poly->tmp3);
-
-	mpz_sub(poly->tmp5, poly->tmp2, poly->tmp1);
-	if (mpz_cmpabs(poly->tmp2, poly->tmp5) > 0)
-		mpz_add_ui(poly->m0, poly->m0, (mp_limb_t)1);
-	else
-		mpz_set(poly->tmp5, poly->tmp2);
-
-	mpz_addmul(poly->m0, poly->tmp4, poly->tmp5);
-
-	gmp_printf("poly %2u %u %u %u %Zd\n",
-			which_poly, special_q, p1, p2, poly->m0);
-
-	poly->callback(c->high_coeff, poly->p, poly->m0,
-			c->coeff_max, poly->callback_data);
-}
 
 /*------------------------------------------------------------------------*/
 static void
@@ -153,6 +87,8 @@ get_poly_params(double bits, sieve_fb_param_t *params)
 	params->bits = bits;
 	params->p_scale = (low->p_scale * k +
 				high->p_scale * j) / dist;
+	params->max_diverge = (low->max_diverge * k +
+				high->max_diverge * j) / dist;
 	params->num_pieces = (low->num_pieces * k +
 				high->num_pieces * j) / dist;
 
@@ -194,7 +130,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 	num_pieces = params.num_pieces;
 	special_q_min = params.special_q_min;
 	special_q_max = params.special_q_max;
-	large_fb_max = MIN(250000, special_q_min);
+	large_fb_max = MIN(500000, special_q_min);
 
 	sieve_fb_init(&sieve_special_q, poly,
 			0, 0, /* prime special_q */
@@ -239,11 +175,18 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		uint32 large_p1_min, large_p1_max;
 		uint32 large_p2_min, large_p2_max;
 
-		special_q_min2 = special_q_min;
-		if (special_q_min2 <= special_q_max / p_scale)
-			special_q_max2 = special_q_min2 * p_scale;
-		else
-			special_q_max2 = special_q_max;
+		if (special_q_min <= 1) {
+			special_q_min2 = special_q_max2 = 1;
+		}
+		else {
+			special_q_min2 = MAX(special_q_min, MIN_SPECIAL_Q);
+			if (special_q_min2 > special_q_max)
+				break;
+			else if (special_q_min2 <= special_q_max / p_scale)
+				special_q_max2 = special_q_min2 * p_scale;
+			else
+				special_q_max2 = special_q_max;
+		}
 
 		large_p1_min = sqrt(middle_poly->p_size_max / special_q_max2);
 		if (large_p1_min < MAX_P / p_scale)
@@ -293,7 +236,8 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 				goto finished;
 
 			if (large_p1_max == MAX_P ||
-			    large_p2_min == params.special_q_max)
+			    large_p2_min == params.special_q_max ||
+			    large_p1_max / large_p2_min > params.max_diverge)
 				break;
 
 			large_p1_min = large_p1_max + 1;
@@ -308,9 +252,6 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 			else
 				large_p2_min = params.special_q_max;
 		}
-
-		if (special_q_max == special_q_max2)
-			break;
 
 		special_q_min = special_q_max2 + 1;
 	}

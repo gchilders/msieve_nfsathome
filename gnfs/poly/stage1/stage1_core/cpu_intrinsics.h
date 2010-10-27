@@ -188,6 +188,67 @@ sub128(uint128 a, uint128 b)
 	return res;
 }
 
+/*----------------- Multiplication ----------------------------------*/
+
+static INLINE uint96
+mul48(uint64 a, uint64 b)
+{
+	/* a,b < 2^48 */
+
+	uint32 a0 = (uint32)a;
+	uint32 a1 = (uint32)(a >> 32);
+	uint32 b0 = (uint32)b;
+	uint32 b1 = (uint32)(b >> 32);
+	uint64 acc;
+	uint32 prod_lo, prod_hi;
+	uint96 res;
+
+	PROD32(prod_hi, prod_lo, a0, b0);
+	res.w[0] = prod_lo;
+	acc = (uint64)prod_hi;
+
+	PROD32(prod_hi, prod_lo, a0, b1);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+
+	PROD32(prod_hi, prod_lo, a1, b0);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	res.w[1] = (uint32)acc;
+	res.w[2] = (uint32)(acc >> 32) + a1 * b1;
+
+	return res;
+}
+
+static INLINE uint128
+mul64(uint64 a, uint64 b)
+{
+	uint32 a0 = (uint32)a;
+	uint32 a1 = (uint32)(a >> 32);
+	uint32 b0 = (uint32)b;
+	uint32 b1 = (uint32)(b >> 32);
+	uint64 acc;
+	uint32 prod_lo, prod_hi;
+	uint128 res;
+
+	PROD32(prod_hi, prod_lo, a0, b0);
+	res.w[0] = prod_lo;
+	acc = (uint64)prod_hi;
+
+	PROD32(prod_hi, prod_lo, a0, b1);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+
+	PROD32(prod_hi, prod_lo, a1, b0);
+	acc += prod_lo;
+	res.w[1] = (uint32)acc;
+	acc = (acc >> 32) + prod_hi;
+
+	PROD32(prod_hi, prod_lo, a1, b1);
+	acc += (uint64)prod_hi << 32 | prod_lo;
+	res.w[2] = (uint32)acc;
+	res.w[3] = (uint32)(acc >> 32);
+
+	return res;
+}
+
 /*----------------- Squaring ----------------------------------------*/
 
 static INLINE uint64 

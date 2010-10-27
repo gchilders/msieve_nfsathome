@@ -97,9 +97,9 @@ typedef struct {
 	gpu_info_t *gpu_info; 
 	CUmodule gpu_module48; 
 	CUmodule gpu_module64; 
-	CUmodule gpu_module72; 
-	CUmodule gpu_module96; 
-	CUmodule gpu_module128; 
+	//CUmodule gpu_module72; 
+	//CUmodule gpu_module96; 
+	//CUmodule gpu_module128; 
 #endif
 
 	stage1_callback_t callback;
@@ -284,9 +284,9 @@ sieve_lattice_deg6_128(msieve_obj *obj, lattice_fb_t *L,
 #endif
 
 void
-handle_collision(poly_search_t *poly, uint32 which_poly,
-			uint32 p1, uint32 p2, uint32 special_q,
-			uint64 special_q_root, uint64 res);
+handle_collision_specialq(poly_search_t *poly, uint32 which_poly,
+				uint32 p1, uint32 p2, uint32 special_q,
+				uint64 special_q_root, uint128 res);
 
 /* main search routines */
 

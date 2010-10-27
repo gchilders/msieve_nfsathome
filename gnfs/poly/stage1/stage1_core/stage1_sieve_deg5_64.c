@@ -87,59 +87,13 @@ batch_invert(uint32 *plist, uint32 num_p, uint64 *invlist,
 /*------------------------------------------------------------------------*/
 static uint32
 sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
-			uint32 which_special_q)
+			uint32 special_q, uint64 *special_q_roots)
 {
 	uint32 i, j, k;
 	p_soa_var_t * p_array = (p_soa_var_t *)L->p_array;
 	p_soa_var_t * q_array = (p_soa_var_t *)L->q_array;
-	p_soa_var_t * special_q_array = (p_soa_var_t *)L->special_q_array;
 	uint32 num_poly = L->poly->num_poly;
 	uint32 num_p = p_array->num_p;
-
-	uint32 specialq = special_q_array->p[which_special_q];
-	uint64 specialq2 = (uint64)specialq * specialq;
-
-	for (i = 0; i < p_array->num_p; i++) {
-		uint32 p = p_array->p[i];
-		uint64 p2 = (uint64)p * p;
-		uint32 p2_w = montmul32_w((uint32)p2);
-		uint64 p2_r = montmul64_r(p2);
-		uint64 inv = mp_modinv_2(specialq2, p2);
-
-		inv = montmul64(inv, p2_r, p2, p2_w);
-		for (j = 0; j < num_poly; j++) {
-			uint64 proot = p_array->start_roots[j][i];
-			uint64 sqroot = special_q_array->start_roots[j][which_special_q];
-
-			uint64 res = montmul64(modsub64(proot,
-						sqroot, p2),
-						inv, p2, p2_w);
-			p_array->roots[j][i] = res;
-		}
-
-		p_array->lattice_size[i] = 2 * L->poly->batch[
-					num_poly/2].sieve_size /
-					((double)specialq2 * p2);
-	}
-
-	for (i = 0; i < q_array->num_p; i++) {
-		uint32 p = q_array->p[i];
-		uint64 p2 = (uint64)p * p;
-		uint32 p2_w = montmul32_w((uint32)p2);
-		uint64 p2_r = montmul64_r(p2);
-		uint64 inv = mp_modinv_2(specialq2, p2);
-
-		inv = montmul64(inv, p2_r, p2, p2_w);
-		for (j = 0; j < num_poly; j++) {
-			uint64 proot = q_array->start_roots[j][i];
-			uint64 sqroot = special_q_array->start_roots[j][which_special_q];
-
-			uint64 res = montmul64(modsub64(proot,
-						sqroot, p2),
-						inv, p2, p2_w);
-			q_array->roots[j][i] = res;
-		}
-	}
 
 	for (i = 0; i < q_array->num_p; i++) {
 
@@ -172,19 +126,30 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 
 				for (k = 0; k < num_poly; k++) {
 
-					uint64 qroot, proot, res;
+					uint64 qroot, proot, offset;
 
 					qroot = q_array->roots[k][i];
 					proot = p_array->roots[k][num_p_done+j];
-					res = montmul64(pinv, 
+					offset = montmul64(pinv, 
 							modsub64(qroot, proot,
 							q2), q2, q2_w);
 
-					if (res < lattice_size) {
-						handle_collision(L->poly, k,
-								p, q, specialq,
-								special_q_array->start_roots[k][which_special_q],
-								proot + res * p * p);
+					if (offset < lattice_size) {
+						uint64 p2 = (uint64)p * p;
+						uint128 res, proot128;
+
+						proot128.w[0] = (uint32)proot;
+						proot128.w[1] = (uint32)(proot >> 32);
+						proot128.w[2] = 0;
+						proot128.w[3] = 0;
+
+						res = add128(proot128, mul64(offset, p2));
+
+						handle_collision_specialq(
+							L->poly, k,
+							p, q, special_q,
+							special_q_roots[k],
+							res);
 					}
 				}
 			}
@@ -205,6 +170,64 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 }
 
 /*------------------------------------------------------------------------*/
+static void
+create_special_q_lattice(lattice_fb_t *L, uint32 which_special_q)
+{
+	uint32 i, j;
+	p_soa_var_t * p_array = (p_soa_var_t *)L->p_array;
+	p_soa_var_t * q_array = (p_soa_var_t *)L->q_array;
+	p_soa_var_t * special_q_array = (p_soa_var_t *)L->special_q_array;
+	uint32 num_poly = L->poly->num_poly;
+
+	uint32 special_q = special_q_array->p[which_special_q];
+	uint64 special_q2 = (uint64)special_q * special_q;
+
+	for (i = 0; i < p_array->num_p; i++) {
+		uint32 p = p_array->p[i];
+		uint64 p2 = (uint64)p * p;
+		uint32 p2_w = montmul32_w((uint32)p2);
+		uint64 p2_r = montmul64_r(p2);
+		uint64 inv = mp_modinv_2(special_q2, p2);
+
+		inv = montmul64(inv, p2_r, p2, p2_w);
+		for (j = 0; j < num_poly; j++) {
+			uint64 proot = p_array->start_roots[j][i];
+			uint64 sqroot =
+			    special_q_array->start_roots[j][which_special_q];
+
+			uint64 res = montmul64(modsub64(proot,
+						sqroot, p2),
+						inv, p2, p2_w);
+			p_array->roots[j][i] = res;
+		}
+
+		p_array->lattice_size[i] = (uint32)
+			(2 * L->poly->batch[num_poly - 1].sieve_size /
+					((double)special_q2 * p2));
+	}
+
+	for (i = 0; i < q_array->num_p; i++) {
+		uint32 p = q_array->p[i];
+		uint64 p2 = (uint64)p * p;
+		uint32 p2_w = montmul32_w((uint32)p2);
+		uint64 p2_r = montmul64_r(p2);
+		uint64 inv = mp_modinv_2(special_q2, p2);
+
+		inv = montmul64(inv, p2_r, p2, p2_w);
+		for (j = 0; j < num_poly; j++) {
+			uint64 proot = q_array->start_roots[j][i];
+			uint64 sqroot =
+			    special_q_array->start_roots[j][which_special_q];
+
+			uint64 res = montmul64(modsub64(proot,
+						sqroot, p2),
+						inv, p2, p2_w);
+			q_array->roots[j][i] = res;
+		}
+	}
+}
+
+/*------------------------------------------------------------------------*/
 uint32
 sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_special_q,
@@ -213,12 +236,13 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 		uint32 large_p1_min, uint32 large_p1_max,
 		uint32 large_p2_min, uint32 large_p2_max)
 {
-	uint32 i;
+	uint32 i, j;
 	uint32 min_large_p2, min_large_p1, min_special_q;
 	uint32 quit = 0;
 	p_soa_var_t * p_array;
 	p_soa_var_t * q_array;
 	p_soa_var_t * special_q_array;
+	uint32 num_poly = L->poly->num_poly;
 
 	p_array = L->p_array = (p_soa_var_t *)xmalloc(
 					sizeof(p_soa_var_t));
@@ -231,6 +255,12 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 			special_q_min, special_q_max,
 			large_p2_min, large_p2_max,
 			large_p1_min, large_p1_max);
+
+	if (2 * L->poly->batch[num_poly - 1].sieve_size /
+				((double)large_p2_min * large_p2_min
+					* special_q_min * special_q_min)
+			> (uint32)(-1))
+		goto finished;
 
 	min_large_p1 = large_p1_min;
 	sieve_fb_reset(sieve_large_p1, (uint64)large_p1_min, 
@@ -254,6 +284,7 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 				1, 1);
 
 		while (min_large_p2 < large_p2_max) {
+			uint64 sqroots[POLY_BATCH_SIZE];
 
 			L->fill_which_array = p_array;
 			p_soa_var_reset(p_array);
@@ -265,9 +296,32 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 			if (p_array->num_p == 0)
 				goto finished;
 
+			if (special_q_min <= 1) { /* handle special_q==1 case */
 
+				for (i = 0; i < p_array->num_p; i++) {
+					uint32 p = p_array->p[i];
 
+					p_array->lattice_size[i] = (uint32)
+						(2 * L->poly->batch[num_poly - 
+						1].sieve_size / ((double)p * p));
+				}
 
+				for (j = 0; j < num_poly; j++) {
+					memcpy(p_array->roots[j],
+					       p_array->start_roots[j],
+					       p_array->num_p * sizeof(uint64));
+					memcpy(q_array->roots[j],
+					       q_array->start_roots[j],
+					       q_array->num_p * sizeof(uint64));
+				}
+				memset(sqroots, 0, sizeof(sqroots));
+
+				if (sieve_lattice_batch(obj, L,
+							1, sqroots)) {
+					quit = 1;
+					goto finished;
+				}
+			}
 
 			min_special_q = special_q_min;
 			sieve_fb_reset(sieve_special_q,
@@ -280,13 +334,22 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 				p_soa_var_reset(special_q_array);
 				for (i = 0; i < HOST_BATCH_SIZE &&
 					    min_special_q != (uint32)P_SEARCH_DONE; i++) {
-					min_special_q = sieve_fb_next(sieve_special_q, L->poly, store_p_soa, L);
+					min_special_q = sieve_fb_next(sieve_special_q,
+								L->poly, store_p_soa, L);
 				}
-				if (special_q_array->num_p == 0)
+				if (special_q_array->num_p == 0 && special_q_min > 1)
 					goto finished;
 
 				for (i = 0; i < special_q_array->num_p; i++) {
-					if (sieve_lattice_batch(obj, L, i)) {
+					for (j = 0; j < num_poly; j++)
+						sqroots[j] =
+						    special_q_array->start_roots[j][i];
+
+					create_special_q_lattice(L, i);
+
+					if (sieve_lattice_batch(obj, L,
+							special_q_array->p[i],
+							sqroots)) {
 						quit = 1;
 						goto finished;
 					}
@@ -298,6 +361,7 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 finished:
 	free(p_array);
 	free(q_array);
+	free(special_q_array);
 	return quit;
 }
 

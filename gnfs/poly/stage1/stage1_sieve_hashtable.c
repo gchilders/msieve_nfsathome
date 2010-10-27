@@ -138,63 +138,6 @@ store_p_packed(uint64 p, uint32 num_roots, uint32 which_poly,
 
 /*------------------------------------------------------------------------*/
 static void
-handle_specialq_collision(poly_search_t *poly,
-		uint32 p1, uint32 p2, uint32 special_q,
-		uint64 special_q_root, uint64 res)
-{
-	curr_poly_t *c = poly->batch + 0;
-
-	if (mp_gcd_1(p1, p2) != 1)
-		return;
-
-	mpz_set_ui(poly->p, (unsigned long)p1);
-	mpz_mul_ui(poly->p, poly->p, (unsigned long)p2);
-	mpz_mul_ui(poly->p, poly->p, (unsigned long)special_q);
-
-	uint64_2gmp(special_q_root, poly->tmp1);
-	uint64_2gmp(res, poly->tmp2);
-	mpz_set_ui(poly->tmp3, (unsigned long)special_q);
-
-	mpz_mul(poly->tmp3, poly->tmp3, poly->tmp3);
-	mpz_addmul(poly->tmp1, poly->tmp2, poly->tmp3);
-	mpz_sub(poly->tmp1, poly->tmp1, c->mp_sieve_size);
-	mpz_add(poly->m0, c->trans_m0, poly->tmp1);
-
-	/* check */
-	mpz_pow_ui(poly->tmp1, poly->m0, (mp_limb_t)poly->degree);
-	mpz_mul(poly->tmp2, poly->p, poly->p);
-	mpz_sub(poly->tmp1, c->trans_N, poly->tmp1);
-	mpz_tdiv_r(poly->tmp3, poly->tmp1, poly->tmp2);
-	if (mpz_cmp_ui(poly->tmp3, (mp_limb_t)0)) {
-		gmp_printf("hit %u %u %u %Zd\n", special_q, p1, p2, poly->m0);
-		printf("crap\n");
-		return;
-	}
-
-	mpz_mul_ui(poly->tmp1, c->high_coeff, (mp_limb_t)poly->degree);
-	mpz_tdiv_qr(poly->m0, poly->tmp2, poly->m0, poly->tmp1);
-	mpz_invert(poly->tmp3, poly->tmp1, poly->p);
-
-	mpz_sub(poly->tmp4, poly->tmp3, poly->p);
-	if (mpz_cmpabs(poly->tmp3, poly->tmp4) < 0)
-		mpz_set(poly->tmp4, poly->tmp3);
-
-	mpz_sub(poly->tmp5, poly->tmp2, poly->tmp1);
-	if (mpz_cmpabs(poly->tmp2, poly->tmp5) > 0)
-		mpz_add_ui(poly->m0, poly->m0, (mp_limb_t)1);
-	else
-		mpz_set(poly->tmp5, poly->tmp2);
-
-	mpz_addmul(poly->m0, poly->tmp4, poly->tmp5);
-
-	gmp_printf("hit %u %u %u %Zd\n", special_q, p1, p2, poly->m0);
-
-	poly->callback(c->high_coeff, poly->p, poly->m0, 
-			c->coeff_max, poly->callback_data);
-}
-
-/*------------------------------------------------------------------------*/
-static void
 handle_special_q(hashtable_t *hashtable, 
 		p_packed_var_t *hash_array, lattice_fb_t *L, 
 		uint32 special_q, uint64 special_q_root,
@@ -259,12 +202,19 @@ handle_special_q(hashtable_t *hashtable,
 							NULL, &already_seen);
 
 					if (already_seen) {
-						handle_specialq_collision(
-								L->poly,
+						uint128 res;
+
+						res.w[0] = (uint32)offset;
+						res.w[1] = (uint32)(offset >> 32);
+						res.w[2] = 0;
+						res.w[3] = 0;
+
+						handle_collision_specialq(
+								L->poly, 0,
 								tmp->p, hit->p, 
 								special_q,
 								special_q_root,
-							       	offset);
+							       	res);
 					}
 					else {
 						hit->p = tmp->p;
