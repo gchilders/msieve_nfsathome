@@ -307,7 +307,6 @@ sieve_fb_reset(sieve_fb_t *s, uint64 p_min, uint64 p_max,
 
 	if (s->fb_only == 0 &&
 	    p_min < P_PRIME_LIMIT &&
-	    p_max < P_PRIME_LIMIT &&
 	    s->degree >= num_roots_min) {
 		uint32 last_p;
 
@@ -320,7 +319,7 @@ sieve_fb_reset(sieve_fb_t *s, uint64 p_min, uint64 p_max,
 			s->avail_algos |= ALGO_PRIME;
 
 			init_prime_sieve(&s->p_prime, MAX(p_min, last_p + 1),
-					 (uint32)p_max);
+					 MIN(p_max, P_PRIME_LIMIT));
 		}
 	}
 
@@ -739,7 +738,7 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 		else if (s->avail_algos & ALGO_PRIME) {
 			p = get_next_prime(&s->p_prime);
 
-			if (p >= s->p_max) {
+			if (p >= s->p_max || p >= P_PRIME_LIMIT) {
 				s->avail_algos &= ~ALGO_PRIME;
 
 				continue;
