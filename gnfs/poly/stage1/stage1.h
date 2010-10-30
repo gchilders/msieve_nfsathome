@@ -97,9 +97,6 @@ typedef struct {
 	gpu_info_t *gpu_info; 
 	CUmodule gpu_module48; 
 	CUmodule gpu_module64; 
-	//CUmodule gpu_module72; 
-	//CUmodule gpu_module96; 
-	//CUmodule gpu_module128; 
 #endif
 
 	stage1_callback_t callback;
@@ -257,32 +254,6 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 		uint32 large_p1_min, uint32 large_p1_max,
 		uint32 large_p2_min, uint32 large_p2_max);
 
-#if 0
-uint32
-sieve_lattice_deg5_96(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
-		uint64 small_p_min, uint64 small_p_max, 
-		uint64 large_p_min, uint64 large_p_max);
-
-uint32
-sieve_lattice_deg5_128(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
-		uint64 small_p_min, uint64 small_p_max, 
-		uint64 large_p_min, uint64 large_p_max);
-
-uint32
-sieve_lattice_deg6_96(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
-		uint64 small_p_min, uint64 small_p_max, 
-		uint64 large_p_min, uint64 large_p_max);
-
-uint32
-sieve_lattice_deg6_128(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
-		uint64 small_p_min, uint64 small_p_max, 
-		uint64 large_p_min, uint64 large_p_max);
-#endif
-
 void
 handle_collision_specialq(poly_search_t *poly, uint32 which_poly,
 				uint32 p1, uint32 p2, uint32 special_q,
@@ -290,10 +261,13 @@ handle_collision_specialq(poly_search_t *poly, uint32 which_poly,
 
 /* main search routines */
 
-// original method (with special_q), GPU and CPU versions
+/* original method (with special_q), GPU and CPU versions */
+
 void sieve_lattice(msieve_obj *obj, poly_search_t *poly, 
 				uint32 deadline);
-// hashtable method (with special_q), CPU only
+
+/* hashtable method (with special_q), CPU only */
+
 void sieve_lattice_hashtable(msieve_obj *obj, poly_search_t *poly, 
 				uint32 deadline);
 
