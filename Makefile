@@ -173,6 +173,7 @@ NFS_HDR = \
 	gnfs/filter/filter.h \
 	gnfs/poly/poly.h \
 	gnfs/poly/poly_skew.h \
+	gnfs/poly/stage1/cpu_intrinsics.h \
 	gnfs/poly/stage1/stage1.h \
 	gnfs/poly/stage2/stage2.h \
 	gnfs/sieve/sieve.h \
@@ -184,8 +185,7 @@ NFS_GPU_HDR = \
 	gnfs/poly/stage1/stage1_core_gpu/stage1_core_deg46_64.h \
 	gnfs/poly/stage1/stage1_core_gpu/stage1_core_deg5_64.h \
 
-NFS_NOGPU_HDR = \
-	gnfs/poly/stage1/stage1_core/cpu_intrinsics.h
+NFS_NOGPU_HDR =
 
 NFS_SRCS = \
 	gnfs/poly/poly.c \
@@ -226,9 +226,7 @@ NFS_GPU_SRCS = \
 NFS_GPU_OBJS = $(NFS_GPU_SRCS:.c=.no)
 
 NFS_NOGPU_SRCS = \
-	gnfs/poly/stage1/stage1_core/stage1_sieve_deg46_64.c \
-	gnfs/poly/stage1/stage1_core/stage1_sieve_deg5_64.c \
-	gnfs/poly/stage1/stage1_sieve_hashtable.c
+	gnfs/poly/stage1/stage1_sieve_cpu.c
 
 NFS_NOGPU_OBJS = $(NFS_NOGPU_SRCS:.c=.no)
 

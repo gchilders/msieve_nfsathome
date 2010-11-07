@@ -13,7 +13,7 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include <stage1.h>
-#include <stage1_core/cpu_intrinsics.h>
+#include <cpu_intrinsics.h>
 #include "stage1_core_deg5_64.h"
 
 /*------------------------------------------------------------------------*/
@@ -231,7 +231,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 					res =
 					    add128(proot, mul64(f->offset, p2));
 
-					handle_collision_specialq(L->poly, 
+					handle_collision(L->poly, 
 						f->which_poly,
 						f->p, f->q,
 						special_q,

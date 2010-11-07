@@ -146,9 +146,9 @@ poly_search_free(poly_search_t *poly)
 
 /*------------------------------------------------------------------------*/
 void
-handle_collision_specialq(poly_search_t *poly, uint32 which_poly,
-				uint32 p1, uint32 p2, uint32 special_q,
-				uint64 special_q_root, uint128 res)
+handle_collision(poly_search_t *poly, uint32 which_poly,
+			uint32 p1, uint32 p2, uint32 special_q,
+			uint64 special_q_root, uint128 res)
 {
 	curr_poly_t *c = poly->batch + which_poly;
 
@@ -245,14 +245,7 @@ search_coeffs_core(msieve_obj *obj, poly_search_t *poly,
 		mpz_set_d(c->mp_sieve_size, c->sieve_size);
 	}
 
-#ifdef HAVE_CUDA
 	sieve_lattice(obj, poly, num_poly * deadline);
-#else
-	/* TODO: add logic to choose between using sieve_lattice()
-         * and sieve_lattice_hashtable() based on which is most
-         * likely to be fastest */
-	sieve_lattice_hashtable(obj, poly, num_poly * deadline);
-#endif
 }
 
 /*------------------------------------------------------------------------*/

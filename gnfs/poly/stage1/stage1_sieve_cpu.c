@@ -13,32 +13,7 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include <stage1.h>
-#include <stage1_core/cpu_intrinsics.h>
-
-typedef struct {
-	double bits; /* in leading rational coeff */
-	double p_scale;
-	uint32 num_pieces; /* for randomization */
-	uint32 specialq_max;
-	uint32 large_fb_max;
-} sieve_fb_param_t;
-
-static const sieve_fb_param_t sieve_fb_params[] = {
-
-	{ 40.0, 1.5,  1,   100,   2000},
-	{ 48.0, 1.3,  1,   200,   2000},
-	{ 56.0, 1.3,  1,  1000,   5000},
-	{ 64.0, 1.3,  1,  1000,   5000},
-	{ 72.0, 1.2,  1,  1000,   5000},
-	{ 80.0, 1.1,  1, 35000,  10000},
-	{ 88.0, 1.1,  1, 35000,  10000},
-	{ 96.0, 1.1,  1, 15000,  10000},
-	{116.0, 1.1,  1, 15000,  10000},
-	{128.0, 1.1,  1, 15000,  10000},
-};
-
-#define NUM_SIEVE_FB_PARAMS (sizeof(sieve_fb_params) / \
-				sizeof(sieve_fb_params[0]))
+#include <cpu_intrinsics.h>
 
 typedef struct {
 	uint64 offset;
@@ -153,27 +128,40 @@ handle_special_q(hashtable_t *hashtable,
 
 	tmp = hash_array->packed_array;
 
-	for (i = 0; i < num_entries; i++) {
-		uint64 p2 = tmp->p2;
-		uint32 num_roots = tmp->num_roots;
-		uint32 p2_w = tmp->mont_w;
-		uint64 qinv = inv_array[i];
+	if (special_q == 1) {
+		for (i = 0; i < num_entries; i++) {
+			uint32 num_roots = tmp->num_roots;
 
-		if (qinv == 0) {
-			for (j = 0; j < num_roots; j++)
-				tmp->roots[j].offset = (uint64)(-1);
+			for (j = 0; j < num_roots; j++) {
+				tmp->roots[j].offset =
+						tmp->roots[j].start_offset;
+			}
 			tmp = p_packed_next(tmp);
-			continue;
 		}
+	}
+	else {
+		for (i = 0; i < num_entries; i++) {
+			uint64 p2 = tmp->p2;
+			uint32 num_roots = tmp->num_roots;
+			uint32 p2_w = tmp->mont_w;
+			uint64 qinv = inv_array[i];
 
-		for (j = 0; j < num_roots; j++) {
-			uint64 proot = tmp->roots[j].start_offset;
-			tmp->roots[j].offset = montmul64(modsub64(proot, 
-							special_q_root, p2),
-						qinv, p2, p2_w);
+			if (qinv == 0) {
+				for (j = 0; j < num_roots; j++)
+					tmp->roots[j].offset = (uint64)(-1);
+				tmp = p_packed_next(tmp);
+				continue;
+			}
+
+			for (j = 0; j < num_roots; j++) {
+				uint64 proot = tmp->roots[j].start_offset;
+				tmp->roots[j].offset = montmul64(
+						modsub64(proot, special_q_root,
+						       	p2), qinv, p2, p2_w);
+			}
+
+			tmp = p_packed_next(tmp);
 		}
-
-		tmp = p_packed_next(tmp);
 	}
 
 	while (sieve_start < sieve_size) {
@@ -209,8 +197,7 @@ handle_special_q(hashtable_t *hashtable,
 						res.w[2] = 0;
 						res.w[3] = 0;
 
-						handle_collision_specialq(
-								L->poly, 0,
+						handle_collision(L->poly, 0,
 								tmp->p, hit->p, 
 								special_q,
 								special_q_root,
@@ -263,8 +250,8 @@ batch_invert(uint32 *qlist, uint32 num_q, uint64 *invlist,
 /*------------------------------------------------------------------------*/
 static void
 sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_small, sieve_fb_t *sieve_large, 
-		uint32 small_p_min, uint32 small_p_max, 
+		sieve_fb_t *sieve_special_q, sieve_fb_t *sieve_large, 
+		uint32 special_q_min, uint32 special_q_max, 
 		uint32 large_p_min, uint32 large_p_max)
 {
 	uint32 i, j;
@@ -272,24 +259,15 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	p_packed_var_t specialq_array;
 	p_packed_var_t hash_array;
 	hashtable_t hashtable;
-	uint64 *invtable;
 	uint32 num_p, num_q;
 	uint32 num_q_done;
 	uint64 block_size;
-
-	printf("------- %u-%u %u-%u\n",
-			small_p_min, small_p_max,
-			large_p_min, large_p_max);
+	uint64 *invtable = NULL;
 
 	p_packed_init(&specialq_array);
 	p_packed_init(&hash_array);
-
-	sieve_fb_reset(sieve_small, (uint64)small_p_min,
-			(uint64)small_p_max, 1, MAX_ROOTS);
-	while (sieve_fb_next(sieve_small, L->poly, 
-			store_p_packed, &specialq_array) != P_SEARCH_DONE) {
-		;
-	}
+	hashtable_init(&hashtable, 3, 2);
+	block_size = (uint64)large_p_min * large_p_min;
 
 	sieve_fb_reset(sieve_large, (uint64)large_p_min,
 			(uint64)large_p_max, 1, MAX_ROOTS);
@@ -299,20 +277,33 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	}
 
 	num_p = hash_array.num_p;
+#if 1
+	printf("aprogs: %u entries, %u roots\n", num_p, 
+					hash_array.num_roots);
+#endif
+	/* handle trivial lattice */
+	if (special_q_min == 1 && special_q_max == 1) {
+		handle_special_q(&hashtable, &hash_array, L, 
+				1, 0, block_size, NULL);
+		goto finished;
+	}
+
+	sieve_fb_reset(sieve_special_q, (uint64)special_q_min,
+			(uint64)special_q_max, 1, MAX_ROOTS);
+	while (sieve_fb_next(sieve_special_q, L->poly, 
+			store_p_packed, &specialq_array) != P_SEARCH_DONE) {
+		;
+	}
+
 	num_q = specialq_array.num_p;
 #if 1
 	printf("special q: %u entries, %u roots\n", num_q, 
 					specialq_array.num_roots);
-	printf("aprogs: %u entries, %u roots\n", num_p, 
-					hash_array.num_roots);
 #endif
-
-	hashtable_init(&hashtable, 3, 2);
 
 	invtable = (uint64 *)xmalloc(num_p * SPECIALQ_BATCH_SIZE * 
 					sizeof(uint64));
 	num_q_done = 0;
-	block_size = (uint64)large_p_min * large_p_min;
 	qptr = specialq_array.packed_array;
 
 	while (num_q_done < num_q) {
@@ -368,6 +359,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 		num_q_done += qbatch_size;
 	}
 
+finished:
 #if 1
 	printf("hashtable: %u entries, %5.2lf MB\n", 
 			hashtable_get_num(&hashtable),
@@ -379,123 +371,36 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	p_packed_free(&hash_array);
 }
 
-/*--------------------------------------------------------------------*/
-static void 
-get_poly_params(double bits, sieve_fb_param_t *params)
-{
-	uint32 i;
-	const sieve_fb_param_t *low, *high;
-	double j, k, dist;
-	double max_bits;
-
-	if (bits < sieve_fb_params[0].bits) {
-		*params = sieve_fb_params[0];
-		return;
-	}
-
-	max_bits = sieve_fb_params[NUM_SIEVE_FB_PARAMS - 1].bits;
-	if (bits >= max_bits) {
-		if (bits > max_bits + 5) {
-			printf("error: no parameters for "
-				"%.0lf bit inputs\n", bits + 0.5);
-			exit(-1);
-		}
-		*params = sieve_fb_params[NUM_SIEVE_FB_PARAMS - 1];
-		return;
-	}
-
-	for (i = 0; i < NUM_SIEVE_FB_PARAMS - 1; i++) {
-		if (bits < sieve_fb_params[i+1].bits)
-			break;
-	}
-
-	low = &sieve_fb_params[i];
-	high = &sieve_fb_params[i+1];
-	dist = high->bits - low->bits;
-	j = bits - low->bits;
-	k = high->bits - bits;
-
-	params->bits = bits;
-	params->p_scale = (low->p_scale * k + 
-			   high->p_scale * j) / dist;
-	params->num_pieces = (low->num_pieces * k + 
-			      high->num_pieces * j) / dist;
-	params->specialq_max = exp((log(low->specialq_max) * k +
-			           log(high->specialq_max) * j) / dist);
-	params->large_fb_max = exp((log(low->large_fb_max) * k +
-			           log(high->large_fb_max) * j) / dist);
-}
-
 /*------------------------------------------------------------------------*/
-void
-sieve_lattice_hashtable(msieve_obj *obj, poly_search_t *poly, 
-			uint32 deadline)
+void 
+sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_param_t *params,
+		sieve_fb_t *sieve_special_q,
+		uint32 special_q_min, uint32 special_q_max,
+		uint32 large_fb_max)
 {
-	lattice_fb_t L;
-	sieve_fb_t sieve_small, sieve_large;
-	uint32 small_p_min, small_p_max;
-	uint64 large_p_min, large_p_max;
-	uint64 large_p_min2, large_p_max2;
-	uint32 specialq_max, large_fb_max;
-	double p_scale;
-	uint32 num_pieces;
-	sieve_fb_param_t params;
+	sieve_fb_t sieve_large;
+	uint32 large_p_min, large_p_max;
+	double p_size_max = L->poly->batch[0].p_size_max;
+	uint32 degree = L->poly->degree;
 
-	double p_size_max = poly->batch[0].p_size_max;
-	double sieve_size = poly->batch[0].sieve_size;
-	uint32 degree = poly->degree;
-	double bits = log(sieve_size) / M_LN2;
+	large_p_min = sqrt(p_size_max / special_q_max);
+	large_p_max = params->p_scale * large_p_min;
 
-	printf("p = %.2lf sieve = %.2lf bits\n", 
-			log(p_size_max) / M_LN2, bits);
-
-	get_poly_params(bits, &params);
-
-	p_scale = params.p_scale;
-	specialq_max = params.specialq_max;
-	large_fb_max = params.large_fb_max;
-	num_pieces = params.num_pieces;
-
-	small_p_min = MAX(7, specialq_max / p_scale);
-	small_p_max = specialq_max;
-	large_p_min = sqrt(p_size_max / small_p_max);
-	large_p_max = p_scale * large_p_min;
-
-	gmp_printf("coeff %Zd %u %u %" PRIu64 " %" PRIu64 "\n",
-			poly->batch[0].high_coeff,
-			small_p_min, small_p_max,
+	gmp_printf("coeff %Zd specialq %u - %u other %u - %u\n",
+			L->poly->batch[0].high_coeff,
+			special_q_min, special_q_max,
 			large_p_min, large_p_max);
 
-	sieve_fb_init(&sieve_small, poly, 
-			5, 100, 1, degree, 1, 0);
-	sieve_fb_init(&sieve_large, poly, 
-			101, large_fb_max, 1, degree, 1, 0);
+	sieve_fb_init(&sieve_large, L->poly, 
+			5, large_fb_max, 
+			1, degree,
+		       	0, 0);
 
-	L.poly = poly;
-	L.start_time = time(NULL);
-	L.deadline = deadline;
+	sieve_specialq_64(obj, L,
+			sieve_special_q, &sieve_large,
+			special_q_min, special_q_max,
+			large_p_min, large_p_max);
 
-	large_p_min2 = large_p_min;
-	large_p_max2 = large_p_max;
-	if (num_pieces > 1) {
-		uint32 piece = get_rand(&obj->seed1, 
-					&obj->seed2) % num_pieces;
-		large_p_min2 = large_p_min + piece *
-					((large_p_max - large_p_min) /
-					num_pieces);
-		large_p_max2 = large_p_min + (piece + 1) *
-					((large_p_max - large_p_min) /
-					num_pieces);
-	}
-
-	if (large_p_max2 < ((uint64)1 << 32)) {
-		sieve_specialq_64(obj, &L,
-			&sieve_small, &sieve_large,
-			small_p_min, small_p_max,
-			(uint32)large_p_min2, 
-			(uint32)large_p_max2);
-	}
-
-	sieve_fb_free(&sieve_small);
 	sieve_fb_free(&sieve_large);
 }

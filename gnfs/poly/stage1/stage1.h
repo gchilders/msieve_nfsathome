@@ -255,21 +255,35 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 		uint32 large_p2_min, uint32 large_p2_max);
 
 void
-handle_collision_specialq(poly_search_t *poly, uint32 which_poly,
-				uint32 p1, uint32 p2, uint32 special_q,
-				uint64 special_q_root, uint128 res);
+handle_collision(poly_search_t *poly, uint32 which_poly,
+			uint32 p1, uint32 p2, uint32 special_q,
+			uint64 special_q_root, uint128 res);
 
 /* main search routines */
 
-/* original method (with special_q), GPU and CPU versions */
+typedef struct {
+	uint32 bits; /* in leading rational coeff */
+	double p_scale;
+	uint32 max_diverge;
+	uint32 num_pieces; /* for randomization */
+	uint32 special_q_min;
+	uint32 special_q_max;
+} sieve_fb_param_t;
 
 void sieve_lattice(msieve_obj *obj, poly_search_t *poly, 
 				uint32 deadline);
 
-/* hashtable method (with special_q), CPU only */
+void sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_param_t *params,
+		sieve_fb_t *sieve_special_q,
+		uint32 special_q_min, uint32 special_q_max,
+		uint32 large_fb_max);
 
-void sieve_lattice_hashtable(msieve_obj *obj, poly_search_t *poly, 
-				uint32 deadline);
+void sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_param_t *params,
+		sieve_fb_t *sieve_special_q,
+		uint32 special_q_min, uint32 special_q_max,
+		uint32 large_fb_max);
 
 #ifdef __cplusplus
 }

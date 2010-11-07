@@ -14,24 +14,11 @@ $Id$
 
 #include <stage1.h>
 
-/* structures for storing arithmetic progressions. Rational
-   leading coeffs of NFS polynomials are assumed to be the 
-   product of three groups of factors p, each of size at most
-   32 bits, and candidates must satisfy a condition modulo p^2 */
-
 #define MAX_P_BITS 32
 #define MAX_P (((uint64)1 << MAX_P_BITS) - 1)
 
 #define MIN_SPECIAL_Q 17
 
-typedef struct {
-	uint32 bits; /* in leading rational coeff */
-	double p_scale;
-	uint32 max_diverge;
-	uint32 num_pieces; /* for randomization */
-	uint32 special_q_min;
-	uint32 special_q_max;
-} sieve_fb_param_t;
 
 static const sieve_fb_param_t sieve_fb_params[] = {
 
@@ -99,75 +86,29 @@ get_poly_params(double bits, sieve_fb_param_t *params)
 }
 
 /*------------------------------------------------------------------------*/
+#ifdef HAVE_CUDA
 void
-sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
+sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_param_t *params,
+		sieve_fb_t *sieve_special_q,
+		uint32 special_q_min, uint32 special_q_max,
+		uint32 large_fb_max)
 {
-	lattice_fb_t L;
-	sieve_fb_t sieve_special_q, sieve_large_p1, sieve_large_p2;
-	uint32 special_q_min, special_q_max;
-	uint32 large_fb_max;
-	uint32 num_pieces;
-	sieve_fb_param_t params;
-	double bits;
-	double p_scale;
-	uint32 degree = poly->degree;
+	sieve_fb_t sieve_large_p1, sieve_large_p2;
+	uint32 degree = L->poly->degree;
 	uint32 max_roots = (degree != 5) ? degree : 1;
-	curr_poly_t *middle_poly = poly->batch + poly->num_poly / 2;
-	curr_poly_t *last_poly = poly->batch + poly->num_poly - 1;
+	curr_poly_t *middle_poly = L->poly->batch + L->poly->num_poly / 2;
+	double p_scale = params->p_scale;
 
-	bits = log(middle_poly->p_size_max) / M_LN2;
-	printf("p = %.2lf sieve = %.2lf bits\n",
-			bits, log(middle_poly->sieve_size) / M_LN2);
-
-	get_poly_params(bits, &params);
-
-	if (degree != 5) {
-		printf("error: degree %u not currently supported in special_q mode\n", degree);
-		exit (-1);
-	}
-
-	p_scale = params.p_scale;
-	num_pieces = params.num_pieces;
-	special_q_min = params.special_q_min;
-	special_q_max = params.special_q_max;
-	large_fb_max = MIN(500000, special_q_min);
-
-	sieve_fb_init(&sieve_special_q, poly,
-			0, 0, /* prime special_q */
-			1, max_roots,
-			0, 0);
-
-	sieve_fb_init(&sieve_large_p1, poly,
+	sieve_fb_init(&sieve_large_p1, L->poly,
 			0, 0,
 			1, max_roots,
 			0, 0);
 
-	sieve_fb_init(&sieve_large_p2, poly,
+	sieve_fb_init(&sieve_large_p2, L->poly,
 			5, large_fb_max,
 			1, max_roots,
 			0, 0);
-
-	L.poly = poly;
-	L.start_time = time(NULL);
-	L.deadline = deadline;
-#ifdef HAVE_CUDA
-	L.gpu_info = poly->gpu_info;
-#endif
-
-	gmp_printf("coeff %Zd-%Zd"
-		   " %" PRIu32 " %" PRIu32 "\n",
-		   poly->batch[0].high_coeff, last_poly->high_coeff,
-		   special_q_min, special_q_max);
-
-	if (num_pieces > 1) { /* randomize special_q */
-		double piece_ratio = pow((double)special_q_max / special_q_min,
-					 (double)1 / num_pieces);
-		uint32 piece = get_rand(&obj->seed1,
-					&obj->seed2) % num_pieces;
-
-		special_q_min *= pow(piece_ratio, (double)piece);
-		special_q_max = special_q_min * piece_ratio;
-	}
 
 	while (1) {
 		uint32 done;
@@ -195,37 +136,35 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 			large_p1_max = MAX_P;
 
 		large_p2_max = large_p1_min - 1;
-		if (params.special_q_max <= large_p2_max / p_scale)
+		if (params->special_q_max <= large_p2_max / p_scale)
 			large_p2_min = large_p2_max / p_scale;
 		else
-			large_p2_min = params.special_q_max;
+			large_p2_min = params->special_q_max;
 
 		while (1) {
 
-#ifdef HAVE_CUDA
 			if (large_p1_max < ((uint32)1 << 24))
-				L.gpu_module = poly->gpu_module48;
+				L->gpu_module = L->poly->gpu_module48;
 			else
-				L.gpu_module = poly->gpu_module64;
+				L->gpu_module = L->poly->gpu_module64;
 
-			CUDA_TRY(cuModuleGetFunction(&L.gpu_kernel, 
-					L.gpu_module, "sieve_kernel"))
+			CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel, 
+					L->gpu_module, "sieve_kernel"))
 			if (degree != 5)
-				CUDA_TRY(cuModuleGetGlobal(&L.gpu_p_array, 
-					NULL, L.gpu_module, "pbatch"))
-#endif
+				CUDA_TRY(cuModuleGetGlobal(&L->gpu_p_array, 
+					NULL, L->gpu_module, "pbatch"))
 
 			if (degree != 5) {
-				done = sieve_lattice_deg46_64(obj, &L,
-					&sieve_special_q,
+				done = sieve_lattice_deg46_64(obj, L,
+					sieve_special_q,
 					&sieve_large_p1, &sieve_large_p2,
 					special_q_min2, special_q_max2,
 					large_p1_min, large_p1_max,
 					large_p2_min, large_p2_max);
 			}
 			else { /* degree 5 */
-				done = sieve_lattice_deg5_64(obj, &L,
-					&sieve_special_q,
+				done = sieve_lattice_deg5_64(obj, L,
+					sieve_special_q,
 					&sieve_large_p1, &sieve_large_p2,
 					special_q_min2, special_q_max2,
 					large_p1_min, large_p1_max,
@@ -236,8 +175,8 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 				goto finished;
 
 			if (large_p1_max == MAX_P ||
-			    large_p2_min == params.special_q_max ||
-			    large_p1_max / large_p2_min > params.max_diverge)
+			    large_p2_min == params->special_q_max ||
+			    large_p1_max / large_p2_min > params->max_diverge)
 				break;
 
 			large_p1_min = large_p1_max + 1;
@@ -247,17 +186,84 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 				large_p1_max = MAX_P;
 
 			large_p2_max = large_p2_min - 1;
-			if (params.special_q_max <= large_p2_max / p_scale)
+			if (params->special_q_max <= large_p2_max / p_scale)
 				large_p2_min = large_p2_max / p_scale;
 			else
-				large_p2_min = params.special_q_max;
+				large_p2_min = params->special_q_max;
 		}
 
 		special_q_min = special_q_max2 + 1;
 	}
 
 finished:
-	sieve_fb_free(&sieve_special_q);
 	sieve_fb_free(&sieve_large_p1);
 	sieve_fb_free(&sieve_large_p2);
+}
+#endif
+
+/*------------------------------------------------------------------------*/
+void
+sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
+{
+	lattice_fb_t L;
+	sieve_fb_t sieve_special_q;
+	uint32 special_q_min, special_q_max;
+	uint32 large_fb_max;
+	uint32 num_pieces;
+	sieve_fb_param_t params;
+	double bits;
+	uint32 degree = poly->degree;
+	curr_poly_t *middle_poly = poly->batch + poly->num_poly / 2;
+	curr_poly_t *last_poly = poly->batch + poly->num_poly - 1;
+#ifdef HAVE_CUDA
+	uint32 max_roots = (degree != 5) ? degree : 1;
+#else
+	uint32 max_roots = degree;
+#endif
+
+	bits = log(middle_poly->p_size_max) / M_LN2;
+	printf("p = %.2lf sieve = %.2lf bits\n",
+			bits, log(middle_poly->sieve_size) / M_LN2);
+
+	get_poly_params(bits, &params);
+
+	num_pieces = params.num_pieces;
+	special_q_min = params.special_q_min;
+	special_q_max = params.special_q_max;
+	large_fb_max = MIN(500000, special_q_min);
+
+	sieve_fb_init(&sieve_special_q, poly,
+			0, 0, /* prime special_q */
+			1, max_roots,
+			0, 0);
+
+	L.poly = poly;
+	L.start_time = time(NULL);
+	L.deadline = deadline;
+#ifdef HAVE_CUDA
+	L.gpu_info = poly->gpu_info;
+#endif
+
+	gmp_printf("coeff %Zd-%Zd specialq %u - %u\n",
+		   poly->batch[0].high_coeff, last_poly->high_coeff,
+		   special_q_min, special_q_max);
+
+	if (num_pieces > 1) { /* randomize special_q */
+		double piece_ratio = pow((double)special_q_max / special_q_min,
+					 (double)1 / num_pieces);
+		uint32 piece = get_rand(&obj->seed1,
+					&obj->seed2) % num_pieces;
+
+		special_q_min *= pow(piece_ratio, (double)piece);
+		special_q_max = special_q_min * piece_ratio;
+	}
+
+#ifdef HAVE_CUDA
+	sieve_lattice_gpu(obj, &L, &params, &sieve_special_q,
+			special_q_min, special_q_max, large_fb_max);
+#else
+	sieve_lattice_cpu(obj, &L, &params, &sieve_special_q,
+			special_q_min, special_q_max, large_fb_max);
+#endif
+	sieve_fb_free(&sieve_special_q);
 }
