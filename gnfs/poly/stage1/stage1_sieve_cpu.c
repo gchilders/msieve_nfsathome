@@ -122,7 +122,8 @@ handle_special_q(hashtable_t *hashtable,
 	p_packed_t *tmp;
 	uint32 num_entries = hash_array->num_p;
 	uint64 special_q2 = (uint64)special_q * special_q;
-	uint64 sieve_size = 2 * L->poly->batch[0].sieve_size / special_q2;
+	uint64 sieve_size = MIN((uint64)(-1),
+				2 * L->poly->batch[0].sieve_size / special_q2);
 	uint64 sieve_start = 0;
 	uint32 num_blocks = 0;
 
@@ -198,7 +199,7 @@ handle_special_q(hashtable_t *hashtable,
 						res.w[3] = 0;
 
 						handle_collision(L->poly, 0,
-								tmp->p, hit->p, 
+								hit->p, tmp->p, 
 								special_q,
 								special_q_root,
 							       	res);

@@ -19,7 +19,6 @@ $Id$
 
 #define MIN_SPECIAL_Q 17
 
-
 static const sieve_fb_param_t sieve_fb_params[] = {
 
 	{ 40, 1.3, 100,    1,       1,        1},
@@ -76,9 +75,9 @@ get_poly_params(double bits, sieve_fb_param_t *params)
 				high->p_scale * j) / dist;
 	params->max_diverge = (low->max_diverge * k +
 				high->max_diverge * j) / dist;
-	params->num_pieces = (low->num_pieces * k +
-				high->num_pieces * j) / dist;
 
+	params->num_pieces = exp((log(low->num_pieces) * k +
+					log(high->num_pieces) * j) / dist);
 	params->special_q_min = exp((log(low->special_q_min) * k +
 					log(high->special_q_min) * j) / dist);
 	params->special_q_max = exp((log(low->special_q_max) * k +
@@ -94,6 +93,9 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 		uint32 special_q_min, uint32 special_q_max,
 		uint32 large_fb_max)
 {
+	uint32 done;
+	uint32 large_p1_min, large_p1_max;
+	uint32 large_p2_min, large_p2_max;
 	sieve_fb_t sieve_large_p1, sieve_large_p2;
 	uint32 degree = L->poly->degree;
 	uint32 max_roots = (degree != 5) ? degree : 1;
@@ -110,89 +112,66 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 			1, max_roots,
 			0, 0);
 
+	large_p1_min = sqrt(middle_poly->p_size_max / special_q_max);
+	if (large_p1_min < MAX_P / p_scale)
+		large_p1_max = large_p1_min * p_scale;
+	else
+		large_p1_max = MAX_P;
+
+	large_p2_max = large_p1_min - 1;
+	if (params->special_q_max <= large_p2_max / p_scale)
+		large_p2_min = large_p2_max / p_scale;
+	else
+		large_p2_min = params->special_q_max;
+
 	while (1) {
-		uint32 done;
-		uint32 special_q_min2, special_q_max2;
-		uint32 large_p1_min, large_p1_max;
-		uint32 large_p2_min, large_p2_max;
+		if (large_p1_max < ((uint32)1 << 24))
+			L->gpu_module = L->poly->gpu_module48;
+		else
+			L->gpu_module = L->poly->gpu_module64;
 
-		if (special_q_min <= 1) {
-			special_q_min2 = special_q_max2 = 1;
+		CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel, 
+				L->gpu_module, "sieve_kernel"))
+		if (degree != 5)
+			CUDA_TRY(cuModuleGetGlobal(&L->gpu_p_array, 
+				NULL, L->gpu_module, "pbatch"))
+
+		if (degree != 5) {
+			done = sieve_lattice_deg46_64(obj, L,
+				sieve_special_q,
+				&sieve_large_p1, &sieve_large_p2,
+				special_q_min, special_q_max,
+				large_p1_min, large_p1_max,
+				large_p2_min, large_p2_max);
 		}
-		else {
-			special_q_min2 = MAX(special_q_min, MIN_SPECIAL_Q);
-			if (special_q_min2 > special_q_max)
-				break;
-			else if (special_q_min2 <= special_q_max / p_scale)
-				special_q_max2 = special_q_min2 * p_scale;
-			else
-				special_q_max2 = special_q_max;
+		else { /* degree 5 */
+			done = sieve_lattice_deg5_64(obj, L,
+				sieve_special_q,
+				&sieve_large_p1, &sieve_large_p2,
+				special_q_min, special_q_max,
+				large_p1_min, large_p1_max,
+				large_p2_min, large_p2_max);
 		}
 
-		large_p1_min = sqrt(middle_poly->p_size_max / special_q_max2);
+		if (done)
+			goto finished;
+
+		if (large_p1_max == MAX_P ||
+		    large_p2_min == params->special_q_max ||
+		    large_p1_max / large_p2_min > params->max_diverge)
+			break;
+
+		large_p1_min = large_p1_max + 1;
 		if (large_p1_min < MAX_P / p_scale)
 			large_p1_max = large_p1_min * p_scale;
 		else
 			large_p1_max = MAX_P;
 
-		large_p2_max = large_p1_min - 1;
+		large_p2_max = large_p2_min - 1;
 		if (params->special_q_max <= large_p2_max / p_scale)
 			large_p2_min = large_p2_max / p_scale;
 		else
 			large_p2_min = params->special_q_max;
-
-		while (1) {
-
-			if (large_p1_max < ((uint32)1 << 24))
-				L->gpu_module = L->poly->gpu_module48;
-			else
-				L->gpu_module = L->poly->gpu_module64;
-
-			CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel, 
-					L->gpu_module, "sieve_kernel"))
-			if (degree != 5)
-				CUDA_TRY(cuModuleGetGlobal(&L->gpu_p_array, 
-					NULL, L->gpu_module, "pbatch"))
-
-			if (degree != 5) {
-				done = sieve_lattice_deg46_64(obj, L,
-					sieve_special_q,
-					&sieve_large_p1, &sieve_large_p2,
-					special_q_min2, special_q_max2,
-					large_p1_min, large_p1_max,
-					large_p2_min, large_p2_max);
-			}
-			else { /* degree 5 */
-				done = sieve_lattice_deg5_64(obj, L,
-					sieve_special_q,
-					&sieve_large_p1, &sieve_large_p2,
-					special_q_min2, special_q_max2,
-					large_p1_min, large_p1_max,
-					large_p2_min, large_p2_max);
-			}
-
-			if (done)
-				goto finished;
-
-			if (large_p1_max == MAX_P ||
-			    large_p2_min == params->special_q_max ||
-			    large_p1_max / large_p2_min > params->max_diverge)
-				break;
-
-			large_p1_min = large_p1_max + 1;
-			if (large_p1_min < MAX_P / p_scale)
-				large_p1_max = large_p1_min * p_scale;
-			else
-				large_p1_max = MAX_P;
-
-			large_p2_max = large_p2_min - 1;
-			if (params->special_q_max <= large_p2_max / p_scale)
-				large_p2_min = large_p2_max / p_scale;
-			else
-				large_p2_min = params->special_q_max;
-		}
-
-		special_q_min = special_q_max2 + 1;
 	}
 
 finished:
@@ -210,6 +189,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 	uint32 special_q_min, special_q_max;
 	uint32 large_fb_max;
 	uint32 num_pieces;
+	double p_scale;
 	sieve_fb_param_t params;
 	double bits;
 	uint32 degree = poly->degree;
@@ -231,6 +211,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 	special_q_min = params.special_q_min;
 	special_q_max = params.special_q_max;
 	large_fb_max = MIN(500000, special_q_min);
+	p_scale = params.p_scale;
 
 	sieve_fb_init(&sieve_special_q, poly,
 			0, 0, /* prime special_q */
@@ -258,12 +239,32 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		special_q_max = special_q_min * piece_ratio;
 	}
 
+	while (1) {
+		uint32 special_q_min2, special_q_max2;
+
+		if (special_q_min <= 1) {
+			special_q_min2 = special_q_max2 = 1;
+		}
+		else {
+			special_q_min2 = MAX(special_q_min, MIN_SPECIAL_Q);
+			if (special_q_min2 > special_q_max)
+				break;
+			else if (special_q_min2 <= special_q_max / p_scale)
+				special_q_max2 = special_q_min2 * p_scale;
+			else
+				special_q_max2 = special_q_max;
+		}
+
 #ifdef HAVE_CUDA
-	sieve_lattice_gpu(obj, &L, &params, &sieve_special_q,
-			special_q_min, special_q_max, large_fb_max);
+		sieve_lattice_gpu(obj, &L, &params, &sieve_special_q,
+				special_q_min2, special_q_max2, large_fb_max);
 #else
-	sieve_lattice_cpu(obj, &L, &params, &sieve_special_q,
-			special_q_min, special_q_max, large_fb_max);
+		sieve_lattice_cpu(obj, &L, &params, &sieve_special_q,
+				special_q_min2, special_q_max2, large_fb_max);
 #endif
+
+		special_q_min = special_q_max2 + 1;
+	}
+
 	sieve_fb_free(&sieve_special_q);
 }
