@@ -86,14 +86,14 @@ get_poly_params(double bits, sieve_fb_param_t *params)
 
 /*------------------------------------------------------------------------*/
 #ifdef HAVE_CUDA
-void
+uint32
 sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_param_t *params,
 		sieve_fb_t *sieve_special_q,
 		uint32 special_q_min, uint32 special_q_max,
 		uint32 large_fb_max)
 {
-	uint32 done;
+	uint32 quit;
 	uint32 large_p1_min, large_p1_max;
 	uint32 large_p2_min, large_p2_max;
 	sieve_fb_t sieve_large_p1, sieve_large_p2;
@@ -137,7 +137,7 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 				NULL, L->gpu_module, "pbatch"))
 
 		if (degree != 5) {
-			done = sieve_lattice_deg46_64(obj, L,
+			quit = sieve_lattice_deg46_64(obj, L,
 				sieve_special_q,
 				&sieve_large_p1, &sieve_large_p2,
 				special_q_min, special_q_max,
@@ -145,7 +145,7 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 				large_p2_min, large_p2_max);
 		}
 		else { /* degree 5 */
-			done = sieve_lattice_deg5_64(obj, L,
+			quit = sieve_lattice_deg5_64(obj, L,
 				sieve_special_q,
 				&sieve_large_p1, &sieve_large_p2,
 				special_q_min, special_q_max,
@@ -153,10 +153,7 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 				large_p2_min, large_p2_max);
 		}
 
-		if (done)
-			goto finished;
-
-		if (large_p1_max == MAX_P ||
+		if (quit || large_p1_max == MAX_P ||
 		    large_p2_min == params->special_q_max ||
 		    large_p1_max / large_p2_min > params->max_diverge)
 			break;
@@ -174,9 +171,9 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 			large_p2_min = params->special_q_max;
 	}
 
-finished:
 	sieve_fb_free(&sieve_large_p1);
 	sieve_fb_free(&sieve_large_p2);
+	return quit;
 }
 #endif
 
@@ -240,6 +237,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 	}
 
 	while (1) {
+		uint32 quit;
 		uint32 special_q_min2, special_q_max2;
 
 		if (special_q_min <= 1) {
@@ -256,12 +254,15 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		}
 
 #ifdef HAVE_CUDA
-		sieve_lattice_gpu(obj, &L, &params, &sieve_special_q,
+		quit = sieve_lattice_gpu(obj, &L, &params, &sieve_special_q,
 				special_q_min2, special_q_max2, large_fb_max);
 #else
-		sieve_lattice_cpu(obj, &L, &params, &sieve_special_q,
+		quit = sieve_lattice_cpu(obj, &L, &params, &sieve_special_q,
 				special_q_min2, special_q_max2, large_fb_max);
 #endif
+
+		if (quit)
+			break;
 
 		special_q_min = special_q_max2 + 1;
 	}

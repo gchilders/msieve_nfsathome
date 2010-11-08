@@ -273,13 +273,13 @@ typedef struct {
 void sieve_lattice(msieve_obj *obj, poly_search_t *poly, 
 				uint32 deadline);
 
-void sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
+uint32 sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_param_t *params,
 		sieve_fb_t *sieve_special_q,
 		uint32 special_q_min, uint32 special_q_max,
 		uint32 large_fb_max);
 
-void sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L, 
+uint32 sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_param_t *params,
 		sieve_fb_t *sieve_special_q,
 		uint32 special_q_min, uint32 special_q_max,
