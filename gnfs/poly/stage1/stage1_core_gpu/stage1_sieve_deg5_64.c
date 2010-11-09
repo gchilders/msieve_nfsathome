@@ -62,7 +62,7 @@ p_soa_var_reset(p_soa_var_t *soa)
 }
 
 static void 
-store_p_soa(uint64 p, uint32 num_roots, uint32 which_poly, 
+store_p_soa(uint32 p, uint32 num_roots, uint32 which_poly, 
 		mpz_t *roots, void *extra)
 {
 	lattice_fb_t *L = (lattice_fb_t *)extra;
@@ -78,9 +78,9 @@ store_p_soa(uint64 p, uint32 num_roots, uint32 which_poly,
 
 	num = soa->num_p;
 	if (p != soa->last_p) {
-		soa->p[num] = (uint32)p;
+		soa->p[num] = p;
 		soa->num_p++;
-		soa->last_p = (uint32)p;
+		soa->last_p = p;
 		soa->start_roots[which_poly][num] = gmp2uint64(roots[0]);
 	}
 	else {
@@ -383,15 +383,14 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 		logprintf(obj, "warning: sieve_size too large\n");
 
 	min_large_p1 = large_p1_min;
-	sieve_fb_reset(sieve_large_p1, (uint64)large_p1_min, 
-			(uint64)large_p1_max, 1, 1);
+	sieve_fb_reset(sieve_large_p1, large_p1_min, large_p1_max, 1, 1);
 
 	while (min_large_p1 < large_p1_max) {
 
 		L->fill_which_array = q_array;
 		p_soa_var_reset(q_array);
 		for (i = 0; i < host_q_batch_size && 
-				min_large_p1 != (uint32)P_SEARCH_DONE; i++) {
+				min_large_p1 != P_SEARCH_DONE; i++) {
 			min_large_p1 = sieve_fb_next(sieve_large_p1, L->poly,
 						store_p_soa, L);
 		}
@@ -399,8 +398,7 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 			goto finished;
 
 		min_large_p2 = large_p2_min;
-		sieve_fb_reset(sieve_large_p2, 
-				(uint64)large_p2_min, (uint64)large_p2_max,
+		sieve_fb_reset(sieve_large_p2, large_p2_min, large_p2_max,
 				1, 1);
 
 		while (min_large_p2 < large_p2_max) {
@@ -409,7 +407,7 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 			L->fill_which_array = p_array;
 			p_soa_var_reset(p_array);
 			for (i = 0; i < host_p_batch_size && 
-				    min_large_p2 != (uint32)P_SEARCH_DONE; i++) {
+				    min_large_p2 != P_SEARCH_DONE; i++) {
 				min_large_p2 = sieve_fb_next(sieve_large_p2, L->poly,
 							store_p_soa, L);
 			}
@@ -448,7 +446,7 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 
 			min_special_q = special_q_min;
 			sieve_fb_reset(sieve_special_q,
-				(uint64)special_q_min, (uint64)special_q_max,
+				special_q_min, special_q_max,
 				1, 1);
 
 			while (min_special_q < special_q_max) {
@@ -456,7 +454,7 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 				L->fill_which_array = special_q_array;
 				p_soa_var_reset(special_q_array);
 				for (i = 0; i < special_q_batch_size &&
-					    min_special_q != (uint32)P_SEARCH_DONE; i++) {
+					    min_special_q != P_SEARCH_DONE; i++) {
 					min_special_q = sieve_fb_next(sieve_special_q,
 								L->poly, store_p_soa, L);
 				}

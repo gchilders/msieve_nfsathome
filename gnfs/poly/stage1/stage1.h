@@ -116,7 +116,7 @@ void poly_search_free(poly_search_t *poly);
 #define MAX_P_FACTORS 7
 #define MAX_ROOTS 128
 
-#define P_SEARCH_DONE ((uint64)(-1))
+#define P_SEARCH_DONE ((uint32)(-2))
 
 /* structure for building arithmetic progressions */
 
@@ -124,7 +124,7 @@ typedef struct {
 	uint32 p;
 	uint8 num_roots[POLY_BATCH_SIZE];
 	uint32 roots[POLY_BATCH_SIZE][MAX_POLYSELECT_DEGREE];
-	uint64 cofactor_max;
+	uint32 cofactor_max;
 } aprog_t;
 
 typedef struct {
@@ -133,38 +133,15 @@ typedef struct {
 	uint32 num_aprogs_alloc;
 } aprog_list_t;
 
-/* structures for finding arithmetic progressions by sieving */
-
-typedef struct {
-	uint32 p;
-	uint32 r;
-	uint8 log_p;
-} sieve_prime_t;
-
-typedef struct {
-	sieve_prime_t *primes;
-	uint32 num_primes;
-	uint32 num_primes_alloc;
-} sieve_prime_list_t;
-
-typedef struct {
-	uint8 *sieve_block;
-	uint32 curr_offset;
-	uint64 sieve_start;
-	sieve_prime_list_t good_primes;
-	sieve_prime_list_t bad_primes;
-} p_sieve_t;
-
 /* structures for finding arithmetic progressions via
    explicit enumeration */
 
 typedef struct {
 	uint32 num_factors;
 	uint32 factors[MAX_P_FACTORS + 1];
-	uint64 products[MAX_P_FACTORS + 1];
+	uint32 products[MAX_P_FACTORS + 1];
 } p_enum_t;
 
-#define ALGO_SIEVE 0x1
 #define ALGO_ENUM  0x2
 #define ALGO_PRIME 0x4
 
@@ -175,13 +152,11 @@ typedef struct {
 	uint32 fb_only;
 	uint32 res_mod4;
 	uint32 degree;
-	uint64 p_min, p_max;
+	uint32 p_min, p_max;
 
 	aprog_list_t aprog_data;
 
 	prime_sieve_t p_prime;
-
-	p_sieve_t p_sieve;
 
 	p_enum_t p_enum;
 
@@ -197,14 +172,14 @@ void sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 
 void sieve_fb_free(sieve_fb_t *s);
 
-void sieve_fb_reset(sieve_fb_t *s, uint64 p_min, uint64 p_max,
+void sieve_fb_reset(sieve_fb_t *s, uint32 p_min, uint32 p_max,
 			uint32 num_roots_min, uint32 num_roots_max);
 
-typedef void (*root_callback)(uint64 p, uint32 num_roots, 
+typedef void (*root_callback)(uint32 p, uint32 num_roots, 
 				uint32 which_poly, mpz_t *roots, 
 				void *extra);
 
-uint64 sieve_fb_next(sieve_fb_t *s, 
+uint32 sieve_fb_next(sieve_fb_t *s, 
 			poly_search_t *poly, 
 			root_callback callback,
 			void *extra);
@@ -276,14 +251,12 @@ void sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 uint32 sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_param_t *params,
 		sieve_fb_t *sieve_special_q,
-		uint32 special_q_min, uint32 special_q_max,
-		uint32 large_fb_max);
+		uint32 special_q_min, uint32 special_q_max);
 
 uint32 sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_param_t *params,
 		sieve_fb_t *sieve_special_q,
-		uint32 special_q_min, uint32 special_q_max,
-		uint32 large_fb_max);
+		uint32 special_q_min, uint32 special_q_max);
 
 #ifdef __cplusplus
 }

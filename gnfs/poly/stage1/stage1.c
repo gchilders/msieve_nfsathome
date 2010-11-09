@@ -154,11 +154,9 @@ handle_collision(poly_search_t *poly, uint32 which_poly,
 
 	/* p1, p2, and special_q should always be pairwise coprime
 	 * when we get here, but let's be defensive and check anyway. */
-	if (mp_gcd_1(special_q, p1) != 1)
-		return;
-	if (mp_gcd_1(special_q, p2) != 1)
-		return;
-	if (mp_gcd_1(p1, p2) != 1)
+	if (mp_gcd_1(special_q, p1) != 1 ||
+	    mp_gcd_1(special_q, p2) != 1 ||
+	    mp_gcd_1(p1, p2) != 1)
 		return;
 
 	mpz_set_ui(poly->p, (unsigned long)p1);

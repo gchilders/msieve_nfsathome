@@ -110,7 +110,7 @@ q_soa_var_grow(q_soa_var_t *soa)
 }
 
 static void 
-store_p_soa(uint64 p, uint32 num_roots, uint32 which_poly,
+store_p_soa(uint32 p, uint32 num_roots, uint32 which_poly,
 		mpz_t *roots, void *extra)
 {
 	uint32 i, j;
@@ -133,7 +133,7 @@ store_p_soa(uint64 p, uint32 num_roots, uint32 which_poly,
 		if (soa->num_p_alloc == num)
 			q_soa_var_grow(soa);
 
-		soa->p[num] = (uint32)p;
+		soa->p[num] = p;
 		for (j = 0; j < num_roots; j++)
 			soa->roots[j][num] = gmp2uint64(roots[j]);
 
@@ -183,7 +183,7 @@ p_packed_next(p_packed_t *curr)
 }
 
 static void 
-store_p_packed(uint64 p, uint32 num_roots, uint32 which_poly,
+store_p_packed(uint32 p, uint32 num_roots, uint32 which_poly,
 		mpz_t *roots, void *extra)
 {
 	uint32 i;
@@ -208,7 +208,7 @@ store_p_packed(uint64 p, uint32 num_roots, uint32 which_poly,
 	}
 
 	curr = s->curr;
-	curr->p = (uint32)p;
+	curr->p = p;
 	curr->lattice_size = 2 * L->poly->batch[0].sieve_size / 
 				((double)p * p);
 	curr->num_roots = num_roots;
@@ -473,16 +473,15 @@ sieve_lattice_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 	}
 
 	min_large_p1 = large_p1_min;
-	sieve_fb_reset(sieve_large_p1, (uint64)large_p1_min, 
-			(uint64)large_p1_max, q_min_roots, 
-			q_max_roots);
+	sieve_fb_reset(sieve_large_p1, large_p1_min, large_p1_max, 
+			q_min_roots, q_max_roots);
 
 	while (min_large_p1 < large_p1_max) {
 
 		q_soa_array_reset(q_array);
 
 		for (i = 0; i < host_q_batch_size && 
-				min_large_p1 != (uint32)P_SEARCH_DONE; i++) {
+				min_large_p1 != P_SEARCH_DONE; i++) {
 			min_large_p1 = sieve_fb_next(sieve_large_p1, L->poly,
 						store_p_soa, L);
 		}
@@ -490,8 +489,7 @@ sieve_lattice_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 			break;
 
 		min_large_p2 = large_p2_min;
-		sieve_fb_reset(sieve_large_p2, 
-				(uint64)large_p2_min, (uint64)large_p2_max,
+		sieve_fb_reset(sieve_large_p2, large_p2_min, large_p2_max,
 				p_min_roots, p_max_roots);
 
 		while (min_large_p2 < large_p2_max) {
@@ -502,7 +500,7 @@ sieve_lattice_deg46_64(msieve_obj *obj, lattice_fb_t *L,
 			p_packed_reset(p_array);
 
 			for (i = 0; i < host_p_batch_size && 
-			 	   min_large_p2 != (uint32)P_SEARCH_DONE; i++) {
+			 	   min_large_p2 != P_SEARCH_DONE; i++) {
 				min_large_p2 = sieve_fb_next(sieve_large_p2, L->poly,
 							store_p_packed, L);
 			}
