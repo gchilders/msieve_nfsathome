@@ -160,7 +160,8 @@ handle_special_q(msieve_obj *obj, hashtable_t *hashtable,
 			for (j = 0; j < num_roots; j++) {
 				uint64 proot = tmp->roots[j].start_offset;
 				tmp->roots[j].offset = montmul64(
-						modsub64(proot, special_q_root,
+						modsub64(proot,
+							special_q_root % p2,
 						       	p2), qinv, p2, p2_w);
 			}
 
