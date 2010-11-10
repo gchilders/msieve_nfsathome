@@ -416,7 +416,6 @@ get_next_enum(sieve_fb_t *s)
 		if (factors[i] < s->aprog_data.num_aprogs &&
 		    products[i] <= aprogs[factors[i]].cofactor_max &&
 		    i < MAX_P_FACTORS) {
-
 			uint32 p = products[i] * aprogs[factors[i]].p;
 
 			i++;
@@ -424,8 +423,8 @@ get_next_enum(sieve_fb_t *s)
 			factors[i] = 0;
 			p_enum->num_factors = i;
 
-			if (products[i] >= s->p_min)
-				return products[i];
+			if (p >= s->p_min)
+				return p;
 		}
 		else if (i) {
 			while (--i && factors[i] == factors[i - 1]);
