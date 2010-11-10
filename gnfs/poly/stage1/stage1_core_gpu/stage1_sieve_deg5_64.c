@@ -283,7 +283,7 @@ create_special_q_lattice(lattice_fb_t *L, uint32 which_special_q)
 			uint64 sqroot =
 			    special_q_array->start_roots[j][which_special_q];
 
-			uint64 res = montmul64(modsub64(proot,
+			uint64 res = montmul64(mp_modsub_2(proot,
 						sqroot % p2, p2),
 						inv, p2, p2_w);
 			p_array->roots[j][i] = res;
@@ -307,7 +307,7 @@ create_special_q_lattice(lattice_fb_t *L, uint32 which_special_q)
 			uint64 sqroot =
 			    special_q_array->start_roots[j][which_special_q];
 
-			uint64 res = montmul64(modsub64(proot,
+			uint64 res = montmul64(mp_modsub_2(proot,
 						sqroot % p2, p2),
 						inv, p2, p2_w);
 			q_array->roots[j][i] = res;

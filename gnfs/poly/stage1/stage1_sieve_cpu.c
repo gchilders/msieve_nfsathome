@@ -160,7 +160,7 @@ handle_special_q(msieve_obj *obj, hashtable_t *hashtable,
 			for (j = 0; j < num_roots; j++) {
 				uint64 proot = tmp->roots[j].start_offset;
 				tmp->roots[j].offset = montmul64(
-						modsub64(proot,
+						mp_modsub_2(proot,
 							special_q_root % p2,
 						       	p2), qinv, p2, p2_w);
 			}
@@ -246,11 +246,11 @@ batch_invert(uint32 *qlist, uint32 num_q, uint64 *invlist,
 	uint32 i;
 	uint64 q2[SPECIALQ_BATCH_SIZE];
 	uint64 invprod;
-	uint64 p2 = wide_sqr32(p);
+	uint64 p2 = (uint64)p * p;
 
-	invlist[0] = invprod = wide_sqr32(qlist[0]);
+	invlist[0] = invprod = (uint64)qlist[0] * qlist[0];
 	for (i = 1; i < num_q; i++) {
-		q2[i] = wide_sqr32(qlist[i]);
+		q2[i] = (uint64)qlist[i] * qlist[i];
 		invlist[i] = invprod = montmul64(invprod, q2[i], p2, p2_w);
 	}
 

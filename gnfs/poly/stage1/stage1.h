@@ -34,12 +34,6 @@ extern "C" {
 #define HIGH_COEFF_PRIME_LIMIT 100
 #define HIGH_COEFF_POWER_LIMIT 2
 
-/* 96-bit integers */
-
-typedef struct {
-	uint32 w[3];
-} uint96;
-
 /* 128-bit integers */
 
 typedef struct {
