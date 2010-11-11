@@ -65,16 +65,13 @@ static void
 store_p_soa(uint32 p, uint32 num_roots, uint32 which_poly, 
 		mpz_t *roots, void *extra)
 {
-	lattice_fb_t *L = (lattice_fb_t *)extra;
-	p_soa_var_t *soa;
+	p_soa_var_t *soa = (p_soa_var_t *)extra;
 	uint32 num;
 
 	if (num_roots != 1) {
 		printf("error: num_roots > 1\n");
 		exit(-1);
 	}
-
-	soa = (p_soa_var_t *)L->fill_which_array;
 
 	num = soa->num_p;
 	if (p != soa->last_p) {
@@ -319,13 +316,13 @@ create_special_q_lattice(lattice_fb_t *L, uint32 which_special_q)
 uint32
 sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_special_q,
-		sieve_fb_t *sieve_large_p1, sieve_fb_t *sieve_large_p2,
 		uint32 special_q_min, uint32 special_q_max,
-		uint32 large_p1_min, uint32 large_p1_max,
-		uint32 large_p2_min, uint32 large_p2_max) 
+		sieve_fb_t *sieve_small_p,
+		uint32 small_p_min, uint32 small_p_max,
+		sieve_fb_t *sieve_large_p,
+		uint32 large_p_min, uint32 large_p_max) 
 {
 	uint32 i, j;
-	uint32 min_large_p2, min_large_p1, min_special_q;
 	uint32 quit = 0;
 	p_soa_var_t * p_array;
 	p_soa_var_t * q_array;
@@ -371,58 +368,42 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 	p_soa_var_init(q_array, host_q_batch_size);
 	p_soa_var_init(special_q_array, special_q_batch_size);
 
-	printf("------- %u-%u %u-%u %u-%u\n",
-			special_q_min, special_q_max,
-			large_p2_min, large_p2_max,
-			large_p1_min, large_p1_max);
-
 	if (2 * L->poly->batch[num_poly / 2].sieve_size /
-				((double)large_p2_min * large_p2_min
+				((double)small_p_min * small_p_min
 				 * special_q_min * special_q_min)
 							> (uint32)(-1))
 		logprintf(obj, "warning: sieve_size too large\n");
 
-	min_large_p1 = large_p1_min;
-	sieve_fb_reset(sieve_large_p1, large_p1_min, large_p1_max, 1, 1);
-
-	while (min_large_p1 < large_p1_max) {
-
-		L->fill_which_array = q_array;
+	sieve_fb_reset(sieve_large_p, large_p_min, large_p_max, 1, 1);
+	while (1) {
 		p_soa_var_reset(q_array);
-		for (i = 0; i < host_q_batch_size && 
-				min_large_p1 != P_SEARCH_DONE; i++) {
-			min_large_p1 = sieve_fb_next(sieve_large_p1, L->poly,
-						store_p_soa, L);
-		}
-		if (q_array->num_p == 0)
-			goto finished;
+		for (i = 0; i < host_q_batch_size; i++)
+			if (sieve_fb_next(sieve_large_p, L->poly, store_p_soa,
+						q_array) == P_SEARCH_DONE)
+				break;
+		if (i == 0)
+			break;
 
-		min_large_p2 = large_p2_min;
-		sieve_fb_reset(sieve_large_p2, large_p2_min, large_p2_max,
-				1, 1);
-
-		while (min_large_p2 < large_p2_max) {
+		sieve_fb_reset(sieve_small_p, small_p_min, small_p_max, 1, 1);
+		while (1) {
 			uint64 sqroots[POLY_BATCH_SIZE];
-
-			L->fill_which_array = p_array;
 			p_soa_var_reset(p_array);
-			for (i = 0; i < host_p_batch_size && 
-				    min_large_p2 != P_SEARCH_DONE; i++) {
-				min_large_p2 = sieve_fb_next(sieve_large_p2, L->poly,
-							store_p_soa, L);
-			}
-			if (p_array->num_p == 0)
-				goto finished;
+			for (i = 0; i < host_p_batch_size; i++)
+				if (sieve_fb_next(sieve_small_p, L->poly,
+						store_p_soa,
+						p_array) == P_SEARCH_DONE)
+					break;
+			if (i == 0)
+				break;
 
-			if (special_q_min <= 1) { /* handle special_q==1 case */
-
+			if (special_q_min <= 1) { /* handle trivial lattice */
 				for (i = 0; i < p_array->num_p; i++) {
 					uint32 p = p_array->p[i];
 
-					p_array->lattice_size[i] = MIN(
-					    (uint32)(-1),
-					    (2 * L->poly->batch[num_poly / 
-					     2].sieve_size / ((double)p * p)));
+					p_array->lattice_size[i] =
+						MIN((uint32)(-1),
+						    (2 * L->poly->batch[num_poly / 
+						    2].sieve_size / ((double)p * p)));
 				}
 
 				for (j = 0; j < num_poly; j++) {
@@ -442,24 +423,23 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 					quit = 1;
 					goto finished;
 				}
+
+				if (special_q_max <= 1)
+					continue;
 			}
 
-			min_special_q = special_q_min;
-			sieve_fb_reset(sieve_special_q,
-				special_q_min, special_q_max,
-				1, 1);
-
-			while (min_special_q < special_q_max) {
-
-				L->fill_which_array = special_q_array;
+			sieve_fb_reset(sieve_special_q, special_q_min,
+							special_q_max, 1, 1);
+			while (1) {
 				p_soa_var_reset(special_q_array);
-				for (i = 0; i < special_q_batch_size &&
-					    min_special_q != P_SEARCH_DONE; i++) {
-					min_special_q = sieve_fb_next(sieve_special_q,
-								L->poly, store_p_soa, L);
-				}
-				if (special_q_array->num_p == 0 && special_q_min > 1)
-					goto finished;
+				for (i = 0; i < special_q_batch_size; i++)
+					if (sieve_fb_next(sieve_special_q,
+							L->poly, store_p_soa,
+							special_q_array) ==
+								P_SEARCH_DONE)
+						break;
+				if (i == 0)
+					break;
 
 				for (i = 0; i < special_q_array->num_p; i++) {
 					for (j = 0; j < num_poly; j++)
@@ -496,5 +476,3 @@ finished:
 	free(L->found_array);
 	return quit;
 }
-
-

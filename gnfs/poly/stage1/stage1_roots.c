@@ -132,16 +132,14 @@ void
 sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 		uint32 factor_min, uint32 factor_max,
 		uint32 fb_roots_min, uint32 fb_roots_max,
-		uint32 fb_only, uint32 res_mod4)
+		uint32 fb_only)
 {
-	uint32 i;
-	prime_sieve_t prime_sieve;
+	uint32 i, p;
 	aprog_list_t *aprog = &s->aprog_data;
 
 	memset(s, 0, sizeof(sieve_fb_t));
 	s->degree = poly->degree;
 	s->fb_only = fb_only;
-	s->res_mod4 = res_mod4;
 
 	mpz_init(s->p);
 	mpz_init(s->p2);
@@ -157,27 +155,20 @@ sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 	if (factor_max <= factor_min)
 		return;
 
-	i = 500;
-	aprog->num_aprogs = 0;
-	aprog->num_aprogs_alloc = i;
-	aprog->aprogs = (aprog_t *)xmalloc(i * sizeof(aprog_t));
+	aprog->num_aprogs_alloc = 500;
+	aprog->aprogs = (aprog_t *)xmalloc(aprog->num_aprogs_alloc *
+						sizeof(aprog_t));
 
-	init_prime_sieve(&prime_sieve, 2, factor_max);
+	for (i = p = 0; i < PRECOMPUTED_NUM_PRIMES; i++) {
+		p += prime_delta[i];
 
-	while (1) {
-		uint32 p = get_next_prime(&prime_sieve);
-
-		if (p >= factor_max)
+		if (p <= factor_min)
+			continue;
+		else if (p >= factor_max)
 			break;
-		else if (p <= factor_min)
-			continue;
-		else if (res_mod4 > 0 && (p % 4 != res_mod4))
-			continue;
 
 		sieve_add_aprog(s, poly, p, fb_roots_min, fb_roots_max);
 	}
-
-	free_prime_sieve(&prime_sieve);
 }
 
 /*------------------------------------------------------------------------*/
@@ -482,10 +473,6 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 
 			if (p >= s->p_max || p >= P_PRIME_LIMIT) {
 				s->avail_algos &= ~ALGO_PRIME;
-
-				continue;
-			}
-			else if (s->res_mod4 > 0 && (p % 4 != s->res_mod4)) {
 
 				continue;
 			}

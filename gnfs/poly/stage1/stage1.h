@@ -144,7 +144,6 @@ typedef struct {
 	uint32 num_roots_max;
 	uint32 avail_algos;
 	uint32 fb_only;
-	uint32 res_mod4;
 	uint32 degree;
 	uint32 p_min, p_max;
 
@@ -162,7 +161,7 @@ typedef struct {
 void sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 			uint32 factor_min, uint32 factor_max,
 			uint32 fb_roots_min, uint32 fb_roots_max,
-			uint32 fb_only, uint32 res_mod4);
+			uint32 fb_only);
 
 void sieve_fb_free(sieve_fb_t *s);
 
@@ -184,7 +183,6 @@ typedef struct {
 	void *p_array;
 	void *q_array;
 	void *special_q_array;
-	void *fill_which_array;
 
 #ifdef HAVE_CUDA
 	CUdeviceptr gpu_p_array;
@@ -210,18 +208,20 @@ typedef struct {
 uint32
 sieve_lattice_deg46_64(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_special_q, 
-		sieve_fb_t *sieve_large_p1, sieve_fb_t *sieve_large_p2, 
-		uint32 special_q_min, uint32 special_q_max, 
-		uint32 large_p1_min, uint32 large_p1_max,
-		uint32 large_p2_min, uint32 large_p2_max);
+		uint32 special_q_min, uint32 special_q_max,
+		sieve_fb_t *sieve_small_p,
+		uint32 small_p_min, uint32 small_p_max,
+		sieve_fb_t *sieve_large_p,
+		uint32 large_p_min, uint32 large_p_max);
 
 uint32
 sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_special_q,
-		sieve_fb_t *sieve_large_p1, sieve_fb_t *sieve_large_p2,
+		sieve_fb_t *sieve_special_q, 
 		uint32 special_q_min, uint32 special_q_max,
-		uint32 large_p1_min, uint32 large_p1_max,
-		uint32 large_p2_min, uint32 large_p2_max);
+		sieve_fb_t *sieve_small_p,
+		uint32 small_p_min, uint32 small_p_max,
+		sieve_fb_t *sieve_large_p,
+		uint32 large_p_min, uint32 large_p_max);
 
 void
 handle_collision(poly_search_t *poly, uint32 which_poly,

@@ -227,10 +227,13 @@ handle_special_q(msieve_obj *obj, hashtable_t *hashtable,
 		}
 	}
 
+//TODO: use CPU timer instead of wall timer below
+#if 0
 	curr_time = time(NULL);
 	elapsed = curr_time - L->start_time;
 	if (elapsed > L->deadline)
 		quit = 1;
+#endif
 
 //	printf("%u\n", num_blocks); 
 	return quit;
@@ -418,7 +421,7 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L,
 	sieve_fb_init(&sieve_p, L->poly, 
 			0, 0, /* prime p */
 			1, degree,
-		       	0, 0);
+		       	0);
 
 	quit = sieve_specialq_64(obj, L,
 			sieve_special_q, &sieve_p,
