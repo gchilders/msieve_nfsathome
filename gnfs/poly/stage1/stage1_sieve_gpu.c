@@ -14,12 +14,15 @@ $Id$
 
 #include <stage1.h>
 #include <cpu_intrinsics.h>
-#include "stage1_core_deg5_64.h"
+#include <stage1_core_gpu/stage1_core.h>
+
+#define MAX_P ((uint32)(-1))
 
 /*------------------------------------------------------------------------*/
 typedef struct {
 	uint32 num_p;
-	uint32 last_p;
+	uint32 num_p_alloc;
+	uint32 curr;
 
 	uint32 *p;
 	uint32 *lattice_size;
@@ -33,6 +36,7 @@ p_soa_var_init(p_soa_var_t *soa, uint32 batch_size)
 	uint32 i;
 
 	memset(soa, 0, sizeof(soa));
+	soa->num_p_alloc = batch_size;
 	soa->p = (uint32 *)xmalloc(batch_size * sizeof(uint32));
 	soa->lattice_size = (uint32 *)xmalloc(batch_size * sizeof(uint32));
 	for (i = 0; i < POLY_BATCH_SIZE; i++) {
@@ -58,7 +62,8 @@ static void
 p_soa_var_reset(p_soa_var_t *soa)
 {
 	soa->num_p = 0;
-	soa->last_p = 0;
+	soa->curr = 0;
+	soa->p[0] = 0;
 }
 
 static void 
@@ -66,22 +71,16 @@ store_p_soa(uint32 p, uint32 num_roots, uint32 which_poly,
 		mpz_t *roots, void *extra)
 {
 	p_soa_var_t *soa = (p_soa_var_t *)extra;
-	uint32 num;
+	uint32 i, j;
 
-	if (num_roots != 1) {
-		printf("error: num_roots > 1\n");
-		exit(-1);
+	if (p != soa->p[soa->curr]) {
+		soa->curr = soa->num_p;
+		soa->num_p = MIN(soa->num_p + num_roots, soa->num_p_alloc);
 	}
-
-	num = soa->num_p;
-	if (p != soa->last_p) {
-		soa->p[num] = p;
-		soa->num_p++;
-		soa->last_p = p;
-		soa->start_roots[which_poly][num] = gmp2uint64(roots[0]);
-	}
-	else {
-		soa->start_roots[which_poly][num - 1] = gmp2uint64(roots[0]);
+	j = soa->num_p - soa->curr;
+	for (i = 0; i < j; i++) {
+		soa->p[soa->curr + i] = p;
+		soa->start_roots[which_poly][soa->curr + i] = gmp2uint64(roots[i]);
 	}
 }
 
@@ -313,8 +312,8 @@ create_special_q_lattice(lattice_fb_t *L, uint32 which_special_q)
 }
 
 /*------------------------------------------------------------------------*/
-uint32
-sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L, 
+static uint32
+sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_special_q,
 		uint32 special_q_min, uint32 special_q_max,
 		sieve_fb_t *sieve_small_p,
@@ -322,12 +321,13 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 		sieve_fb_t *sieve_large_p,
 		uint32 large_p_min, uint32 large_p_max) 
 {
-	uint32 i, j;
 	uint32 quit = 0;
 	p_soa_var_t * p_array;
 	p_soa_var_t * q_array;
 	p_soa_var_t * special_q_array;
 	uint32 num_poly = L->poly->num_poly;
+	uint32 degree = L->poly->degree;
+	uint32 max_roots = (degree != 5) ? degree : 1;
 	uint32 host_p_batch_size;
 	uint32 host_q_batch_size;
 	uint32 special_q_batch_size = 1000;
@@ -374,26 +374,29 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 							> (uint32)(-1))
 		logprintf(obj, "warning: sieve_size too large\n");
 
-	sieve_fb_reset(sieve_large_p, large_p_min, large_p_max, 1, 1);
+	sieve_fb_reset(sieve_large_p, large_p_min, large_p_max, 1, max_roots);
 	while (1) {
 		p_soa_var_reset(q_array);
-		for (i = 0; i < host_q_batch_size; i++)
+		while (q_array->num_p < host_q_batch_size)
 			if (sieve_fb_next(sieve_large_p, L->poly, store_p_soa,
 						q_array) == P_SEARCH_DONE)
 				break;
-		if (i == 0)
+		if (q_array->num_p == 0)
 			break;
 
-		sieve_fb_reset(sieve_small_p, small_p_min, small_p_max, 1, 1);
+		sieve_fb_reset(sieve_small_p, small_p_min, small_p_max,
+						1, max_roots);
 		while (1) {
 			uint64 sqroots[POLY_BATCH_SIZE];
+			uint32 i, j;
+
 			p_soa_var_reset(p_array);
-			for (i = 0; i < host_p_batch_size; i++)
+			while (p_array->num_p < host_p_batch_size)
 				if (sieve_fb_next(sieve_small_p, L->poly,
 						store_p_soa,
 						p_array) == P_SEARCH_DONE)
 					break;
-			if (i == 0)
+			if (p_array->num_p == 0)
 				break;
 
 			if (special_q_min <= 1) { /* handle trivial lattice */
@@ -429,16 +432,17 @@ sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L,
 			}
 
 			sieve_fb_reset(sieve_special_q, special_q_min,
-							special_q_max, 1, 1);
+						special_q_max, 1, max_roots);
 			while (1) {
 				p_soa_var_reset(special_q_array);
-				for (i = 0; i < special_q_batch_size; i++)
+				while (special_q_array->num_p <
+							special_q_batch_size)
 					if (sieve_fb_next(sieve_special_q,
 							L->poly, store_p_soa,
 							special_q_array) ==
 								P_SEARCH_DONE)
 						break;
-				if (i == 0)
+				if (special_q_array->num_p == 0)
 					break;
 
 				for (i = 0; i < special_q_array->num_p; i++) {
@@ -474,5 +478,74 @@ finished:
 	free(L->p_marshall);
 	free(L->q_marshall);
 	free(L->found_array);
+	return quit;
+}
+
+/*------------------------------------------------------------------------*/
+uint32
+sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_param_t *params,
+		sieve_fb_t *sieve_special_q,
+		uint32 special_q_min, uint32 special_q_max)
+{
+	uint32 quit;
+	uint32 large_p_min, large_p_max;
+	uint32 small_p_min, small_p_max;
+	sieve_fb_t sieve_large_p, sieve_small_p;
+	curr_poly_t *middle_poly = L->poly->batch + L->poly->num_poly / 2;
+	uint32 degree = L->poly->degree;
+	uint32 max_roots = (degree != 5) ? degree : 1;
+
+	sieve_fb_init(&sieve_large_p, L->poly,
+			0, 0, /* prime large_p */
+			1, max_roots,
+			0);
+
+	sieve_fb_init(&sieve_small_p, L->poly,
+			0, 0, /* prime small_p */
+			1, max_roots,
+			0);
+
+	large_p_min = sqrt(middle_poly->p_size_max / special_q_max);
+	large_p_max = MIN(MAX_P, large_p_min * params->p_scale);
+
+	small_p_max = large_p_min - 1;
+	small_p_min = small_p_max / params->p_scale;
+
+	while (1) {
+		printf("------- %u-%u %u-%u %u-%u\n",
+			special_q_min, special_q_max,
+			small_p_min, small_p_max,
+			large_p_min, large_p_max);
+
+		if (large_p_max < ((uint32)1 << 24))
+			L->gpu_module = L->poly->gpu_module48;
+		else
+			L->gpu_module = L->poly->gpu_module64;
+
+		CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel, 
+				L->gpu_module, "sieve_kernel"))
+
+		quit = sieve_specialq_64(obj, L,
+				sieve_special_q,
+				special_q_min, special_q_max,
+				&sieve_small_p,
+				small_p_min, small_p_max,
+				&sieve_large_p,
+				large_p_min, large_p_max);
+
+		if (quit || large_p_max == MAX_P ||
+		    large_p_max / small_p_min > params->max_diverge)
+			break;
+
+		large_p_min = large_p_max + 1;
+		large_p_max = MIN(MAX_P, large_p_min * params->p_scale);
+
+		small_p_max = small_p_min - 1;
+		small_p_min = small_p_max / params->p_scale;
+	}
+
+	sieve_fb_free(&sieve_large_p);
+	sieve_fb_free(&sieve_small_p);
 	return quit;
 }

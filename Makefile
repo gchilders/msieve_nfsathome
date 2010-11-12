@@ -162,10 +162,8 @@ QS_CORE_OBJS_X86_64 = \
 #---------------------------------- GPU file lists -------------------------
 
 GPU_OBJS = \
-	stage1_core_deg46_48.ptx \
-	stage1_core_deg46_64.ptx \
-	stage1_core_deg5_48.ptx \
-	stage1_core_deg5_64.ptx \
+	stage1_core_48.ptx \
+	stage1_core_64.ptx
 
 #---------------------------------- NFS file lists -------------------------
 
@@ -182,8 +180,7 @@ NFS_HDR = \
 
 NFS_GPU_HDR = \
 	gnfs/poly/stage1/stage1_core_gpu/cuda_intrinsics.h \
-	gnfs/poly/stage1/stage1_core_gpu/stage1_core_deg46_64.h \
-	gnfs/poly/stage1/stage1_core_gpu/stage1_core_deg5_64.h \
+	gnfs/poly/stage1/stage1_core_gpu/stage1_core.h \
 
 NFS_NOGPU_HDR =
 
@@ -220,8 +217,7 @@ NFS_SRCS = \
 NFS_OBJS = $(NFS_SRCS:.c=.no)
 
 NFS_GPU_SRCS = \
-	gnfs/poly/stage1/stage1_core_gpu/stage1_sieve_deg46_64.c \
-	gnfs/poly/stage1/stage1_core_gpu/stage1_sieve_deg5_64.c
+	gnfs/poly/stage1/stage1_sieve_gpu.c
 
 NFS_GPU_OBJS = $(NFS_GPU_SRCS:.c=.no)
 

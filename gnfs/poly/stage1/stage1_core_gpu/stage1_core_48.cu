@@ -13,7 +13,7 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include "cuda_intrinsics.h"
-#include "stage1_core_deg5_64.h"
+#include "stage1_core.h"
 
 #ifdef __cplusplus
 extern "C" {

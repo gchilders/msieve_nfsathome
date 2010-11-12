@@ -98,22 +98,10 @@ poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 			CU_CTX_BLOCKING_SYNC,
 			poly->gpu_info->device_handle))
 
-	switch (poly->degree) {
-	case 4:
-	case 6:
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module48, 
-				"stage1_core_deg46_48.ptx"))
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module64, 
-				"stage1_core_deg46_64.ptx"))
-		break;
-
-	case 5:
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module48, 
-				"stage1_core_deg5_48.ptx"))
-		CUDA_TRY(cuModuleLoad(&poly->gpu_module64, 
-				"stage1_core_deg5_64.ptx"))
-		break;
-	}
+	CUDA_TRY(cuModuleLoad(&poly->gpu_module48, 
+				"stage1_core_48.ptx"))
+	CUDA_TRY(cuModuleLoad(&poly->gpu_module64, 
+				"stage1_core_64.ptx"))
 #endif
 
 }
