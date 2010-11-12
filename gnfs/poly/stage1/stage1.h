@@ -192,9 +192,6 @@ typedef struct {
 	uint32 found_array_size;
 	void *p_marshall;
 	void *q_marshall;
-	gpu_info_t *gpu_info;
-	CUmodule gpu_module;
-	CUfunction gpu_kernel;
 #endif
 
 	poly_search_t *poly;

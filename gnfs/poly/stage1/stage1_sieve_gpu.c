@@ -25,6 +25,9 @@ typedef struct {
 	uint32 curr;
 
 	uint32 *p;
+	uint32 *mont_w;
+	uint64 *mont_r;
+	uint64 *p2;
 	uint32 *lattice_size;
 	uint64 *roots[POLY_BATCH_SIZE];
 	uint64 *start_roots[POLY_BATCH_SIZE];
@@ -38,6 +41,9 @@ p_soa_var_init(p_soa_var_t *soa, uint32 batch_size)
 	memset(soa, 0, sizeof(soa));
 	soa->num_p_alloc = batch_size;
 	soa->p = (uint32 *)xmalloc(batch_size * sizeof(uint32));
+	soa->mont_w = (uint32 *)xmalloc(batch_size * sizeof(uint32));
+	soa->mont_r = (uint64 *)xmalloc(batch_size * sizeof(uint64));
+	soa->p2 = (uint64 *)xmalloc(batch_size * sizeof(uint64));
 	soa->lattice_size = (uint32 *)xmalloc(batch_size * sizeof(uint32));
 	for (i = 0; i < POLY_BATCH_SIZE; i++) {
 		soa->roots[i] = (uint64 *)xmalloc(batch_size * sizeof(uint64));
@@ -51,6 +57,9 @@ p_soa_var_free(p_soa_var_t *soa)
 	uint32 i;
 
 	free(soa->p);
+	free(soa->mont_w);
+	free(soa->mont_r);
+	free(soa->p2);
 	free(soa->lattice_size);
 	for (i = 0; i < POLY_BATCH_SIZE; i++) {
 		free(soa->roots[i]);
@@ -71,27 +80,58 @@ store_p_soa(uint32 p, uint32 num_roots, uint32 which_poly,
 		mpz_t *roots, void *extra)
 {
 	p_soa_var_t *soa = (p_soa_var_t *)extra;
-	uint32 i, j;
+	uint32 i, j, curr;
+	uint64 p2 = (uint64)p * p;
+	uint32 mont_w = montmul32_w((uint32)p2);
+	uint64 mont_r = montmul64_r(p2);
 
 	if (p != soa->p[soa->curr]) {
 		soa->curr = soa->num_p;
 		soa->num_p = MIN(soa->num_p + num_roots, soa->num_p_alloc);
 	}
-	j = soa->num_p - soa->curr;
-	for (i = 0; i < j; i++) {
-		soa->p[soa->curr + i] = p;
-		soa->start_roots[which_poly][soa->curr + i] = gmp2uint64(roots[i]);
+	curr = soa->curr;
+	j = soa->num_p - curr;
+	for (i = 0; i < j; i++, curr++) {
+		soa->p[curr] = p;
+		soa->mont_w[curr] = mont_w;
+		soa->mont_r[curr] = mont_r;
+		soa->p2[curr] = p2;
+		soa->start_roots[which_poly][curr] = gmp2uint64(roots[i]);
+	}
+}
+
+/*------------------------------------------------------------------------*/
+static void
+create_special_q_lattice(p_soa_var_t *p_array, uint32 num_roots,
+			 uint64 special_q2, uint64 *special_q_roots)
+{
+	uint32 i, j;
+
+	for (i = 0; i < p_array->num_p; i++) {
+		uint64 p2 = p_array->p2[i];
+		uint32 p2_w = p_array->mont_w[i];
+		uint64 p2_r = p_array->mont_r[i];
+		uint64 inv = mp_modinv_2(special_q2, p2);
+
+		inv = montmul64(inv, p2_r, p2, p2_w);
+		for (j = 0; j < num_roots; j++) {
+			uint64 proot = p_array->start_roots[j][i];
+
+			uint64 res = montmul64(mp_modsub_2(proot,
+						special_q_roots[j] % p2, p2),
+						inv, p2, p2_w);
+			p_array->roots[j][i] = res;
+		}
 	}
 }
 
 /*------------------------------------------------------------------------*/
 static uint32
-sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
-			uint32 threads_per_block,
+handle_special_q(msieve_obj *obj, lattice_fb_t *L, uint32 threads_per_block,
 			gpu_info_t *gpu_info, CUfunction gpu_kernel,
 			uint32 special_q, uint64 *special_q_roots)
 {
-	uint32 i;
+	uint32 i, j;
 	p_soa_var_t * p_array = (p_soa_var_t *)L->p_array;
 	p_soa_var_t * q_array = (p_soa_var_t *)L->q_array;
 	uint32 num_blocks;
@@ -99,6 +139,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 	uint32 num_q_offset;
 	void *gpu_ptr;
 	uint32 num_poly = L->poly->num_poly;
+	curr_poly_t *middle_poly = L->poly->batch + num_poly / 2;
 
 	p_soa_t *p_marshall = (p_soa_t *)L->p_marshall;
 	q_soa_t *q_marshall = (q_soa_t *)L->q_marshall;
@@ -138,6 +179,36 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 	i += sizeof(gpu_ptr);
 
 	CUDA_TRY(cuParamSetSize(gpu_kernel, i))
+
+	if (special_q == 1) {
+		for (i = 0; i < p_array->num_p; i++) {
+			uint64 p2 = p_array->p2[i];
+
+			p_array->lattice_size[i] = MIN((uint32)(-1),
+					(2 * middle_poly->sieve_size / p2));
+		}
+		for (j = 0; j < num_poly; j++) {
+			memcpy(p_array->roots[j], p_array->start_roots[j],
+			       p_array->num_p * sizeof(uint64));
+			memcpy(q_array->roots[j], q_array->start_roots[j],
+			       q_array->num_p * sizeof(uint64));
+		}
+	}
+	else {
+		uint64 special_q2 = (uint64)special_q * special_q;
+
+		create_special_q_lattice(p_array, num_poly,
+						special_q2, special_q_roots);
+		create_special_q_lattice(q_array, num_poly,
+						special_q2, special_q_roots);
+		for (i = 0; i < p_array->num_p; i++) {
+			uint64 p2 = p_array->p2[i];
+
+			p_array->lattice_size[i] = MIN((uint32)(-1),
+					(2 * middle_poly->sieve_size / 
+						((double)p2 * special_q2)));
+		}
+	}
 
 	while (num_q_done < q_array->num_p) {
 
@@ -254,64 +325,6 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 }
 
 /*------------------------------------------------------------------------*/
-static void
-create_special_q_lattice(lattice_fb_t *L, uint32 which_special_q)
-{
-	uint32 i, j;
-	p_soa_var_t * p_array = (p_soa_var_t *)L->p_array;
-	p_soa_var_t * q_array = (p_soa_var_t *)L->q_array;
-	p_soa_var_t * special_q_array = (p_soa_var_t *)L->special_q_array;
-	uint32 num_poly = L->poly->num_poly;
-
-	uint32 special_q = special_q_array->p[which_special_q];
-	uint64 special_q2 = (uint64)special_q * special_q;
-
-	for (i = 0; i < p_array->num_p; i++) {
-		uint32 p = p_array->p[i];
-		uint64 p2 = (uint64)p * p;
-		uint32 p2_w = montmul32_w((uint32)p2);
-		uint64 p2_r = montmul64_r(p2);
-		uint64 inv = mp_modinv_2(special_q2, p2);
-
-		inv = montmul64(inv, p2_r, p2, p2_w);
-		for (j = 0; j < num_poly; j++) {
-			uint64 proot = p_array->start_roots[j][i];
-			uint64 sqroot =
-			    special_q_array->start_roots[j][which_special_q];
-
-			uint64 res = montmul64(mp_modsub_2(proot,
-						sqroot % p2, p2),
-						inv, p2, p2_w);
-			p_array->roots[j][i] = res;
-		}
-
-		p_array->lattice_size[i] = MIN((uint32)(-1),
-			(2 * L->poly->batch[num_poly / 2].sieve_size /
-					((double)special_q2 * p2)));
-	}
-
-	for (i = 0; i < q_array->num_p; i++) {
-		uint32 p = q_array->p[i];
-		uint64 p2 = (uint64)p * p;
-		uint32 p2_w = montmul32_w((uint32)p2);
-		uint64 p2_r = montmul64_r(p2);
-		uint64 inv = mp_modinv_2(special_q2, p2);
-
-		inv = montmul64(inv, p2_r, p2, p2_w);
-		for (j = 0; j < num_poly; j++) {
-			uint64 proot = q_array->start_roots[j][i];
-			uint64 sqroot =
-			    special_q_array->start_roots[j][which_special_q];
-
-			uint64 res = montmul64(mp_modsub_2(proot,
-						sqroot % p2, p2),
-						inv, p2, p2_w);
-			q_array->roots[j][i] = res;
-		}
-	}
-}
-
-/*------------------------------------------------------------------------*/
 static uint32
 sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_special_q,
@@ -333,8 +346,17 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	uint32 special_q_batch_size = 1000;
 
 	uint32 threads_per_block;
-	gpu_info_t *gpu_info = L->gpu_info;
-       	CUfunction gpu_kernel = L->gpu_kernel;
+	gpu_info_t *gpu_info = L->poly->gpu_info;
+	CUmodule gpu_module;
+       	CUfunction gpu_kernel;
+
+	if (large_p_max < ((uint32)1 << 24))
+		gpu_module = L->poly->gpu_module48;
+	else
+		gpu_module = L->poly->gpu_module64;
+
+	CUDA_TRY(cuModuleGetFunction(&gpu_kernel, 
+			gpu_module, "sieve_kernel"))
 
 	L->p_marshall = (p_soa_t *)xmalloc(sizeof(p_soa_t));
 	L->q_marshall = (q_soa_t *)xmalloc(sizeof(q_soa_t));
@@ -377,10 +399,11 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	sieve_fb_reset(sieve_large_p, large_p_min, large_p_max, 1, max_roots);
 	while (1) {
 		p_soa_var_reset(q_array);
-		while (q_array->num_p < host_q_batch_size)
-			if (sieve_fb_next(sieve_large_p, L->poly, store_p_soa,
-						q_array) == P_SEARCH_DONE)
+		while (sieve_fb_next(sieve_large_p, L->poly, store_p_soa,
+						q_array) != P_SEARCH_DONE)
+			if (q_array->num_p == host_q_batch_size)
 				break;
+
 		if (q_array->num_p == 0)
 			break;
 
@@ -391,35 +414,19 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 			uint32 i, j;
 
 			p_soa_var_reset(p_array);
-			while (p_array->num_p < host_p_batch_size)
-				if (sieve_fb_next(sieve_small_p, L->poly,
+			while (sieve_fb_next(sieve_small_p, L->poly, 
 						store_p_soa,
-						p_array) == P_SEARCH_DONE)
+						p_array) != P_SEARCH_DONE)
+				if (p_array->num_p == host_p_batch_size)
 					break;
+
 			if (p_array->num_p == 0)
 				break;
 
 			if (special_q_min <= 1) { /* handle trivial lattice */
-				for (i = 0; i < p_array->num_p; i++) {
-					uint32 p = p_array->p[i];
-
-					p_array->lattice_size[i] =
-						MIN((uint32)(-1),
-						    (2 * L->poly->batch[num_poly / 
-						    2].sieve_size / ((double)p * p)));
-				}
-
-				for (j = 0; j < num_poly; j++) {
-					memcpy(p_array->roots[j],
-					       p_array->start_roots[j],
-					       p_array->num_p * sizeof(uint64));
-					memcpy(q_array->roots[j],
-					       q_array->start_roots[j],
-					       q_array->num_p * sizeof(uint64));
-				}
 				memset(sqroots, 0, sizeof(sqroots));
 
-				if (sieve_lattice_batch(obj, L,
+				if (handle_special_q(obj, L,
 							threads_per_block,
 							gpu_info, gpu_kernel,
 							1, sqroots)) {
@@ -435,13 +442,14 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 						special_q_max, 1, max_roots);
 			while (1) {
 				p_soa_var_reset(special_q_array);
-				while (special_q_array->num_p <
-							special_q_batch_size)
-					if (sieve_fb_next(sieve_special_q,
+				while (sieve_fb_next(sieve_special_q,
 							L->poly, store_p_soa,
-							special_q_array) ==
+							special_q_array) !=
 								P_SEARCH_DONE)
+					if (special_q_array->num_p ==
+							special_q_batch_size)
 						break;
+
 				if (special_q_array->num_p == 0)
 					break;
 
@@ -450,9 +458,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 						sqroots[j] =
 						    special_q_array->start_roots[j][i];
 
-					create_special_q_lattice(L, i);
-
-					if (sieve_lattice_batch(obj, L,
+					if (handle_special_q(obj, L,
 							threads_per_block,
 							gpu_info, gpu_kernel,
 							special_q_array->p[i],
@@ -493,6 +499,7 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 	uint32 small_p_min, small_p_max;
 	sieve_fb_t sieve_large_p, sieve_small_p;
 	curr_poly_t *middle_poly = L->poly->batch + L->poly->num_poly / 2;
+	curr_poly_t *last_poly = L->poly->batch + L->poly->num_poly - 1;
 	uint32 degree = L->poly->degree;
 	uint32 max_roots = (degree != 5) ? degree : 1;
 
@@ -513,18 +520,13 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 	small_p_min = small_p_max / params->p_scale;
 
 	while (1) {
-		printf("------- %u-%u %u-%u %u-%u\n",
-			special_q_min, special_q_max,
-			small_p_min, small_p_max,
-			large_p_min, large_p_max);
-
-		if (large_p_max < ((uint32)1 << 24))
-			L->gpu_module = L->poly->gpu_module48;
-		else
-			L->gpu_module = L->poly->gpu_module64;
-
-		CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel, 
-				L->gpu_module, "sieve_kernel"))
+		gmp_printf("coeff %Zd-%Zd specialq %u - %u "
+			   "p1 %u - %u p2 %u - %u\n",
+				L->poly->batch[0].high_coeff,
+				last_poly->high_coeff,
+				special_q_min, special_q_max,
+				small_p_min, small_p_max,
+				large_p_min, large_p_max);
 
 		quit = sieve_specialq_64(obj, L,
 				sieve_special_q,

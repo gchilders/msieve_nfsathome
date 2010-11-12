@@ -128,9 +128,6 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 	L.poly = poly;
 	L.start_time = time(NULL);
 	L.deadline = deadline;
-#ifdef HAVE_CUDA
-	L.gpu_info = poly->gpu_info;
-#endif
 
 	gmp_printf("coeff %Zd-%Zd specialq %u - %u\n",
 		   poly->batch[0].high_coeff, last_poly->high_coeff,
