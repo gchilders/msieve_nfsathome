@@ -345,7 +345,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	p_soa_var_t * special_q_array;
 	uint32 num_poly = L->poly->num_poly;
 	uint32 degree = L->poly->degree;
-	uint32 max_roots = (degree != 5) ? degree : 1;
+	uint32 max_roots = (degree != 5) ? MAX_ROOTS : 1;
 	uint32 host_p_batch_size;
 	uint32 host_q_batch_size;
 	uint32 special_q_batch_size = 1000;
