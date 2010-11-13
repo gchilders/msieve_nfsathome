@@ -246,7 +246,7 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly,
 	double start_time = get_cpu_time();
 	uint32 deadline_per_coeff = 800;
 #ifdef HAVE_CUDA
-	uint32 batch_size = (poly->degree == 5) ? POLY_BATCH_SIZE : 1;
+	uint32 batch_size = POLY_BATCH_SIZE;
 #else
 	uint32 batch_size = 1;
 #endif

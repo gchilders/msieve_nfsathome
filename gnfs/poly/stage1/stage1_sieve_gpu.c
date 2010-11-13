@@ -70,9 +70,14 @@ p_soa_var_free(p_soa_var_t *soa)
 static void
 p_soa_var_reset(p_soa_var_t *soa)
 {
+	uint32 i;
+
 	soa->num_p = 0;
 	soa->curr = 0;
 	soa->p[0] = 0;
+	for (i = 0; i < POLY_BATCH_SIZE; i++)
+		memset(soa->start_roots[i], 0, soa->num_p_alloc *
+							sizeof(uint64));
 }
 
 static void 
