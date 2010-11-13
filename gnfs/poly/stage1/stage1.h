@@ -180,8 +180,8 @@ uint32 sieve_fb_next(sieve_fb_t *s,
 /*-----------------------------------------------------------------------*/
 
 typedef struct {
-	void *p_array;
-	void *q_array;
+	void *orig_p_array, *trans_p_array;
+	void *orig_q_array, *trans_q_array;
 	void *special_q_array;
 
 #ifdef HAVE_CUDA
