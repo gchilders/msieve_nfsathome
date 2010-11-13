@@ -63,6 +63,13 @@ p_packed_free(p_packed_var_t *s)
 	free(s->packed_array);
 }
 
+static void
+p_packed_reset(p_packed_var_t *s)
+{
+	s->num_p = s->num_roots = s->p_size = 0;
+	s->curr = s->packed_array;
+}
+
 static p_packed_t * 
 p_packed_next(p_packed_t *curr)
 {
@@ -275,16 +282,13 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 {
 	uint32 i, j;
 	uint32 quit = 0;
-	p_packed_t *qptr;
 	p_packed_var_t specialq_array;
 	p_packed_var_t hash_array;
 	hashtable_t hashtable;
-	uint32 num_p, num_q;
-	uint32 num_q_done;
+	uint32 num_p;
 	uint64 block_size;
 	uint64 *invtable = NULL;
 
-	p_packed_init(&specialq_array);
 	p_packed_init(&hash_array);
 	hashtable_init(&hashtable, 3, 2);
 	block_size = (uint64)p_min * p_min;
@@ -307,38 +311,40 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 		goto finished;
 	}
 
-	sieve_fb_reset(sieve_special_q, special_q_min, special_q_max, 
-			1, MAX_ROOTS);
-	while (sieve_fb_next(sieve_special_q, L->poly, 
-			store_p_packed, &specialq_array) != P_SEARCH_DONE) {
-		;
-	}
-
-	num_q = specialq_array.num_p;
-#if 1
-	printf("special q: %u entries, %u roots\n", num_q, 
-					specialq_array.num_roots);
-#endif
-
+	p_packed_init(&specialq_array);
 	invtable = (uint64 *)xmalloc(num_p * SPECIALQ_BATCH_SIZE * 
 					sizeof(uint64));
-	num_q_done = 0;
-	qptr = specialq_array.packed_array;
 
-	while (num_q_done < num_q) {
-
+	sieve_fb_reset(sieve_special_q, special_q_min, special_q_max, 
+			1, MAX_ROOTS);
+	while (1) {
+		p_packed_t *qptr = specialq_array.packed_array;
+		uint32 num_q;
 		p_packed_t *tmp;
 		uint64 *invtmp;
 		mp_t qprod;
 		uint32 batch_q[SPECIALQ_BATCH_SIZE];
 		uint64 batch_q_inv[SPECIALQ_BATCH_SIZE];
-		uint32 qbatch_size = MIN(SPECIALQ_BATCH_SIZE,
-					num_q - num_q_done);
+
+		p_packed_reset(&specialq_array);
+		while (sieve_fb_next(sieve_special_q, L->poly, store_p_packed,
+					&specialq_array) != P_SEARCH_DONE) {
+			if (specialq_array.num_p == SPECIALQ_BATCH_SIZE)
+				break;
+		}
+
+		num_q = specialq_array.num_p;
+		if (num_q == 0)
+			break;
+#if 1
+		printf("special q: %u entries, %u roots\n", num_q, 
+					specialq_array.num_roots);
+#endif
 
 		mp_clear(&qprod);
 		qprod.nwords = qprod.val[0] = 1;
 
-		for (i = 0, tmp = qptr; i < qbatch_size; i++) {
+		for (i = 0, tmp = qptr; i < num_q; i++) {
 			batch_q[i] = tmp->p;
 			mp_mul_1(&qprod, tmp->p, &qprod);
 			tmp = p_packed_next(tmp);
@@ -347,14 +353,14 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 		for (i = 0, tmp = hash_array.packed_array; i < num_p; i++) {
 
 			if (mp_gcd_1(mp_mod_1(&qprod, tmp->p), tmp->p) == 1)
-				batch_invert(batch_q, qbatch_size, 
+				batch_invert(batch_q, num_q, 
 						batch_q_inv, tmp->p, 
 						tmp->mont_r, tmp->mont_w);
 			else
 				memset(batch_q_inv, 0, sizeof(batch_q_inv));
 
 			invtmp = invtable + i;
-			for (j = 0; j < qbatch_size; j++) {
+			for (j = 0; j < num_q; j++) {
 				*invtmp = batch_q_inv[j];
 				invtmp += num_p;
 			}
@@ -362,7 +368,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 		}
 
 		invtmp = invtable;
-		for (i = 0; i < qbatch_size; i++) {
+		for (i = 0; i < num_q; i++) {
 
 			for (j = 0; j < qptr->num_roots; j++) {
 				if (handle_special_q(obj,
@@ -373,15 +379,11 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 					quit = 1;
 					goto finished;
 				}
-
-				
 			}
 
 			qptr = p_packed_next(qptr);
 			invtmp += num_p;
 		}
-
-		num_q_done += qbatch_size;
 	}
 
 finished:
