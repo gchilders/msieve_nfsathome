@@ -321,7 +321,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 				(2 * L->poly->batch[which_root].sieve_size /
 					(special_q_array->p2[start] *
 						(double)trans_p_array->p2[i])));
-		*used = trans_p_array->k[batch_size-1] + 1;
+		*used = trans_p_array->k[batch_size-1] - start + 1;
 		break;
 	}
 
