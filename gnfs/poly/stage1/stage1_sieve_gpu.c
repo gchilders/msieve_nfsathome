@@ -185,7 +185,7 @@ trans_batch_sq_one_ad(p_soa_var_t *orig_p_array, p_soa_var_t *trans_p_array,
 			uint64 res = montmul64(mp_modsub_2(proot, sqroot % p2,
 							p2), inv, p2, p2_w);
 
-			trans_p_array->roots[j][i] = res;
+			trans_p_array->roots[j][num_trans] = res;
 		}
 		trans_p_array->num_p++;
 	}
@@ -199,14 +199,14 @@ trans_batch_sq_one_ad(p_soa_var_t *orig_p_array, p_soa_var_t *trans_p_array,
 #define BATCH_SQ_ONE_AD 2
 
 static void
-check_found(lattice_fb_t *L, found_t *found_array, uint32 batch_mode,
-					uint32 which_root)
+check_found(lattice_fb_t *L, found_t *found_array, uint32 found_array_size,
+			uint32 batch_mode, uint32 which_root)
 {
 	uint32 i, k;
 	p_soa_var_t *p_array = (p_soa_var_t *)L->trans_p_array;
 	p_soa_var_t *special_q_array = (p_soa_var_t *)L->special_q_array;
 
-	for (i = 0; i < L->found_array_size; i++) {
+	for (i = 0; i < found_array_size; i++) {
 		found_t *f = found_array + i;
 		uint128 proot, res;
 		uint64 p2;
@@ -436,7 +436,9 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 						threads_per_block *
 							sizeof(found_t)))
 
-			check_found(L, found_array, batch_mode, which_root);
+			check_found(L, found_array,
+				num_blocks * threads_per_block,
+				batch_mode, which_root);
 
 			num_p_done += curr_num_p;
 		}
