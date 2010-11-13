@@ -26,9 +26,9 @@ static const sieve_fb_param_t sieve_fb_params[] = {
 	{ 72, 1.1,   5,  500,   10000000,  500000000},
 	{ 80, 1.1,   5, 2500,  250000000, 2500000000},
 #else
-	{ 32, 2.0,   0,    1,          1,        100},
-	{ 40, 2.0,   0,    1,        150,       3500},
-	{ 48, 2.0,   0,    1,      10000,      75000},
+	{ 32, 2.0,   0,    1,          1,          1},
+	{ 40, 2.0,   0,    1,          1,       3500},
+	{ 48, 2.0,   0,    1,       2500,      75000},
 	{ 56, 1.7,   0,   25,     250000,    1500000},
 	{ 64, 1.5,   0,  100,    5000000,   25000000},
 	{ 72, 1.3,   0,  500,   75000000,  350000000},
@@ -101,14 +101,8 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 	uint32 num_pieces;
 	sieve_fb_param_t params;
 	double bits;
-	uint32 degree = poly->degree;
 	curr_poly_t *middle_poly = poly->batch + poly->num_poly / 2;
 	curr_poly_t *last_poly = poly->batch + poly->num_poly - 1;
-#ifdef HAVE_CUDA
-	uint32 max_roots = (degree != 5) ? degree : 1;
-#else
-	uint32 max_roots = degree;
-#endif
 
 	bits = log(middle_poly->p_size_max) / M_LN2;
 	printf("p = %.2lf sieve = %.2lf bits\n",
@@ -122,7 +116,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 
 	sieve_fb_init(&sieve_special_q, poly,
 			5, MIN(10000, special_q_max),
-			1, max_roots,
+			1, poly->degree,
 			1);
 
 	L.poly = poly;

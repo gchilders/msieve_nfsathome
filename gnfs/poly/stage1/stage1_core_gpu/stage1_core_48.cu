@@ -122,7 +122,7 @@ sieve_kernel(p_soa_t *pbatch,
 								my_threadid;
 						f->p = p;
 						f->q = q;
-						f->which_poly = k;
+						f->k = k;
 						f->offset = res;
 						f->proot = proot;
 					}

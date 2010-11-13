@@ -30,7 +30,7 @@ extern "C" {
 typedef struct {
 	uint32 p;
 	uint32 q;
-	uint32 which_poly;
+	uint32 k;
 	uint32 pad;
 	uint64 offset;
 	uint64 proot;
