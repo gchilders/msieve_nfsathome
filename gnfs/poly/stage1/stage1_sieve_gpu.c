@@ -622,7 +622,7 @@ sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L,
 	sieve_fb_t sieve_large_p, sieve_small_p;
 	curr_poly_t *middle_poly = L->poly->batch + L->poly->num_poly / 2;
 	curr_poly_t *last_poly = L->poly->batch + L->poly->num_poly - 1;
-	uint32 max_roots = (L->poly->degree) ? L->poly->degree : 1;
+	uint32 max_roots = (L->poly->degree != 5) ? L->poly->degree : 1;
 
 	sieve_fb_init(&sieve_large_p, L->poly,
 			0, 0, /* prime large_p */
