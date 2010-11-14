@@ -289,6 +289,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	uint64 block_size;
 	uint64 *invtable = NULL;
 
+	p_packed_init(&specialq_array);
 	p_packed_init(&hash_array);
 	hashtable_init(&hashtable, 3, 2);
 	block_size = (uint64)p_min * p_min;
@@ -311,7 +312,6 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 		goto finished;
 	}
 
-	p_packed_init(&specialq_array);
 	invtable = (uint64 *)xmalloc(num_p * SPECIALQ_BATCH_SIZE * 
 					sizeof(uint64));
 
