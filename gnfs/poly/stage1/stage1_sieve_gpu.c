@@ -285,11 +285,11 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			       orig_p_array->num_p * sizeof(uint64));
 			memcpy(trans_q_array->roots[j], orig_q_array->roots[j],
 			       orig_q_array->num_p * sizeof(uint64));
-			memcpy(trans_p_array->p, orig_p_array->p,
-			       orig_p_array->num_p * sizeof(uint32));
-			memcpy(trans_q_array->p, orig_q_array->p,
-			       orig_q_array->num_p * sizeof(uint32));
 		}
+		memcpy(trans_p_array->p, orig_p_array->p,
+		       orig_p_array->num_p * sizeof(uint32));
+		memcpy(trans_q_array->p, orig_q_array->p,
+		       orig_q_array->num_p * sizeof(uint32));
 		trans_p_array->num_p = orig_p_array->num_p;
 		trans_q_array->num_p = orig_q_array->num_p;
 		for (i = 0; i < trans_p_array->num_p; i++)
