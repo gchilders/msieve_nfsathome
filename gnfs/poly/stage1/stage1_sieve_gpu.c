@@ -295,7 +295,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 		for (i = 0; i < trans_p_array->num_p; i++)
 			trans_p_array->lattice_size[i] = MIN((uint32)(-1),
 				(2 * L->poly->batch[len/2].sieve_size /
-					trans_p_array->p2[i]));
+					orig_p_array->p2[i]));
 		break;
 
 	  case BATCH_AD_ONE_SQ:
