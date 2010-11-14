@@ -117,6 +117,8 @@ trans_batch_ad_one_sq(p_soa_var_t *orig_p_array, p_soa_var_t *trans_p_array,
 		if (special_q_array->roots[i][which_special_q] != 0)
 			trans_p_array->k[k++] = i;
 	}
+	if (k == 0)
+		return 0;
 
 	for (i = 0; i < orig_p_array->num_p; i++) {
 		uint64 p2 = orig_p_array->p2[i];
@@ -162,6 +164,8 @@ trans_batch_sq_one_ad(p_soa_var_t *orig_p_array, p_soa_var_t *trans_p_array,
 		if (special_q_array->roots[which_ad][i] != 0)
 			trans_p_array->k[k++] = i;
 	}
+	if (k == 0)
+		return 0;
 
 	for (i = 0; i < orig_p_array->num_p; i++) {
 		uint64 p2 = orig_p_array->p2[i];
@@ -301,6 +305,8 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 		trans_batch_ad_one_sq(orig_q_array, trans_q_array,
 					special_q_array,
 					which_root, start, len);
+		if (!batch_size)
+			return 0;
 		for (i = 0; i < trans_p_array->num_p; i++)
 			trans_p_array->lattice_size[i] = MIN((uint32)(-1),
 				(2 * L->poly->batch[len/2].sieve_size /
@@ -583,7 +589,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 
 				if (num_sq == 0)
 					break;
-				else if (num_sq < 200) {
+				else if (num_sq < 200 && num_poly > 1) {
 					/* batch many a_d with
 					 * one special_q at a time */
 
