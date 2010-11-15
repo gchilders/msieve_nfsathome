@@ -178,7 +178,7 @@ handle_special_q(msieve_obj *obj, hashtable_t *hashtable,
 
 	while (sieve_start < sieve_size) {
 		uint64 sieve_end = sieve_start + MIN(block_size,
-						sieve_size - block_size);
+						sieve_size - sieve_start);
 
 		tmp = hash_array->packed_array;
 		hashtable_reset(hashtable);
