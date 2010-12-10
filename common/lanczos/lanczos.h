@@ -163,14 +163,18 @@ typedef struct {
 
 #ifdef HAVE_MPI
 	uint32 mpi_size;
+	uint32 mpi_nrows;
+	uint32 mpi_ncols;
+	uint32 mpi_la_row_rank;
+	uint32 mpi_la_col_rank;
 	MPI_Comm mpi_la_row_grid;
 	MPI_Comm mpi_la_col_grid;
 
 	/* needed on root node only */
-	int32 col_counts[MAX_MPI_PROCS];
-	int32 col_offsets[MAX_MPI_PROCS]; 
-	int32 row_counts[MAX_MPI_PROCS];
-	int32 row_offsets[MAX_MPI_PROCS];
+	int32 col_counts[MAX_MPI_GRID_DIM];
+	int32 col_offsets[MAX_MPI_GRID_DIM]; 
+	int32 row_counts[MAX_MPI_GRID_DIM];
+	int32 row_offsets[MAX_MPI_GRID_DIM];
 #endif
 
 } packed_matrix_t;
@@ -209,6 +213,12 @@ void tmul_Nx64_64x64_acc(packed_matrix_t *A, uint64 *v, uint64 *x,
 void tmul_64xN_Nx64(packed_matrix_t *A, uint64 *x, uint64 *y, 
 			uint64 *xy, uint32 n);
 
+#ifdef HAVE_MPI
+void global_xor(uint64 *send_buf, uint64 *recv_buf, 
+		uint32 bufsize, uint32 mpi_nodes, 
+		uint32 mpi_rank, MPI_Comm comm);
+#endif
+
 /* single-threaded */
 
 void mul_Nx64_64x64_acc(uint64 *v, uint64 *x, uint64 *y, uint32 n);
@@ -220,6 +230,8 @@ void mul_64xN_Nx64(uint64 *x, uint64 *y, uint64 *xy, uint32 n);
 void core_Nx64_64x64_acc(uint64 *v, uint64 *c, uint64 *y, uint32 n);
 
 void core_64xN_Nx64(uint64 *x, uint64 *c, uint64 *y, uint32 n);
+
+void accum_xor(uint64 *dest, uint64 *src, uint32 n);
 
 #ifdef __cplusplus
 }

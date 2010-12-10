@@ -143,13 +143,8 @@ static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
 #endif
 		}
 
-		if (i > 0) {
-			uint64 *curr_b = t->b;
-			uint32 j;
-
-			for (j = 0; j < nrows; j++)
-				b[j] ^= curr_b[j];
-		}
+		if (i > 0)
+			accum_xor(b, t->b, nrows);
 	}
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX)
@@ -682,6 +677,10 @@ void packed_matrix_init(msieve_obj *obj,
 	p->vsize = ncols;
 #ifdef HAVE_MPI
 	p->mpi_size = obj->mpi_size;
+	p->mpi_nrows = obj->mpi_nrows;
+	p->mpi_ncols = obj->mpi_ncols;
+	p->mpi_la_row_rank = obj->mpi_la_row_rank;
+	p->mpi_la_col_rank = obj->mpi_la_col_rank;
 	p->mpi_la_row_grid = obj->mpi_la_row_grid;
 	p->mpi_la_col_grid = obj->mpi_la_col_grid;
 #endif
@@ -876,9 +875,8 @@ void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x,
 
 	mul_packed(A, x, scratch);
 
-	MPI_TRY(MPI_Allreduce(scratch, b, A->nrows,
-			MPI_LONG_LONG, MPI_BXOR,
-			A->mpi_la_row_grid));
+	global_xor(scratch, b, A->nrows, A->mpi_ncols,
+			A->mpi_la_col_rank, A->mpi_la_row_grid);
 #endif
 }
 
@@ -910,18 +908,15 @@ void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x,
 
 	/* make each MPI row combine its own part of A*x */
 
-	MPI_TRY(MPI_Allreduce(scratch, b, A->nrows,
-			MPI_LONG_LONG, MPI_BXOR, 
-			A->mpi_la_row_grid));
+	global_xor(scratch, b, A->nrows, A->mpi_ncols,
+			A->mpi_la_col_rank, A->mpi_la_row_grid);
 
 	mul_trans_packed(A, b, scratch);
 
-	/* make each MPI column combine its own part of A^T * A*x 
-	   into the top row of MPI processes */
+	/* make each MPI column combine its own part of A^T * A*x */
 
-	MPI_TRY(MPI_Allreduce(scratch, b, A->ncols,
-			MPI_LONG_LONG, MPI_BXOR, 
-			A->mpi_la_col_grid));
+	global_xor(scratch, b, A->ncols, A->mpi_nrows, 
+			A->mpi_la_row_rank, A->mpi_la_col_grid);
 
 #endif
 }
