@@ -185,7 +185,7 @@ trans_batch_sq_one_ad(p_soa_var_t *orig_p_array, p_soa_var_t *trans_p_array,
 			uint64 sqroot =
 			    special_q_array->roots[which_ad][which_root];
 			uint64 inv = montmul64(mp_modinv_2(sq2, p2),
-						p2_r, p2, p2_w);;
+						p2_r, p2, p2_w);
 			uint64 res = montmul64(mp_modsub_2(proot, sqroot % p2,
 							p2), inv, p2, p2_w);
 
@@ -263,6 +263,13 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			uint32 *used)
 {
 	uint32 i, j;
+
+	p_soa_t *p_marshall;
+	q_soa_t *q_marshall;
+	found_t *found_array;
+	uint32 found_array_size;
+	uint32 num_q_done;
+
 	p_soa_var_t *orig_p_array = (p_soa_var_t *)L->orig_p_array;
 	p_soa_var_t *trans_p_array = (p_soa_var_t *)L->trans_p_array;
 	p_soa_var_t *orig_q_array = (p_soa_var_t *)L->orig_q_array;
@@ -331,11 +338,11 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 		break;
 	}
 
-	p_soa_t *p_marshall = (p_soa_t *)L->p_marshall;
-	q_soa_t *q_marshall = (q_soa_t *)L->q_marshall;
-	found_t *found_array = (found_t *)L->found_array;
-	uint32 found_array_size = L->found_array_size;
-	uint32 num_q_done = 0;
+	p_marshall = (p_soa_t *)L->p_marshall;
+	q_marshall = (q_soa_t *)L->q_marshall;
+	found_array = (found_t *)L->found_array;
+	found_array_size = L->found_array_size;
+	num_q_done = 0;
 
 	i = 0;
 	gpu_ptr = (void *)(size_t)L->gpu_p_array;
