@@ -127,8 +127,6 @@ handle_special_q(msieve_obj *obj, hashtable_t *hashtable,
 {
 	uint32 i, j;
 	uint32 quit = 0;
-	time_t curr_time;
-	double elapsed;
 	p_packed_t *tmp;
 	uint32 num_entries = hash_array->num_p;
 	uint64 special_q2 = (uint64)special_q * special_q;
@@ -136,6 +134,8 @@ handle_special_q(msieve_obj *obj, hashtable_t *hashtable,
 				2 * L->poly->batch[0].sieve_size / special_q2);
 	uint64 sieve_start = 0;
 	uint32 num_blocks = 0;
+	time_t curr_time;
+	double elapsed;
 
 	tmp = hash_array->packed_array;
 
@@ -234,13 +234,10 @@ handle_special_q(msieve_obj *obj, hashtable_t *hashtable,
 		}
 	}
 
-//TODO: use CPU timer instead of wall timer below
-#if 0
 	curr_time = time(NULL);
 	elapsed = curr_time - L->start_time;
 	if (elapsed > L->deadline)
 		quit = 1;
-#endif
 
 //	printf("%u\n", num_blocks); 
 	return quit;
@@ -307,7 +304,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 #endif
 	/* handle trivial lattice */
 	if (special_q_min == 1 && special_q_max == 1) {
-		handle_special_q(obj, &hashtable, &hash_array,
+		quit = handle_special_q(obj, &hashtable, &hash_array,
 				L, 1, 0, block_size, NULL);
 		goto finished;
 	}
