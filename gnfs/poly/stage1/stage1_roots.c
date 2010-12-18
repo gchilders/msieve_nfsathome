@@ -445,7 +445,6 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 
 			if (p == P_SEARCH_DONE) {
 				s->avail_algos &= ~ALGO_ENUM;
-
 				continue;
 			}
 
@@ -473,7 +472,6 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 
 			if (p >= s->p_max || p >= P_PRIME_LIMIT) {
 				s->avail_algos &= ~ALGO_PRIME;
-
 				continue;
 			}
 
