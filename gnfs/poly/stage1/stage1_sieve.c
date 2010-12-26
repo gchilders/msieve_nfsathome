@@ -263,7 +263,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		}
 
 #ifdef HAVE_CUDA
-		if (special_q_max == 1) {
+		if (special_q_max2 == 1) {
 			quit = sieve_lattice_gpu_nosq(obj, &L, &params);
 		}
 		else {
