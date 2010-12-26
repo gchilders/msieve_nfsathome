@@ -576,10 +576,10 @@ sieve_lattice_gpu_nosq(msieve_obj *obj, lattice_fb_t *L,
 	uint32 degree = L->poly->degree;
 
 	sieve_fb_init(&sieve_large_p, L->poly,
-			2001, 50000, 1, degree, 0);
+			1251, 50000, 1, degree, 0);
 
 	sieve_fb_init(&sieve_small_p, L->poly,
-			7, 2000, 1, degree, 0);
+			7, 1250, 1, degree, 0);
 
 	large_p_max = MIN(sqrt(middle_poly->p_size_max) * 
 				params->p_scale, (uint32)(-1));

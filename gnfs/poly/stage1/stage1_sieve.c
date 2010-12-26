@@ -14,11 +14,10 @@ $Id$
 
 #include <stage1.h>
 
-#define MIN_SPECIAL_Q 17
-
 static const sieve_fb_param_t sieve_fb_params[] = {
 
 #ifdef HAVE_CUDA
+#define MIN_SPECIAL_Q 101
 	/* for most input sizes, parameters are chosen
 	   in favor of using the 48bit GPU core as
 	   much as possible. Only very large inputs
@@ -30,6 +29,7 @@ static const sieve_fb_param_t sieve_fb_params[] = {
 	{ 72, 1.1,  500,   5,  10000000,  500000000},
 	{ 80, 1.1, 2500,   5, 250000000, 2500000000},
 #else
+#define MIN_SPECIAL_Q 17
 	{ 40, 2.0,   10},
 	{ 48, 2.0,   20},
 	{ 56, 1.7,   80},
@@ -240,7 +240,7 @@ sieve_lattice(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		special_q_max = special_q_min * piece_ratio;
 	}
 
-	if (special_q_max < MIN_SPECIAL_Q)
+	if (special_q_max < MIN_SPECIAL_Q * params.p_scale)
 		special_q_min = special_q_max = 1;
 	else if (special_q_min > 1)
 		special_q_min = MAX(special_q_min, MIN_SPECIAL_Q);

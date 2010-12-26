@@ -385,8 +385,6 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	p_soa_var_t *orig_p_array, *trans_p_array;
 	p_soa_var_t *orig_q_array, *trans_q_array;
 	p_soa_var_t *special_q_array;
-	uint32 degree = L->poly->degree;
-	uint32 max_p_roots = (degree != 5) ? MAX_ROOTS : 1;
 	uint32 host_p_batch_size;
 	uint32 host_q_batch_size;
 
@@ -440,7 +438,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	p_soa_var_init(trans_q_array, host_q_batch_size);
 	p_soa_var_init(special_q_array, host_p_batch_size);
 
-	sieve_fb_reset(sieve_large_p, large_p_min, large_p_max, 1, max_p_roots);
+	sieve_fb_reset(sieve_large_p, large_p_min, large_p_max, 1, MAX_ROOTS);
 	while (!quit) {
 		p_soa_var_reset(orig_q_array);
 		while (sieve_fb_next(sieve_large_p, L->poly, store_p_soa,
@@ -452,7 +450,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 			break;
 
 		sieve_fb_reset(sieve_small_p, small_p_min, small_p_max,
-						1, max_p_roots);
+						1, MAX_ROOTS);
 		while (!quit) {
 			p_soa_var_reset(orig_p_array);
 			while (sieve_fb_next(sieve_small_p, L->poly, 
@@ -531,19 +529,19 @@ sieve_lattice_gpu_sq(msieve_obj *obj, lattice_fb_t *L,
 	uint32 quit;
 	uint32 large_p_min, large_p_max;
 	uint32 small_p_min, small_p_max;
+	uint32 degree = L->poly->degree;
 	sieve_fb_t sieve_large_p, sieve_small_p;
 	curr_poly_t *middle_poly = L->poly->batch + L->poly->num_poly / 2;
 	curr_poly_t *last_poly = L->poly->batch + L->poly->num_poly - 1;
-	uint32 max_roots = (L->poly->degree != 5) ? L->poly->degree : 1;
 
 	sieve_fb_init(&sieve_large_p, L->poly,
 			0, 0, /* prime large_p */
-			1, max_roots,
+			1, degree,
 			0);
 
 	sieve_fb_init(&sieve_small_p, L->poly,
 			0, 0, /* prime small_p */
-			1, max_roots,
+			1, degree,
 			0);
 
 	large_p_max = MIN(sqrt(middle_poly->p_size_max / special_q_min),
