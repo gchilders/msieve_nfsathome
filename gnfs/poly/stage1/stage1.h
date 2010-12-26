@@ -22,7 +22,7 @@ $Id$
 extern "C" {
 #endif
 
-#define POLY_BATCH_SIZE 40
+#define POLY_BATCH_SIZE 1
 
 #define MAX_POLYSELECT_DEGREE 6
 
@@ -89,8 +89,8 @@ typedef struct {
 #ifdef HAVE_CUDA
 	CUcontext gpu_context;
 	gpu_info_t *gpu_info; 
-	CUmodule gpu_module48; 
-	CUmodule gpu_module64; 
+	CUmodule gpu_module_sq; 
+	CUmodule gpu_module_nosq; 
 #endif
 
 	stage1_callback_t callback;
@@ -200,26 +200,6 @@ typedef struct {
 	uint32 deadline;
 } lattice_fb_t;
 
-/* lower-level sieve routines */
-
-uint32
-sieve_lattice_deg46_64(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_special_q, 
-		uint32 special_q_min, uint32 special_q_max,
-		sieve_fb_t *sieve_small_p,
-		uint32 small_p_min, uint32 small_p_max,
-		sieve_fb_t *sieve_large_p,
-		uint32 large_p_min, uint32 large_p_max);
-
-uint32
-sieve_lattice_deg5_64(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_special_q, 
-		uint32 special_q_min, uint32 special_q_max,
-		sieve_fb_t *sieve_small_p,
-		uint32 small_p_min, uint32 small_p_max,
-		sieve_fb_t *sieve_large_p,
-		uint32 large_p_min, uint32 large_p_max);
-
 void
 handle_collision(poly_search_t *poly, uint32 which_poly,
 			uint32 p1, uint32 p2, uint32 special_q,
@@ -244,15 +224,25 @@ typedef struct {
 void sieve_lattice(msieve_obj *obj, poly_search_t *poly, 
 				uint32 deadline);
 
-uint32 sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L, 
+/* low-level routines */
+
+#ifdef HAVE_CUDA
+uint32 sieve_lattice_gpu_sq(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_param_t *params,
 		sieve_fb_t *sieve_special_q,
 		uint32 special_q_min, uint32 special_q_max);
+
+uint32 sieve_lattice_gpu_nosq(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_param_t *params);
+
+#else
 
 uint32 sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_param_t *params,
 		sieve_fb_t *sieve_special_q,
 		uint32 special_q_min, uint32 special_q_max);
+#endif
+
 
 #ifdef __cplusplus
 }

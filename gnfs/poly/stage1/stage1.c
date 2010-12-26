@@ -98,10 +98,10 @@ poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 			CU_CTX_BLOCKING_SYNC,
 			poly->gpu_info->device_handle))
 
-	CUDA_TRY(cuModuleLoad(&poly->gpu_module48, 
-				"stage1_core_48.ptx"))
-	CUDA_TRY(cuModuleLoad(&poly->gpu_module64, 
-				"stage1_core_64.ptx"))
+	CUDA_TRY(cuModuleLoad(&poly->gpu_module_sq, 
+				"stage1_core_sq.ptx"))
+	CUDA_TRY(cuModuleLoad(&poly->gpu_module_nosq, 
+				"stage1_core_nosq.ptx"))
 #endif
 
 }
@@ -178,11 +178,7 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly,
 	uint32 digits = mpz_sizeinbase(poly->N, 10);
 	double start_time = get_cpu_time();
 	uint32 deadline_per_coeff = 800;
-#ifdef HAVE_CUDA
-	uint32 batch_size = POLY_BATCH_SIZE;
-#else
 	uint32 batch_size = 1;
-#endif
 
 	if (digits <= 100)
 		deadline_per_coeff = 5;
