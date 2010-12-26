@@ -64,7 +64,8 @@ stage1_bounds_update(bounds_t *bounds, double N,
 		exit(-1);
 	}
 
-	bounds->p_size_max = bounds->coeff_max / skewness_min;
+	bounds->p_size_max = MIN(bounds->coeff_max / skewness_min,
+					MAX_P_SIZE);
 }
 
 /*------------------------------------------------------------------------*/

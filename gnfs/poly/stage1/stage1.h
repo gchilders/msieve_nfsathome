@@ -102,6 +102,8 @@ void poly_search_free(poly_search_t *poly);
 
 /*-----------------------------------------------------------------------*/
 
+#define MAX_P_SIZE 1e26
+
 /* Rational leading coeffs of NFS polynomials are assumed 
    to be the product of three groups of factors p; each group 
    can be up to 32 bits in size and the product of (powers 
