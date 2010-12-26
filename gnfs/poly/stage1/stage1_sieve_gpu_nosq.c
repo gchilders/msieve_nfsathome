@@ -26,7 +26,7 @@ typedef struct {
 	uint64 *roots[MAX_ROOTS];
 } q_soa_var_t;
 
-#define MAX_P_SOA_ARRAYS 7
+#define MAX_P_SOA_ARRAYS 10
 
 typedef struct {
 	uint32 num_arrays;
@@ -53,7 +53,10 @@ q_soa_array_init(q_soa_array_t *s, uint32 degree)
 		s->soa[1].num_roots = 5;
 		break;
 	case 6:
-		s->num_arrays = 7;
+		s->num_arrays = 10;
+		s->soa[9].num_roots = 6;
+		s->soa[8].num_roots = 8;
+		s->soa[7].num_roots = 12;
 		s->soa[6].num_roots = 16;
 		s->soa[5].num_roots = 24;
 		s->soa[4].num_roots = 32;
@@ -476,26 +479,10 @@ sieve_nospecialq_64(msieve_obj *obj, lattice_fb_t *L,
 			((double)small_p_min * small_p_min) > (uint32)(-1))
 		goto finished;
 
-	switch (degree) {
-	case 4:
-		p_min_roots = 4;
-		p_max_roots = 8;
-		q_min_roots = 4;
-		q_max_roots = MAX_ROOTS;
-		break;
-	case 5:
-		p_min_roots = 1;
-		p_max_roots = 25;
-		q_min_roots = 5;
-		q_max_roots = MAX_ROOTS;
-		break;
-	case 6:
-		p_min_roots = 12;
-		p_max_roots = 36;
-		q_min_roots = 16;
-		q_max_roots = MAX_ROOTS;
-		break;
-	}
+	p_min_roots = 1;
+	p_max_roots = degree * degree;
+	q_min_roots = degree;
+	q_max_roots = MAX_ROOTS;
 
 	min_large = large_p_min;
 	sieve_fb_reset(sieve_small, large_p_min, 
@@ -570,16 +557,11 @@ sieve_lattice_gpu_nosq(msieve_obj *obj, lattice_fb_t *L,
 	uint32 quit;
 	uint32 large_p_min, large_p_max;
 	uint32 small_p_min, small_p_max;
-	sieve_fb_t sieve_large_p, sieve_small_p;
+	uint32 large_fb_min;
+	sieve_fb_t sieve_large, sieve_small;
 	curr_poly_t *middle_poly = L->poly->batch + L->poly->num_poly / 2;
 	curr_poly_t *last_poly = L->poly->batch + L->poly->num_poly - 1;
 	uint32 degree = L->poly->degree;
-
-	sieve_fb_init(&sieve_large_p, L->poly,
-			1251, 50000, 1, degree, 0);
-
-	sieve_fb_init(&sieve_small_p, L->poly,
-			7, 1250, 1, degree, 0);
 
 	large_p_max = MIN(sqrt(middle_poly->p_size_max) * 
 				params->p_scale, (uint32)(-1));
@@ -587,6 +569,16 @@ sieve_lattice_gpu_nosq(msieve_obj *obj, lattice_fb_t *L,
 
 	small_p_max = large_p_min - 1;
 	small_p_min = small_p_max / params->p_scale;
+
+	large_fb_min = sqrt(small_p_min) / 2;
+
+	/* used for small_p */
+	sieve_fb_init(&sieve_large, L->poly,
+			large_fb_min, 100000, 1, degree, 0);
+
+	/* used for large_p */
+	sieve_fb_init(&sieve_small, L->poly,
+			5, large_fb_min, 1, degree, 0);
 
 	while (1) {
 		gmp_printf("coeff %Zd-%Zd p1 %u - %u p2 %u - %u\n",
@@ -596,9 +588,9 @@ sieve_lattice_gpu_nosq(msieve_obj *obj, lattice_fb_t *L,
 				large_p_min, large_p_max);
 
 		quit = sieve_nospecialq_64(obj, L,
-				&sieve_small_p,
+				&sieve_small,
 				small_p_min, small_p_max,
-				&sieve_large_p,
+				&sieve_large,
 				large_p_min, large_p_max);
 
 		if (quit || large_p_max == (uint32)(-1) ||
@@ -612,7 +604,7 @@ sieve_lattice_gpu_nosq(msieve_obj *obj, lattice_fb_t *L,
 		small_p_min = small_p_max / params->p_scale;
 	}
 
-	sieve_fb_free(&sieve_large_p);
-	sieve_fb_free(&sieve_small_p);
+	sieve_fb_free(&sieve_large);
+	sieve_fb_free(&sieve_small);
 	return quit;
 }
