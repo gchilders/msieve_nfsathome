@@ -122,17 +122,11 @@ q_soa_var_grow(q_soa_var_t *soa)
 }
 
 static void 
-store_p_soa(uint32 p, uint32 num_roots, uint32 which_poly,
-		mpz_t *roots, void *extra)
+store_q_soa(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 {
 	uint32 i, j;
 	lattice_fb_t *L = (lattice_fb_t *)extra;
-	q_soa_array_t *s = (q_soa_array_t *)(L->orig_q_array);
-
-	if (which_poly != 0) {
-		printf("error: batched polynomials not allowed\n");
-		exit(-1);
-	}
+	q_soa_array_t *s = (q_soa_array_t *)(L->q_array);
 
 	for (i = 0; i < s->num_arrays; i++) {
 		uint32 num;
@@ -147,7 +141,7 @@ store_p_soa(uint32 p, uint32 num_roots, uint32 which_poly,
 
 		soa->p[num] = p;
 		for (j = 0; j < num_roots; j++)
-			soa->roots[j][num] = gmp2uint64(roots[j]);
+			soa->roots[j][num] = roots[j];
 
 		soa->num_p++;
 		s->num_p++;
@@ -195,18 +189,12 @@ p_packed_next(p_packed_t *curr)
 }
 
 static void 
-store_p_packed(uint32 p, uint32 num_roots, uint32 which_poly,
-		mpz_t *roots, void *extra)
+store_p_packed(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 {
 	uint32 i;
 	lattice_fb_t *L = (lattice_fb_t *)extra;
-	p_packed_var_t *s = (p_packed_var_t *)(L->orig_p_array);
+	p_packed_var_t *s = (p_packed_var_t *)(L->p_array);
 	p_packed_t *curr;
-
-	if (which_poly != 0) {
-		printf("error: batched polynomials not allowed\n");
-		exit(-1);
-	}
 
 	if ((p_packed_t *)((uint64 *)s->curr + s->p_size) + 1 >=
 			s->packed_array + s->p_size_alloc ) {
@@ -221,12 +209,11 @@ store_p_packed(uint32 p, uint32 num_roots, uint32 which_poly,
 
 	curr = s->curr;
 	curr->p = p;
-	curr->lattice_size = 2 * L->poly->batch[0].sieve_size / 
+	curr->lattice_size = 2 * L->poly->sieve_size / 
 				((double)p * p);
 	curr->num_roots = num_roots;
-	curr->pad = 0;
 	for (i = 0; i < num_roots; i++)
-		curr->roots[i] = gmp2uint64(roots[i]);
+		curr->roots[i] = roots[i];
 
 	s->num_p++;
 	s->curr = p_packed_next(s->curr);
@@ -241,8 +228,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			p_packed_var_t *p_array,
 			q_soa_array_t *q_array,
 			gpu_info_t *gpu_info, 
-			CUfunction gpu_kernel,
-			uint32 deadline)
+			CUfunction gpu_kernel)
 {
 	uint32 i, j;
 	p_packed_t *packed_array = p_array->packed_array;
@@ -253,7 +239,6 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 	uint32 num_qroots_offset;
 	uint32 found_array_size = L->found_array_size;
 	found_t *found_array = (found_t *)L->found_array;
-	clock_t start_time = clock();
 	void *gpu_ptr;
 
 	i = 0;
@@ -289,8 +274,10 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 		q_soa_var_t *soa = q_array->soa + i;
 		uint32 num_qroots = soa->num_roots;
 		uint32 num_q_done = 0;
+		time_t curr_time;
+		double elapsed;
 
-		if (soa->num_p < 1000)
+		if (soa->num_p < threads_per_block)
 			continue;
 
 		CUDA_TRY(cuParamSeti(gpu_kernel, 
@@ -386,7 +373,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 						res = add128(proot, mul64(
 								f->offset, p2));
 
-						handle_collision(L->poly, 0,
+						handle_collision(L->poly,
 								f->p, f->q,
 								1, 0, res);
 					}
@@ -395,10 +382,6 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 				if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
 					return 1;
 
-				if ((double)(clock() - start_time) /
-						CLOCKS_PER_SEC > deadline)
-					return 0;
-
 				packed_start = curr_packed;
 				packed_words = 0;
 				curr_num_p = 0;
@@ -406,6 +389,11 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 
 			num_q_done += curr_num_q;
 		}
+
+		curr_time = time(NULL);
+		elapsed = curr_time - L->start_time;
+		if (elapsed > L->deadline)
+			return 1;
 	}
 
 	return 0;
@@ -414,13 +402,11 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 /*------------------------------------------------------------------------*/
 static uint32
 sieve_nospecialq_64(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_small,
+		sieve_fb_t *sieve_small_p,
 		uint32 small_p_min, uint32 small_p_max,  
-		sieve_fb_t *sieve_large, 
+		sieve_fb_t *sieve_large_p, 
 		uint32 large_p_min, uint32 large_p_max)
 {
-	uint32 i;
-	uint32 min_small, min_large;
 	uint32 quit = 0;
 	p_packed_var_t * p_array;
 	q_soa_array_t * q_array;
@@ -443,9 +429,9 @@ sieve_nospecialq_64(msieve_obj *obj, lattice_fb_t *L,
 
 
 	L->q_marshall = (q_soa_t *)xmalloc(sizeof(q_soa_t));
-	q_array = L->orig_q_array = (q_soa_array_t *)xmalloc(
+	q_array = L->q_array = (q_soa_array_t *)xmalloc(
 					sizeof(q_soa_array_t));
-	p_array = L->orig_p_array = (p_packed_var_t *)xmalloc(
+	p_array = L->p_array = (p_packed_var_t *)xmalloc(
 					sizeof(p_packed_var_t));
 	p_packed_init(p_array);
 	q_soa_array_init(q_array, degree);
@@ -471,73 +457,48 @@ sieve_nospecialq_64(msieve_obj *obj, lattice_fb_t *L,
 	host_p_batch_size = MAX(10000, L->found_array_size / 3);
 	host_q_batch_size = MAX(50000, 12 * L->found_array_size);
 
-	printf("------- %u-%u %u-%u\n",
-			small_p_min, small_p_max,
-			large_p_min, large_p_max);
-
-	if (2 * L->poly->batch[0].sieve_size /
-			((double)small_p_min * small_p_min) > (uint32)(-1))
-		goto finished;
-
 	p_min_roots = 1;
 	p_max_roots = degree * degree;
+
 	q_min_roots = degree;
-	q_max_roots = MAX_ROOTS;
+	q_max_roots = degree * degree;
+	if (degree == 6)
+		q_max_roots *= 2;
 
-	min_large = large_p_min;
-	sieve_fb_reset(sieve_small, large_p_min, 
-			large_p_max, q_min_roots, q_max_roots);
-
-	while (min_large < large_p_max) {
+	sieve_fb_reset(sieve_large_p, large_p_min, large_p_max,
+			q_min_roots, q_max_roots);
+	while (!quit) {
 
 		q_soa_array_reset(q_array);
+		while (sieve_fb_next(sieve_large_p, L->poly, store_q_soa,
+					L) != P_SEARCH_DONE)
+			if (q_array->num_p == host_q_batch_size)
+				break;
 
-		for (i = 0; i < host_q_batch_size && 
-				min_large != (uint32)P_SEARCH_DONE; i++) {
-			min_large = sieve_fb_next(sieve_small, L->poly,
-						store_p_soa, L);
-		}
 		if (q_array->num_p == 0)
 			break;
 
-		min_small = small_p_min;
-		sieve_fb_reset(sieve_large, small_p_min, small_p_max,
+		sieve_fb_reset(sieve_small_p, small_p_min, small_p_max,
 				p_min_roots, p_max_roots);
-
-		while (min_small <= small_p_max) {
-
-			time_t curr_time;
-			double elapsed;
+		while (!quit) {
 
 			p_packed_reset(p_array);
+			while (sieve_fb_next(sieve_small_p, L->poly, 
+						store_p_packed,
+						L) != P_SEARCH_DONE)
+				if (p_array->num_p == host_p_batch_size)
+					break;
 
-			for (i = 0; i < host_p_batch_size && 
-			 	    min_small != (uint32)P_SEARCH_DONE; i++) {
-				min_small = sieve_fb_next(sieve_large, L->poly,
-							store_p_packed, L);
-			}
 			if (p_array->num_p == 0)
 				break;
 
-			if (sieve_lattice_batch(obj, L,
+			quit = sieve_lattice_batch(obj, L,
 					threads_per_block,
 					p_array, q_array,
-					gpu_info, gpu_kernel,
-					L->deadline)) {
-				quit = 1;
-				goto finished;
-			}
-
-			curr_time = time(NULL);
-			elapsed = curr_time - L->start_time;
-			if (elapsed > L->deadline) {
-				quit = 1;
-				goto finished;
-			}
+					gpu_info, gpu_kernel);
 		}
 	}
 
-finished:
 	CUDA_TRY(cuMemFree(L->gpu_q_array))
 	CUDA_TRY(cuMemFree(L->gpu_found_array))
 	p_packed_free(p_array);
@@ -551,60 +512,60 @@ finished:
 
 /*------------------------------------------------------------------------*/
 uint32
-sieve_lattice_gpu_nosq(msieve_obj *obj, lattice_fb_t *L, 
-			sieve_fb_param_t *params)
+sieve_lattice_gpu_nosq(msieve_obj *obj, lattice_fb_t *L)
 {
 	uint32 quit;
 	uint32 large_p_min, large_p_max;
 	uint32 small_p_min, small_p_max;
-	uint32 large_fb_min;
-	sieve_fb_t sieve_large, sieve_small;
-	curr_poly_t *middle_poly = L->poly->batch + L->poly->num_poly / 2;
-	curr_poly_t *last_poly = L->poly->batch + L->poly->num_poly - 1;
+	uint32 large_p_fb_max;
 	uint32 degree = L->poly->degree;
+	double p_size_max = L->poly->p_size_max;
+	sieve_fb_t sieve_large_p, sieve_small_p;
 
-	large_p_max = MIN(sqrt(middle_poly->p_size_max) * 
-				params->p_scale, (uint32)(-1));
-	large_p_min = large_p_max / params->p_scale;
+	if ((uint32)sqrt(p_size_max) * P_SCALE > (uint32)(-1)) {
+		printf("error: invalid parameters for rational coefficient "
+			"in sieve_lattice_gpu_nosq()\n");
+		return 0;
+	}
 
+	large_p_min = sqrt(p_size_max);
+	large_p_max = large_p_min * P_SCALE;
 	small_p_max = large_p_min - 1;
-	small_p_min = small_p_max / params->p_scale;
+	small_p_min = small_p_max / P_SCALE;
 
-	large_fb_min = sqrt(small_p_min) / 2;
+	large_p_fb_max = sqrt(small_p_min) / 2;
 
-	/* used for small_p */
-	sieve_fb_init(&sieve_large, L->poly,
-			large_fb_min, 100000, 1, degree, 0);
+	sieve_fb_init(&sieve_small_p, L->poly,
+			large_p_fb_max, 100000, 1, degree, 0);
 
-	/* used for large_p */
-	sieve_fb_init(&sieve_small, L->poly,
-			5, large_fb_min, 1, degree, 0);
+	sieve_fb_init(&sieve_large_p, L->poly,
+			5, large_p_fb_max, 1, degree, 0);
 
 	while (1) {
-		gmp_printf("coeff %Zd-%Zd p1 %u - %u p2 %u - %u\n",
-				L->poly->batch[0].high_coeff,
-				last_poly->high_coeff,
+		gmp_printf("coeff %Zd p1 %u - %u p2 %u - %u\n",
+				L->poly->high_coeff,
 				small_p_min, small_p_max,
 				large_p_min, large_p_max);
 
 		quit = sieve_nospecialq_64(obj, L,
-				&sieve_small,
+				&sieve_small_p,
 				small_p_min, small_p_max,
-				&sieve_large,
+				&sieve_large_p,
 				large_p_min, large_p_max);
 
-		if (quit || large_p_max == (uint32)(-1) ||
-		    large_p_max / small_p_min > params->max_diverge)
+		if (quit || large_p_max > (uint32)(-1) / P_SCALE)
 			break;
 
-		large_p_min = large_p_max + 1;
-		large_p_max = MIN((uint32)(-1), large_p_min * params->p_scale);
+		large_p_min = large_p_max;
+		large_p_max = large_p_min * P_SCALE;
+		small_p_max = small_p_min;
+		small_p_min = small_p_max / P_SCALE;
 
-		small_p_max = small_p_min - 1;
-		small_p_min = small_p_max / params->p_scale;
+		if (small_p_min < large_p_fb_max)
+			break;
 	}
 
-	sieve_fb_free(&sieve_large);
-	sieve_fb_free(&sieve_small);
+	sieve_fb_free(&sieve_large_p);
+	sieve_fb_free(&sieve_small_p);
 	return quit;
 }

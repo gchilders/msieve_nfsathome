@@ -27,7 +27,6 @@ extern "C" {
 
 typedef struct {
 	uint32 p[SHARED_BATCH_SIZE];
-	uint64 lattice_size[SHARED_BATCH_SIZE];
 	uint64 roots[SPECIALQ_BATCH_SIZE][SHARED_BATCH_SIZE];
 } p_soa_shared_t;
 
@@ -40,11 +39,12 @@ __shared__ p_soa_shared_t pbatch_cache;
 
 __global__ void
 sieve_kernel_48(p_soa_t *pbatch, 
-             uint32 num_p,
-	     q_soa_t *qbatch,
-	     uint32 num_q,
-	     uint32 num_roots,
-	     found_t *found_array)
+		uint32 num_p,
+		q_soa_t *qbatch,
+		uint32 num_q,
+		uint64 lattice_size,
+		uint32 num_roots,
+		found_t *found_array)
 {
 	uint32 my_threadid;
 	uint32 num_threads;
@@ -74,8 +74,6 @@ sieve_kernel_48(p_soa_t *pbatch,
 				j = threadIdx.x;
 
 				pbatch_cache.p[j] = pbatch->p[p_done + j];
-				pbatch_cache.lattice_size[j] = 
-					pbatch->lattice_size[p_done + j];
 
 				for (k = 0; k < num_roots; k++) {
 					pbatch_cache.roots[k][j] = 
@@ -91,8 +89,6 @@ sieve_kernel_48(p_soa_t *pbatch,
 				uint64 p2 = wide_sqr32(p);
 				uint32 pinvmodq = modinv32(p, q);
 
-				uint64 lattice_size = 
-						pbatch_cache.lattice_size[j];
 				uint64 pinv, tmp;
 
 				tmp = wide_sqr32(pinvmodq);
@@ -134,11 +130,12 @@ sieve_kernel_48(p_soa_t *pbatch,
 
 __global__ void
 sieve_kernel_64(p_soa_t *pbatch, 
-             uint32 num_p,
-	     q_soa_t *qbatch,
-	     uint32 num_q,
-	     uint32 num_roots,
-	     found_t *found_array)
+		uint32 num_p,
+		q_soa_t *qbatch,
+		uint32 num_q,
+		uint64 lattice_size,
+		uint32 num_roots,
+		found_t *found_array)
 {
 	uint32 my_threadid;
 	uint32 num_threads;
@@ -168,8 +165,6 @@ sieve_kernel_64(p_soa_t *pbatch,
 				j = threadIdx.x;
 
 				pbatch_cache.p[j] = pbatch->p[p_done + j];
-				pbatch_cache.lattice_size[j] = 
-					pbatch->lattice_size[p_done + j];
 
 				for (k = 0; k < num_roots; k++) {
 					pbatch_cache.roots[k][j] = 
@@ -185,8 +180,6 @@ sieve_kernel_64(p_soa_t *pbatch,
 				uint64 p2 = wide_sqr32(p);
 				uint32 pinvmodq = modinv32(p, q);
 
-				uint64 lattice_size = 
-						pbatch_cache.lattice_size[j];
 				uint64 pinv, tmp;
 
 				tmp = wide_sqr32(pinvmodq);

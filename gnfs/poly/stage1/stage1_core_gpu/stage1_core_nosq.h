@@ -39,9 +39,8 @@ typedef struct {
 
 typedef struct {
 	uint32 p;
-	uint32 lattice_size;
 	uint32 num_roots;
-	uint32 pad;
+	uint64 lattice_size;
 	uint64 roots[MAX_ROOTS];
 } p_packed_t;
 

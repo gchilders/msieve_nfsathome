@@ -56,8 +56,8 @@ sieve_kernel_48(q_soa_t *qbatch,
 			uint64 p2 = wide_sqr32(p);
 			uint32 pinvmodq = modinv32(p, q);
 
+			uint64 lattice_size = curr_p->lattice_size;
 			uint32 num_proots = curr_p->num_roots;
-			uint32 lattice_size = curr_p->lattice_size;
 			uint64 pinv, tmp;
 
 			tmp = wide_sqr32(pinvmodq);
@@ -123,8 +123,8 @@ sieve_kernel_64(q_soa_t *qbatch,
 			uint64 p2 = wide_sqr32(p);
 			uint32 pinvmodq = modinv32(p, q);
 
+			uint64 lattice_size = curr_p->lattice_size;
 			uint32 num_proots = curr_p->num_roots;
-			uint32 lattice_size = curr_p->lattice_size;
 			uint64 pinv, tmp;
 
 			tmp = wide_sqr32(pinvmodq);
