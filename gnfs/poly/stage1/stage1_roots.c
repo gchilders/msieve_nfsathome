@@ -267,7 +267,7 @@ lift_roots(sieve_fb_t *s, poly_search_t *poly, uint32 p, uint32 num_roots)
 
 /*------------------------------------------------------------------------*/
 static uint32
-get_composite_roots(sieve_fb_t *s, uint32 p)
+get_enum_roots(sieve_fb_t *s, uint32 p)
 {
 	uint32 i, j, i0, i1, i2, i3, i4, i5, i6;
 	aprog_t *aprogs = s->aprog_data.aprogs;
@@ -412,7 +412,7 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 				continue;
 			}
 
-			num_roots = get_composite_roots(s, p);
+			num_roots = get_enum_roots(s, p);
 		}
 		else if (s->avail_algos & ALGO_PRIME) {
 
