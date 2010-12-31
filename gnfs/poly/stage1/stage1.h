@@ -123,8 +123,8 @@ typedef struct {
 	uint32 cofactor_roots[MAX_P_FACTORS + 1];
 } p_enum_t;
 
-#define ALGO_ENUM  0x2
-#define ALGO_PRIME 0x4
+#define ALGO_ENUM  0x1
+#define ALGO_PRIME 0x2
 
 typedef struct {
 	uint32 num_roots_min;
@@ -141,9 +141,7 @@ typedef struct {
 
 	p_enum_t p_enum;
 
-	mpz_t p, p2, m0, nmodp2, tmp1, tmp2;
-	mpz_t accum[MAX_P_FACTORS + 1];
-	mpz_t gmp_roots[MAX_ROOTS];
+	mpz_t p, p2, m0, nmodp2, tmp1, tmp2, gmp_root;
 } sieve_fb_t;
 
 void sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
