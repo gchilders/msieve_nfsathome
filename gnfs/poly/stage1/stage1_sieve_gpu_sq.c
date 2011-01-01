@@ -302,18 +302,12 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	CUmodule gpu_module = L->poly->gpu_module_sq;
        	CUfunction gpu_kernel;
 
-	if (large_p_max < ((uint32)1 << 24)) {
-		if (special_q_max < ((uint32)1 << 24))
-			CUDA_TRY(cuModuleGetFunction(&gpu_kernel, 
-				gpu_module, "sieve_kernel_48_48"))
-		else
-			CUDA_TRY(cuModuleGetFunction(&gpu_kernel, 
-				gpu_module, "sieve_kernel_48_64"))
-	}
-	else {
+	if (large_p_max < ((uint32)1 << 24))
 		CUDA_TRY(cuModuleGetFunction(&gpu_kernel, 
-			gpu_module, "sieve_kernel_64_64"))
-	}
+				gpu_module, "sieve_kernel_48"))
+	else
+		CUDA_TRY(cuModuleGetFunction(&gpu_kernel, 
+				gpu_module, "sieve_kernel_64"))
 
 	L->p_marshall = (p_soa_t *)xmalloc(sizeof(p_soa_t));
 	L->q_marshall = (q_soa_t *)xmalloc(sizeof(q_soa_t));
