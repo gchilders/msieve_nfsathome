@@ -37,23 +37,26 @@ typedef struct {
 } found_t;
 
 /* the outer loop needs parallel access to different p,
-   so we store in SOA format. All the entries in the structure
-   have the same number of roots */
+   so we store in SOA format. */
 
-#define P_SOA_BATCH_SIZE 2048
+#define P_SOA_BATCH_SIZE (2048*SPECIALQ_BATCH_SIZE)
 
 typedef struct {
 	uint32 p[P_SOA_BATCH_SIZE];
-	uint64 roots[SPECIALQ_BATCH_SIZE][P_SOA_BATCH_SIZE];
+	uint64 root[P_SOA_BATCH_SIZE];
 } p_soa_t;
 
-#define Q_SOA_BATCH_SIZE (3*30*384)
+#define Q_SOA_BATCH_SIZE (3*30*384*SPECIALQ_BATCH_SIZE)
 
 typedef struct {
 	uint32 p[Q_SOA_BATCH_SIZE];
-	uint64 roots[SPECIALQ_BATCH_SIZE+1][Q_SOA_BATCH_SIZE];
+	uint64 root[Q_SOA_BATCH_SIZE];
 } q_soa_t;
 
+typedef struct {
+	uint32 p[SPECIALQ_BATCH_SIZE];
+	uint64 root[SPECIALQ_BATCH_SIZE];
+} sq_soa_t;
 
 #ifdef __cplusplus
 }

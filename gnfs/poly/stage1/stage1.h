@@ -165,17 +165,18 @@ uint32 sieve_fb_next(sieve_fb_t *s,
 /*-----------------------------------------------------------------------*/
 
 typedef struct {
-	void *p_array, *q_array;
-	void *special_q_array;
+	void *p_array, *q_array, *sq_array;
 
 #ifdef HAVE_CUDA
 	CUdeviceptr gpu_p_array;
 	CUdeviceptr gpu_q_array;
+	CUdeviceptr gpu_sq_array;
 	CUdeviceptr gpu_found_array;
 	void *found_array;
 	uint32 found_array_size;
 	void *p_marshall;
 	void *q_marshall;
+	void *sq_marshall;
 #endif
 
 	poly_search_t *poly;
