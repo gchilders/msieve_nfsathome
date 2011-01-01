@@ -176,11 +176,16 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L, uint64 lattice_size,
 
 		curr_num_q = MIN(curr_num_q, Q_SOA_BATCH_SIZE);
 
+		/* force to be a multiple of the block size */
+		curr_num_q -= (curr_num_q % threads_per_block);
+		if (curr_num_q == 0)
+			break;
+
 		memcpy(q_marshall->p, 
 			q_array->p + num_q_done,
 			curr_num_q * sizeof(uint32));
 
-		memcpy(q_marshall->root, 
+		memcpy(q_marshall->start_root, 
 			q_array->root + num_q_done,
 			curr_num_q * sizeof(uint64));
 
@@ -206,7 +211,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L, uint64 lattice_size,
 				p_array->p + num_p_done,
 				curr_num_p * sizeof(uint32));
 
-			memcpy(p_marshall->root, 
+			memcpy(p_marshall->start_root, 
 				p_array->root + num_p_done,
 				curr_num_p * sizeof(uint64));
 

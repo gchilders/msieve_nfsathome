@@ -49,95 +49,105 @@ sieve_kernel_48_48(p_soa_t *pbatch,
 {
 	uint32 my_threadid;
 	uint32 num_threads;
-	uint32 i, j, k, p_done = 0;
+	uint32 i, j, k;
 
 	my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
 	num_threads = gridDim.x * blockDim.x;
 	found_array[my_threadid].p = 0;
 
-	while (p_done < num_p) {
+	for (i = my_threadid; i < num_p; i+= num_threads) {
+		uint32 p, p2_w;
+		uint64 p2, p2_r;
+		uint64 proot0;
 
-		uint32 curr_num_p = MIN(SHARED_BATCH_SIZE,
-					num_p - p_done);
+		p = pbatch->p[i];
+		p2 = wide_sqr32(p);
+		p2_w = montmul24_w((uint32)p2);
+		p2_r = montmul48_r(p2, p2_w);
+		proot0 = pbatch->start_root[i];
 
-		__syncthreads();
+		for (j = 0; j < num_sq; j++) {
+			uint32 sq = sqbatch->p[j];
+			uint64 sq2 = wide_sqr32(sq);
+			uint32 sqinvmodp = modinv32(sq, p);
 
-		if (threadIdx.x < curr_num_p) {
-			uint32 p, p2_w;
-			uint64 p2, p2_r;
-			uint64 proot0;
+			uint64 sqinv, tmp;
+			uint64 sqroot, res;
 
-			i = threadIdx.x;
-			p = pbatch->p[p_done + i];
-			p2 = wide_sqr32(p);
-			p2_w = montmul24_w((uint32)p2);
-			p2_r = montmul48_r(p2, p2_w);
-			proot0 = pbatch->root[p_done + i];
+			tmp = wide_sqr32(sqinvmodp);
+			tmp = montmul48(tmp, p2_r, p2, p2_w);
+			sqinv = montmul48(sq2, tmp, p2, p2_w);
+			sqinv = modsub64((uint64)2, sqinv, p2);
+			sqinv = montmul48(sqinv, tmp, p2, p2_w);
+			sqinv = montmul48(sqinv, p2_r, p2, p2_w);
 
-			pbatch_cache.p[i] = pbatch->p[p_done + i];
+			sqroot = sqbatch->root[j];
+			res = montmul48(sqinv,
+					modsub64(proot0, 
+					sqroot % p2,
+					p2), p2, p2_w);
 
-			for (j = 0; j < num_sq; j++) {
-				uint32 sq = sqbatch->p[j];
-				uint64 sq2 = wide_sqr32(sq);
-				uint32 sqinvmodp = modinv32(sq, p);
+			pbatch->roots[j][i] = res;
+		}
+	}
 
-				uint64 sqinv, tmp;
-				uint64 sqroot, res;
+	__syncthreads();
 
-				tmp = wide_sqr32(sqinvmodp);
-				tmp = montmul48(tmp, p2_r, p2, p2_w);
-				sqinv = montmul48(sq2, tmp, p2, p2_w);
-				sqinv = modsub64((uint64)2, sqinv, p2);
-				sqinv = montmul48(sqinv, tmp, p2, p2_w);
-				sqinv = montmul48(sqinv, p2_r, p2, p2_w);
+	for (i = my_threadid; i < num_q; i += num_threads) {
+		uint32 q, q2_w, p_done = 0;
+		uint64 q2, q2_r;
+		uint64 qroot0;
+		uint64 roots[SPECIALQ_BATCH_SIZE];
 
-				sqroot = sqbatch->root[j];
-				res = montmul48(sqinv,
-						modsub64(proot0, 
-						sqroot % p2,
-						p2), p2, p2_w);
+		q = qbatch->p[i];
+		q2 = wide_sqr32(q);
+		q2_w = montmul24_w((uint32)q2);
+		q2_r = montmul48_r(q2, q2_w);
+		qroot0 = qbatch->start_root[i];
 
-				pbatch_cache.roots[j][i] = res;
-			}
+		for (j = 0; j < num_sq; j++) {
+			uint32 sq = sqbatch->p[j];
+			uint64 sq2 = wide_sqr32(sq);
+			uint32 sqinvmodq = modinv32(sq, q);
+
+			uint64 sqinv, tmp;
+			uint64 sqroot, res;
+
+			tmp = wide_sqr32(sqinvmodq);
+			tmp = montmul48(tmp, q2_r, q2, q2_w);
+			sqinv = montmul48(sq2, tmp, q2, q2_w);
+			sqinv = modsub64((uint64)2, sqinv, q2);
+			sqinv = montmul48(sqinv, tmp, q2, q2_w);
+			sqinv = montmul48(sqinv, q2_r, q2, q2_w);
+
+			sqroot = sqbatch->root[j];
+			res = montmul48(sqinv,
+					modsub64(qroot0, 
+					sqroot % q2,
+					q2), q2, q2_w);
+
+			roots[j] = res;
 		}
 
-		__syncthreads();
+		while (p_done < num_p) {
 
-		for (i = my_threadid; i < num_q; i += num_threads) {
-			uint32 q, q2_w;
-			uint64 q2, q2_r;
-			uint64 qroot0;
-			uint64 roots[SPECIALQ_BATCH_SIZE];
+			uint32 curr_num_p = MIN(SHARED_BATCH_SIZE,
+						num_p - p_done);
 
-			q = qbatch->p[i];
-			q2 = wide_sqr32(q);
-			q2_w = montmul24_w((uint32)q2);
-			q2_r = montmul48_r(q2, q2_w);
-			qroot0 = qbatch->root[i];
+			__syncthreads();
 
-			for (j = 0; j < num_sq; j++) {
-				uint32 sq = sqbatch->p[j];
-				uint64 sq2 = wide_sqr32(sq);
-				uint32 sqinvmodq = modinv32(sq, q);
+			if (threadIdx.x < curr_num_p) {
+				j = threadIdx.x;
 
-				uint64 sqinv, tmp;
-				uint64 sqroot, res;
+				pbatch_cache.p[j] = pbatch->p[p_done + j];
 
-				tmp = wide_sqr32(sqinvmodq);
-				tmp = montmul48(tmp, q2_r, q2, q2_w);
-				sqinv = montmul48(sq2, tmp, q2, q2_w);
-				sqinv = modsub64((uint64)2, sqinv, q2);
-				sqinv = montmul48(sqinv, tmp, q2, q2_w);
-				sqinv = montmul48(sqinv, q2_r, q2, q2_w);
-
-				sqroot = sqbatch->root[j];
-				res = montmul48(sqinv,
-						modsub64(qroot0, 
-						sqroot % q2,
-						q2), q2, q2_w);
-
-				roots[j] = res;
+				for (k = 0; k < num_sq; k++) {
+					pbatch_cache.roots[k][j] = 
+						pbatch->roots[k][p_done + j]; 
+				}
 			}
+
+			__syncthreads();
 
 			for (j = 0; j < curr_num_p; j++) {
 				uint32 p = pbatch_cache.p[j];
@@ -176,9 +186,9 @@ sieve_kernel_48_48(p_soa_t *pbatch,
 					}
 				}
 			}
-		}
 
-		p_done += curr_num_p;
+			p_done += curr_num_p;
+		}
 	}
 }
 
@@ -194,98 +204,108 @@ sieve_kernel_48_64(p_soa_t *pbatch,
 {
 	uint32 my_threadid;
 	uint32 num_threads;
-	uint32 i, j, k, p_done = 0;
+	uint32 i, j, k;
 
 	my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
 	num_threads = gridDim.x * blockDim.x;
 	found_array[my_threadid].p = 0;
 
-	while (p_done < num_p) {
+	for (i = my_threadid; i < num_p; i+= num_threads) {
+		uint32 p, p2_w;
+		uint64 p2, p2_r;
+		uint64 proot0;
 
-		uint32 curr_num_p = MIN(SHARED_BATCH_SIZE,
-					num_p - p_done);
+		p = pbatch->p[i];
+		p2 = wide_sqr32(p);
+		p2_w = montmul32_w((uint32)p2);
+		p2_r = montmul64_r(p2, p2_w);
+		proot0 = pbatch->start_root[i];
 
-		__syncthreads();
+		for (j = 0; j < num_sq; j++) {
+			uint32 sq = sqbatch->p[j];
+			uint64 sq2 = wide_sqr32(sq);
+			uint32 sqinvmodp = modinv32(sq, p);
 
-		if (threadIdx.x < curr_num_p) {
-			uint32 p, p2_w;
-			uint64 p2, p2_r;
-			uint64 proot0;
+			uint64 sqinv, tmp;
+			uint64 sqroot, res;
 
-			i = threadIdx.x;
-			p = pbatch->p[p_done + i];
-			p2 = wide_sqr32(p);
-			p2_w = montmul32_w((uint32)p2);
-			p2_r = montmul64_r(p2, p2_w);
-			proot0 = pbatch->root[p_done + i];
+			tmp = wide_sqr32(sqinvmodp);
+			tmp = montmul64(tmp, p2_r, p2, p2_w);
+			sqinv = montmul64(sq2, tmp, p2, p2_w);
+			sqinv = modsub64((uint64)2, sqinv, p2);
+			sqinv = montmul64(sqinv, tmp, p2, p2_w);
+			sqinv = montmul64(sqinv, p2_r, p2, p2_w);
 
-			pbatch_cache.p[i] = pbatch->p[p_done + i];
+			sqroot = sqbatch->root[j];
+			res = montmul64(sqinv,
+					modsub64(proot0, 
+					sqroot % p2,
+					p2), p2, p2_w);
 
-			for (j = 0; j < num_sq; j++) {
-				uint32 sq = sqbatch->p[j];
-				uint64 sq2 = wide_sqr32(sq);
-				uint32 sqinvmodp = modinv32(sq, p);
+			pbatch->roots[j][i] = res;
+		}
+	}
 
-				uint64 sqinv, tmp;
-				uint64 sqroot, res;
+	__syncthreads();
 
-				tmp = wide_sqr32(sqinvmodp);
-				tmp = montmul64(tmp, p2_r, p2, p2_w);
-				sqinv = montmul64(sq2, tmp, p2, p2_w);
-				sqinv = modsub64((uint64)2, sqinv, p2);
-				sqinv = montmul64(sqinv, tmp, p2, p2_w);
-				sqinv = montmul64(sqinv, p2_r, p2, p2_w);
+	for (i = my_threadid; i < num_q; i += num_threads) {
+		uint32 q, q2_w, p_done = 0;
+		uint64 q2, q2_r;
+		uint64 qroot0;
+		uint64 roots[SPECIALQ_BATCH_SIZE];
 
-				sqroot = sqbatch->root[j];
-				res = montmul64(sqinv,
-						modsub64(proot0, 
-						sqroot % p2,
-						p2), p2, p2_w);
+		q = qbatch->p[i];
+		q2 = wide_sqr32(q);
+		q2_w = montmul32_w((uint32)q2);
+		q2_r = montmul64_r(q2, q2_w);
+		qroot0 = qbatch->start_root[i];
 
-				pbatch_cache.roots[j][i] = res;
-			}
+		for (j = 0; j < num_sq; j++) {
+			uint32 sq = sqbatch->p[j];
+			uint64 sq2 = wide_sqr32(sq);
+			uint32 sqinvmodq = modinv32(sq, q);
+
+			uint64 sqinv, tmp;
+			uint64 sqroot, res;
+
+			tmp = wide_sqr32(sqinvmodq);
+			tmp = montmul64(tmp, q2_r, q2, q2_w);
+			sqinv = montmul64(sq2, tmp, q2, q2_w);
+			sqinv = modsub64((uint64)2, sqinv, q2);
+			sqinv = montmul64(sqinv, tmp, q2, q2_w);
+			sqinv = montmul64(sqinv, q2_r, q2, q2_w);
+
+			sqroot = sqbatch->root[j];
+			res = montmul64(sqinv,
+					modsub64(qroot0, 
+					sqroot % q2,
+					q2), q2, q2_w);
+
+			roots[j] = res;
 		}
 
-		__syncthreads();
+		q2_w = montmul24_w((uint32)q2);
+		q2_r = montmul48_r(q2, q2_w);
 
-		for (i = my_threadid; i < num_q; i += num_threads) {
-			uint32 q, q2_w;
-			uint64 q2, q2_r;
-			uint64 qroot0;
-			uint64 roots[SPECIALQ_BATCH_SIZE];
+		while (p_done < num_p) {
 
-			q = qbatch->p[i];
-			q2 = wide_sqr32(q);
-			q2_w = montmul32_w((uint32)q2);
-			q2_r = montmul64_r(q2, q2_w);
-			qroot0 = qbatch->root[i];
+			uint32 curr_num_p = MIN(SHARED_BATCH_SIZE,
+						num_p - p_done);
 
-			for (j = 0; j < num_sq; j++) {
-				uint32 sq = sqbatch->p[j];
-				uint64 sq2 = wide_sqr32(sq);
-				uint32 sqinvmodq = modinv32(sq, q);
+			__syncthreads();
 
-				uint64 sqinv, tmp;
-				uint64 sqroot, res;
+			if (threadIdx.x < curr_num_p) {
+				j = threadIdx.x;
 
-				tmp = wide_sqr32(sqinvmodq);
-				tmp = montmul64(tmp, q2_r, q2, q2_w);
-				sqinv = montmul64(sq2, tmp, q2, q2_w);
-				sqinv = modsub64((uint64)2, sqinv, q2);
-				sqinv = montmul64(sqinv, tmp, q2, q2_w);
-				sqinv = montmul64(sqinv, q2_r, q2, q2_w);
+				pbatch_cache.p[j] = pbatch->p[p_done + j];
 
-				sqroot = sqbatch->root[j];
-				res = montmul64(sqinv,
-						modsub64(qroot0, 
-						sqroot % q2,
-						q2), q2, q2_w);
-
-				roots[j] = res;
+				for (k = 0; k < num_sq; k++) {
+					pbatch_cache.roots[k][j] = 
+						pbatch->roots[k][p_done + j]; 
+				}
 			}
 
-			q2_w = montmul24_w((uint32)q2);
-			q2_r = montmul48_r(q2, q2_w);
+			__syncthreads();
 
 			for (j = 0; j < curr_num_p; j++) {
 				uint32 p = pbatch_cache.p[j];
@@ -324,9 +344,9 @@ sieve_kernel_48_64(p_soa_t *pbatch,
 					}
 				}
 			}
-		}
 
-		p_done += curr_num_p;
+			p_done += curr_num_p;
+		}
 	}
 }
 
@@ -342,95 +362,105 @@ sieve_kernel_64_64(p_soa_t *pbatch,
 {
 	uint32 my_threadid;
 	uint32 num_threads;
-	uint32 i, j, k, p_done = 0;
+	uint32 i, j, k;
 
 	my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
 	num_threads = gridDim.x * blockDim.x;
 	found_array[my_threadid].p = 0;
 
-	while (p_done < num_p) {
+	for (i = my_threadid; i < num_p; i+= num_threads) {
+		uint32 p, p2_w;
+		uint64 p2, p2_r;
+		uint64 proot0;
 
-		uint32 curr_num_p = MIN(SHARED_BATCH_SIZE,
-					num_p - p_done);
+		p = pbatch->p[i];
+		p2 = wide_sqr32(p);
+		p2_w = montmul32_w((uint32)p2);
+		p2_r = montmul64_r(p2, p2_w);
+		proot0 = pbatch->start_root[i];
 
-		__syncthreads();
+		for (j = 0; j < num_sq; j++) {
+			uint32 sq = sqbatch->p[j];
+			uint64 sq2 = wide_sqr32(sq);
+			uint32 sqinvmodp = modinv32(sq, p);
 
-		if (threadIdx.x < curr_num_p) {
-			uint32 p, p2_w;
-			uint64 p2, p2_r;
-			uint64 proot0;
+			uint64 sqinv, tmp;
+			uint64 sqroot, res;
 
-			i = threadIdx.x;
-			p = pbatch->p[p_done + i];
-			p2 = wide_sqr32(p);
-			p2_w = montmul32_w((uint32)p2);
-			p2_r = montmul64_r(p2, p2_w);
-			proot0 = pbatch->root[p_done + i];
+			tmp = wide_sqr32(sqinvmodp);
+			tmp = montmul64(tmp, p2_r, p2, p2_w);
+			sqinv = montmul64(sq2, tmp, p2, p2_w);
+			sqinv = modsub64((uint64)2, sqinv, p2);
+			sqinv = montmul64(sqinv, tmp, p2, p2_w);
+			sqinv = montmul64(sqinv, p2_r, p2, p2_w);
 
-			pbatch_cache.p[i] = pbatch->p[p_done + i];
+			sqroot = sqbatch->root[j];
+			res = montmul64(sqinv,
+					modsub64(proot0, 
+					sqroot % p2,
+					p2), p2, p2_w);
 
-			for (j = 0; j < num_sq; j++) {
-				uint32 sq = sqbatch->p[j];
-				uint64 sq2 = wide_sqr32(sq);
-				uint32 sqinvmodp = modinv32(sq, p);
+			pbatch->roots[j][i] = res;
+		}
+	}
 
-				uint64 sqinv, tmp;
-				uint64 sqroot, res;
+	__syncthreads();
 
-				tmp = wide_sqr32(sqinvmodp);
-				tmp = montmul64(tmp, p2_r, p2, p2_w);
-				sqinv = montmul64(sq2, tmp, p2, p2_w);
-				sqinv = modsub64((uint64)2, sqinv, p2);
-				sqinv = montmul64(sqinv, tmp, p2, p2_w);
-				sqinv = montmul64(sqinv, p2_r, p2, p2_w);
+	for (i = my_threadid; i < num_q; i += num_threads) {
+		uint32 q, q2_w, p_done = 0;
+		uint64 q2, q2_r;
+		uint64 qroot0;
+		uint64 roots[SPECIALQ_BATCH_SIZE];
 
-				sqroot = sqbatch->root[j];
-				res = montmul64(sqinv,
-						modsub64(proot0, 
-						sqroot % p2,
-						p2), p2, p2_w);
+		q = qbatch->p[i];
+		q2 = wide_sqr32(q);
+		q2_w = montmul32_w((uint32)q2);
+		q2_r = montmul64_r(q2, q2_w);
+		qroot0 = qbatch->start_root[i];
 
-				pbatch_cache.roots[j][i] = res;
-			}
+		for (j = 0; j < num_sq; j++) {
+			uint32 sq = sqbatch->p[j];
+			uint64 sq2 = wide_sqr32(sq);
+			uint32 sqinvmodq = modinv32(sq, q);
+
+			uint64 sqinv, tmp;
+			uint64 sqroot, res;
+
+			tmp = wide_sqr32(sqinvmodq);
+			tmp = montmul64(tmp, q2_r, q2, q2_w);
+			sqinv = montmul64(sq2, tmp, q2, q2_w);
+			sqinv = modsub64((uint64)2, sqinv, q2);
+			sqinv = montmul64(sqinv, tmp, q2, q2_w);
+			sqinv = montmul64(sqinv, q2_r, q2, q2_w);
+
+			sqroot = sqbatch->root[j];
+			res = montmul64(sqinv,
+					modsub64(qroot0, 
+					sqroot % q2,
+					q2), q2, q2_w);
+
+			roots[j] = res;
 		}
 
-		__syncthreads();
+		while (p_done < num_p) {
 
-		for (i = my_threadid; i < num_q; i += num_threads) {
-			uint32 q, q2_w;
-			uint64 q2, q2_r;
-			uint64 qroot0;
-			uint64 roots[SPECIALQ_BATCH_SIZE];
+			uint32 curr_num_p = MIN(SHARED_BATCH_SIZE,
+						num_p - p_done);
 
-			q = qbatch->p[i];
-			q2 = wide_sqr32(q);
-			q2_w = montmul32_w((uint32)q2);
-			q2_r = montmul64_r(q2, q2_w);
-			qroot0 = qbatch->root[i];
+			__syncthreads();
 
-			for (j = 0; j < num_sq; j++) {
-				uint32 sq = sqbatch->p[j];
-				uint64 sq2 = wide_sqr32(sq);
-				uint32 sqinvmodq = modinv32(sq, q);
+			if (threadIdx.x < curr_num_p) {
+				j = threadIdx.x;
 
-				uint64 sqinv, tmp;
-				uint64 sqroot, res;
+				pbatch_cache.p[j] = pbatch->p[p_done + j];
 
-				tmp = wide_sqr32(sqinvmodq);
-				tmp = montmul64(tmp, q2_r, q2, q2_w);
-				sqinv = montmul64(sq2, tmp, q2, q2_w);
-				sqinv = modsub64((uint64)2, sqinv, q2);
-				sqinv = montmul64(sqinv, tmp, q2, q2_w);
-				sqinv = montmul64(sqinv, q2_r, q2, q2_w);
-
-				sqroot = sqbatch->root[j];
-				res = montmul64(sqinv,
-						modsub64(qroot0, 
-						sqroot % q2,
-						q2), q2, q2_w);
-
-				roots[j] = res;
+				for (k = 0; k < num_sq; k++) {
+					pbatch_cache.roots[k][j] = 
+						pbatch->roots[k][p_done + j]; 
+				}
 			}
+
+			__syncthreads();
 
 			for (j = 0; j < curr_num_p; j++) {
 				uint32 p = pbatch_cache.p[j];
@@ -469,9 +499,9 @@ sieve_kernel_64_64(p_soa_t *pbatch,
 					}
 				}
 			}
-		}
 
-		p_done += curr_num_p;
+			p_done += curr_num_p;
+		}
 	}
 }
 
