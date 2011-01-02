@@ -42,7 +42,7 @@ trans_batch_sq(p_soa_t *pbatch,
 {
 	uint32 my_threadid;
 	uint32 num_threads;
-	uint32 i, j;
+	volatile uint32 i, j;
 
 	my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
 	num_threads = gridDim.x * blockDim.x;
@@ -137,7 +137,8 @@ sieve_kernel_48(p_soa_t *pbatch,
 {
 	uint32 my_threadid;
 	uint32 num_threads;
-	uint32 i, j, k;
+	volatile uint32 i;
+	uint32 j, k;
 
 	my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
 	num_threads = gridDim.x * blockDim.x;
@@ -233,7 +234,8 @@ sieve_kernel_64(p_soa_t *pbatch,
 {
 	uint32 my_threadid;
 	uint32 num_threads;
-	uint32 i, j, k;
+	volatile uint32 i;
+	uint32 j, k;
 
 	my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
 	num_threads = gridDim.x * blockDim.x;
