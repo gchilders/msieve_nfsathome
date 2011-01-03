@@ -43,6 +43,7 @@ typedef struct {
 
 typedef struct {
 	uint32 p[P_SOA_BATCH_SIZE];
+	uint64 lattice_size[P_SOA_BATCH_SIZE];
 	uint64 start_root[P_SOA_BATCH_SIZE];
 	uint64 roots[SPECIALQ_BATCH_SIZE][P_SOA_BATCH_SIZE];
 } p_soa_t;
@@ -54,11 +55,6 @@ typedef struct {
 	uint64 start_root[Q_SOA_BATCH_SIZE];
 	uint64 roots[SPECIALQ_BATCH_SIZE+1][Q_SOA_BATCH_SIZE];
 } q_soa_t;
-
-typedef struct {
-	uint32 p[SPECIALQ_BATCH_SIZE];
-	uint64 root[SPECIALQ_BATCH_SIZE];
-} sq_soa_t;
 
 #ifdef __cplusplus
 }
