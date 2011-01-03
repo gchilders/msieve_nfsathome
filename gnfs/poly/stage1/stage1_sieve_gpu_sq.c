@@ -22,7 +22,7 @@ typedef struct {
 	uint32 num_p_alloc;
 
 	uint32 *p;
-	uint64 *lattice_size;
+	float *lattice_size;
 	uint64 *start_root;
 	uint64 *roots[SPECIALQ_BATCH_SIZE];
 } p_soa_var_t;
@@ -36,7 +36,7 @@ p_soa_var_init(p_soa_var_t *soa, uint32 batch_size)
 	soa->num_p_alloc = batch_size;
 	soa->p = (uint32 *)xmalloc(batch_size * sizeof(uint32));
 	soa->start_root = (uint64 *)xmalloc(batch_size * sizeof(uint64));
-	soa->lattice_size = (uint64 *)xmalloc(batch_size * sizeof(uint64));
+	soa->lattice_size = (float *)xmalloc(batch_size * sizeof(float));
 	for (i = 0; i < SPECIALQ_BATCH_SIZE; i++) {
 		soa->roots[i] =
 			(uint64 *)xmalloc(batch_size * sizeof(uint64));
@@ -321,7 +321,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 
 			memcpy(p_marshall->lattice_size,
 				p_array->lattice_size + num_p_done,
-				curr_num_p * sizeof(uint64));
+				curr_num_p * sizeof(float));
 
 			for (i = 0; i < num_roots; i++) {
 				memcpy(p_marshall->roots[i],
@@ -331,7 +331,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 
 			CUDA_TRY(cuMemcpyHtoD(L->gpu_p_array, p_marshall,
 				P_SOA_BATCH_SIZE * (sizeof(uint32) +
-					sizeof(uint64) + sizeof(uint64) +
+					sizeof(float) + sizeof(uint64) +
 					num_roots * sizeof(uint64))))
 
 			CUDA_TRY(cuParamSeti(gpu_kernel, num_p_offset, 

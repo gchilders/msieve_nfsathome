@@ -212,6 +212,7 @@ store_p_packed(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 	curr->lattice_size = 2 * L->poly->sieve_size / 
 				((double)p * p);
 	curr->num_roots = num_roots;
+	curr->pad = 0;
 	for (i = 0; i < num_roots; i++)
 		curr->roots[i] = roots[i];
 
