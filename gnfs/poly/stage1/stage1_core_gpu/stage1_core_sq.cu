@@ -20,14 +20,14 @@ extern "C" {
 #endif
 
 #if __CUDA_ARCH__ >= 200
-#define SHARED_BATCH_SIZE 148
+#define SHARED_BATCH_SIZE 100
 #else
-#define SHARED_BATCH_SIZE 48
+#define SHARED_BATCH_SIZE 32
 #endif
 
 typedef struct {
 	uint32 p[SHARED_BATCH_SIZE];
-	float lattice_size[SHARED_BATCH_SIZE];
+	float lsize[SPECIALQ_BATCH_SIZE][SHARED_BATCH_SIZE];
 	uint64 roots[SPECIALQ_BATCH_SIZE][SHARED_BATCH_SIZE];
 } p_soa_shared_t;
 
@@ -74,12 +74,14 @@ sieve_kernel_48(p_soa_t *pbatch,
 				j = threadIdx.x;
 
 				pbatch_cache.p[j] = pbatch->p[p_done + j];
-				pbatch_cache.lattice_size[j] =
-					pbatch->lattice_size[p_done + j];
 
 				for (k = 0; k < num_roots; k++) {
-					pbatch_cache.roots[k][j] = 
+
+					pbatch_cache.roots[k][j] =
 						pbatch->roots[k][p_done + j]; 
+
+					pbatch_cache.lsize[k][j] =
+						pbatch->lsize[k][p_done + j];
 				}
 			}
 
@@ -91,8 +93,6 @@ sieve_kernel_48(p_soa_t *pbatch,
 				uint64 p2 = wide_sqr32(p);
 				uint32 pinvmodq = modinv32(p, q);
 
-				float lattice_size =
-					pbatch_cache.lattice_size[j];
 				uint64 pinv, tmp;
 
 				tmp = wide_sqr32(pinvmodq);
@@ -107,15 +107,17 @@ sieve_kernel_48(p_soa_t *pbatch,
 					uint64 qroot;
 					uint64 proot;
 					uint64 res;
+					float lsize;
 
 					qroot = prefetch;
 					prefetch = qbatch->roots[k+1][i]; 
 					proot = pbatch_cache.roots[k][j];
+					lsize = pbatch_cache.lsize[k][j];
 					res = montmul48(pinv, 
 							modsub64(qroot, proot,
 							q2), q2, q2_w);
 
-					if (res < lattice_size) {
+					if (res < lsize) {
 						found_t *f = found_array + 
 								my_threadid;
 						f->p = p;
@@ -169,12 +171,14 @@ sieve_kernel_64(p_soa_t *pbatch,
 				j = threadIdx.x;
 
 				pbatch_cache.p[j] = pbatch->p[p_done + j];
-				pbatch_cache.lattice_size[j] =
-					pbatch->lattice_size[p_done + j];
 
 				for (k = 0; k < num_roots; k++) {
-					pbatch_cache.roots[k][j] = 
+
+					pbatch_cache.roots[k][j] =
 						pbatch->roots[k][p_done + j]; 
+
+					pbatch_cache.lsize[k][j] =
+						pbatch->lsize[k][p_done + j];
 				}
 			}
 
@@ -186,8 +190,6 @@ sieve_kernel_64(p_soa_t *pbatch,
 				uint64 p2 = wide_sqr32(p);
 				uint32 pinvmodq = modinv32(p, q);
 
-				float lattice_size =
-					pbatch_cache.lattice_size[j];
 				uint64 pinv, tmp;
 
 				tmp = wide_sqr32(pinvmodq);
@@ -202,15 +204,17 @@ sieve_kernel_64(p_soa_t *pbatch,
 					uint64 qroot;
 					uint64 proot;
 					uint64 res;
+					float lsize;
 
 					qroot = prefetch;
 					prefetch = qbatch->roots[k+1][i]; 
 					proot = pbatch_cache.roots[k][j];
+					lsize = pbatch_cache.lsize[k][j];
 					res = montmul64(pinv, 
 							modsub64(qroot, proot,
 							q2), q2, q2_w);
 
-					if (res < lattice_size) {
+					if (res < lsize) {
 						found_t *f = found_array + 
 								my_threadid;
 						f->p = p;

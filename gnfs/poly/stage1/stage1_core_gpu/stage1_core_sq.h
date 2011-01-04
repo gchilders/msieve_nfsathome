@@ -43,8 +43,8 @@ typedef struct {
 
 typedef struct {
 	uint32 p[P_SOA_BATCH_SIZE];
-	float lattice_size[P_SOA_BATCH_SIZE];
 	uint64 start_root[P_SOA_BATCH_SIZE];
+	float lsize[SPECIALQ_BATCH_SIZE][P_SOA_BATCH_SIZE];
 	uint64 roots[SPECIALQ_BATCH_SIZE][P_SOA_BATCH_SIZE];
 } p_soa_t;
 
