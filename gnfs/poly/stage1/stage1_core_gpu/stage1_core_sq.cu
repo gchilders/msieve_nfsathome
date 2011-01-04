@@ -31,8 +31,6 @@ typedef struct {
 	uint64 roots[SPECIALQ_BATCH_SIZE][SHARED_BATCH_SIZE];
 } p_soa_shared_t;
 
-__shared__ p_soa_shared_t pbatch_cache;
-
 /* note that num_q in each function below must be a
    multiple of the block size (we want either all threads
    or no threads to execute the __syncthreads() calls) */
@@ -46,6 +44,7 @@ sieve_kernel_48(p_soa_t *pbatch,
 		uint32 num_roots,
 		found_t *found_array)
 {
+	__shared__ p_soa_shared_t pbatch_cache;
 	uint32 my_threadid;
 	uint32 num_threads;
 	uint32 i, j, k;
@@ -70,8 +69,8 @@ sieve_kernel_48(p_soa_t *pbatch,
 
 			__syncthreads();
 
-			if (threadIdx.x < curr_num_p) {
-				j = threadIdx.x;
+			for (j = threadIdx.x; j < curr_num_p;
+							j += num_threads) {
 
 				pbatch_cache.p[j] = pbatch->p[p_done + j];
 
@@ -143,6 +142,7 @@ sieve_kernel_64(p_soa_t *pbatch,
 		uint32 num_roots,
 		found_t *found_array)
 {
+	__shared__ p_soa_shared_t pbatch_cache;
 	uint32 my_threadid;
 	uint32 num_threads;
 	uint32 i, j, k;
@@ -167,8 +167,8 @@ sieve_kernel_64(p_soa_t *pbatch,
 
 			__syncthreads();
 
-			if (threadIdx.x < curr_num_p) {
-				j = threadIdx.x;
+			for (j = threadIdx.x; j < curr_num_p;
+							j += num_threads) {
 
 				pbatch_cache.p[j] = pbatch->p[p_done + j];
 
@@ -232,12 +232,18 @@ sieve_kernel_64(p_soa_t *pbatch,
 }
 
 /*------------------------------------------------------------------------*/
+typedef struct {
+	uint32 sq[SPECIALQ_BATCH_SIZE];
+	uint64 roots[SPECIALQ_BATCH_SIZE];
+} sq_soa_shared_t;
+
 __global__ void
 trans_batch_sq(q_soa_t *qbatch,
 		uint32 num_q,
 		p_soa_t *sqbatch,
 		uint32 num_sq)
 {
+	__shared__ sq_soa_shared_t sqbatch_cache;
 	uint32 my_threadid;
 	uint32 num_threads;
 	uint32 i, j;
@@ -258,23 +264,23 @@ trans_batch_sq(q_soa_t *qbatch,
 
 		while (sq_done < num_sq) {
 
-			uint32 curr_num_sq = MIN(SHARED_BATCH_SIZE,
+			uint32 curr_num_sq = MIN(SPECIALQ_BATCH_SIZE,
 						num_sq - sq_done);
 
 			__syncthreads();
 
-			if (threadIdx.x < curr_num_sq) {
-				j = threadIdx.x;
+			for (j = threadIdx.x; j < curr_num_sq;
+							j += num_threads) {
 
-				pbatch_cache.p[j] = sqbatch->p[sq_done + j];
-				pbatch_cache.roots[0][j] =
+				sqbatch_cache.sq[j] = sqbatch->p[sq_done + j];
+				sqbatch_cache.roots[j] =
 					sqbatch->start_root[sq_done + j];
 			}
 
 			__syncthreads();
 
 			for (j = 0; j < curr_num_sq; j++) {
-				uint32 sq = pbatch_cache.p[j];
+				uint32 sq = sqbatch_cache.sq[j];
 				uint64 sq2 = wide_sqr32(sq);
 				uint32 sqinvmodq = modinv32(sq % q, q);
 
@@ -288,7 +294,7 @@ trans_batch_sq(q_soa_t *qbatch,
 				sqinv = montmul64(sqinv, tmp, q2, q2_w);
 				sqinv = montmul64(sqinv, q2_r, q2, q2_w);
 
-				sqroot = pbatch_cache.roots[0][j];
+				sqroot = sqbatch_cache.roots[j];
 				res = montmul64(sqinv,
 						modsub64(qroot, 
 						sqroot % q2,
