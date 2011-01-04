@@ -280,12 +280,13 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 
 	CUDA_TRY(cuParamSetSize(gpu_kernel, i))
 
-	for (i = 0; i < num_roots; i++) {
+	for (i = 0; i < p_array->num_p; i++) {
+		float tmp = 2 * L->poly->sieve_size /
+			p_array->p2[i];
 
-		for (j = 0; j < p_array->num_p; j++)
-			p_array->lattice_size[i][j] =
-				2 * L->poly->sieve_size /
-				sq_array->p2[i] / p_array->p2[j];
+		for (j = 0; j < num_roots; j++)
+			p_array->lattice_size[j][i] =
+				tmp / sq_array->p2[j];
 	}
 
 	while (num_q_done < q_array->num_p) {
