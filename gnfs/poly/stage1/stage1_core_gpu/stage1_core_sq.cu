@@ -290,7 +290,7 @@ trans_batch_sq(q_soa_t *qbatch,
 						sqroot % q2,
 						q2), q2, q2_w);
 
-				qbatch->roots[j][i] = res;
+				qbatch->roots[sq_done + j][i] = res;
 			}
 
 			sq_done += curr_num_sq;
