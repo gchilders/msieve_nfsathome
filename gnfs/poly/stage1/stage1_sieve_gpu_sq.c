@@ -158,6 +158,11 @@ trans_batch_sq(p_soa_var_t *q_array, lattice_fb_t *L,
 			sq_array->num_p))
 	i += sizeof(uint32);
 
+	CUDA_ALIGN_PARAM(i, __alignof(float));
+	CUDA_TRY(cuParamSetf(gpu_kernel, (int)i,
+			2 * L->poly->sieve_size))
+	i += sizeof(float);
+
 	CUDA_TRY(cuParamSetSize(gpu_kernel, i))
 
 	memcpy(sq_marshall->p, sq_array->p,
@@ -203,11 +208,13 @@ trans_batch_sq(p_soa_var_t *q_array, lattice_fb_t *L,
 				num_blocks, 1))
 
 		CUDA_TRY(cuMemcpyDtoH(q_marshall, L->gpu_q_array,
-				Q_SOA_BATCH_SIZE * (sizeof(uint32) +
-					sizeof(uint64) +
-					sq_array->num_p * sizeof(uint64))))
+				sizeof(q_soa_t)))
 
 		for (i = 0; i < sq_array->num_p; i++) {
+			memcpy(q_array->lattice_size[i] + num_q_done,
+				q_marshall->lsize[i],
+				curr_num_q * sizeof(float));
+
 			memcpy(q_array->roots[i] + num_q_done,
 				q_marshall->roots[i],
 				curr_num_q * sizeof(uint64));
@@ -279,15 +286,6 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 	i += sizeof(gpu_ptr);
 
 	CUDA_TRY(cuParamSetSize(gpu_kernel, i))
-
-	for (i = 0; i < p_array->num_p; i++) {
-		float tmp = 2 * L->poly->sieve_size /
-			p_array->p2[i];
-
-		for (j = 0; j < num_roots; j++)
-			p_array->lattice_size[j][i] =
-				tmp / sq_array->p2[j];
-	}
 
 	while (num_q_done < q_array->num_p) {
 
@@ -451,10 +449,11 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	CUDA_TRY(cuMemAlloc(&L->gpu_found_array, 
 			L->found_array_size * sizeof(found_t)))
 
-	host_p_batch_size = MAX(10000, L->found_array_size / 3);
 	host_q_batch_size = MAX(50000, 12 * L->found_array_size);
-	p_soa_var_init(p_array, host_p_batch_size);
+	host_p_batch_size = host_q_batch_size;
+
 	p_soa_var_init(q_array, host_q_batch_size);
+	p_soa_var_init(p_array, host_p_batch_size);
 	p_soa_var_init(sq_array, SPECIALQ_BATCH_SIZE);
 
 	sieve_fb_reset(sieve_large_p, large_p_min, large_p_max, 1, MAX_ROOTS);

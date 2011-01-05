@@ -241,7 +241,8 @@ __global__ void
 trans_batch_sq(q_soa_t *qbatch,
 		uint32 num_q,
 		p_soa_t *sqbatch,
-		uint32 num_sq)
+		uint32 num_sq,
+		float sieve_size)
 {
 	__shared__ sq_soa_shared_t sqbatch_cache;
 	uint32 my_threadid;
@@ -252,58 +253,52 @@ trans_batch_sq(q_soa_t *qbatch,
 	num_threads = gridDim.x * blockDim.x;
 
 	for (i = my_threadid; i < num_q; i+= num_threads) {
-		uint32 q, q2_w, sq_done = 0;
+		uint32 q, q2_w;
 		uint64 q2, q2_r;
 		uint64 qroot;
+		float tmp_lsize;
 
 		q = qbatch->p[i];
 		q2 = wide_sqr32(q);
 		q2_w = montmul32_w((uint32)q2);
 		q2_r = montmul64_r(q2, q2_w);
 		qroot = qbatch->start_root[i];
+		tmp_lsize = sieve_size / q2;
 
-		while (sq_done < num_sq) {
+		__syncthreads();
 
-			uint32 curr_num_sq = MIN(SPECIALQ_BATCH_SIZE,
-						num_sq - sq_done);
+		for (j = threadIdx.x; j < num_sq; j += num_threads) {
 
-			__syncthreads();
+			sqbatch_cache.sq[j] = sqbatch->p[j];
+			sqbatch_cache.roots[j] =
+				sqbatch->start_root[j];
+		}
 
-			for (j = threadIdx.x; j < curr_num_sq;
-							j += num_threads) {
+		__syncthreads();
 
-				sqbatch_cache.sq[j] = sqbatch->p[sq_done + j];
-				sqbatch_cache.roots[j] =
-					sqbatch->start_root[sq_done + j];
-			}
+		for (j = 0; j < num_sq; j++) {
+			uint32 sq = sqbatch_cache.sq[j];
+			uint64 sq2 = wide_sqr32(sq);
+			uint32 sqinvmodq = modinv32(sq % q, q);
 
-			__syncthreads();
+			uint64 sqinv, tmp;
+			uint64 sqroot, res;
 
-			for (j = 0; j < curr_num_sq; j++) {
-				uint32 sq = sqbatch_cache.sq[j];
-				uint64 sq2 = wide_sqr32(sq);
-				uint32 sqinvmodq = modinv32(sq % q, q);
+			tmp = wide_sqr32(sqinvmodq);
+			tmp = montmul64(tmp, q2_r, q2, q2_w);
+			sqinv = montmul64(sq2, tmp, q2, q2_w);
+			sqinv = modsub64((uint64)2, sqinv, q2);
+			sqinv = montmul64(sqinv, tmp, q2, q2_w);
+			sqinv = montmul64(sqinv, q2_r, q2, q2_w);
 
-				uint64 sqinv, tmp;
-				uint64 sqroot, res;
+			sqroot = sqbatch_cache.roots[j];
+			res = montmul64(sqinv,
+					modsub64(qroot, 
+					sqroot % q2,
+					q2), q2, q2_w);
 
-				tmp = wide_sqr32(sqinvmodq);
-				tmp = montmul64(tmp, q2_r, q2, q2_w);
-				sqinv = montmul64(sq2, tmp, q2, q2_w);
-				sqinv = modsub64((uint64)2, sqinv, q2);
-				sqinv = montmul64(sqinv, tmp, q2, q2_w);
-				sqinv = montmul64(sqinv, q2_r, q2, q2_w);
-
-				sqroot = sqbatch_cache.roots[j];
-				res = montmul64(sqinv,
-						modsub64(qroot, 
-						sqroot % q2,
-						q2), q2, q2_w);
-
-				qbatch->roots[sq_done + j][i] = res;
-			}
-
-			sq_done += curr_num_sq;
+			qbatch->roots[j][i] = res;
+			qbatch->lsize[j][i] = tmp_lsize / sq2;
 		}
 	}
 }
