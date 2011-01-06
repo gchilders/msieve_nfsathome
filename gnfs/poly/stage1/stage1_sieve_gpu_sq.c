@@ -232,7 +232,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			uint32 threads_per_block, gpu_info_t *gpu_info,
 			CUfunction gpu_kernel)
 {
-	uint32 i, j;
+	uint32 i;
 
 	p_soa_t *p_marshall;
 	q_soa_t *q_marshall;
