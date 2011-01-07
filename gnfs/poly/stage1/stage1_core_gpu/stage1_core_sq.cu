@@ -267,7 +267,7 @@ trans_batch_sq(q_soa_t *qbatch,
 
 		__syncthreads();
 
-		for (j = threadIdx.x; j < num_sq; j += num_threads) {
+		for (j = threadIdx.x; j < num_sq; j += blockDim.x) {
 
 			sqbatch_cache.sq[j] = sqbatch->p[j];
 			sqbatch_cache.roots[j] =
