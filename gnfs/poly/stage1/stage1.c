@@ -246,8 +246,12 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		deadline_per_coeff = 200;
 	else if (digits <= 150)
 		deadline_per_coeff = 400;
-	else
+	else if (digits <= 175)
 		deadline_per_coeff = 800;
+	else if (digits <= 200)
+		deadline_per_coeff = 1600;
+	else
+		deadline_per_coeff = 3200;
 
 	printf("deadline: %u seconds per coefficient\n", deadline_per_coeff);
 
