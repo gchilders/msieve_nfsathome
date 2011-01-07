@@ -70,7 +70,7 @@ sieve_kernel_48(p_soa_t *pbatch,
 			__syncthreads();
 
 			for (j = threadIdx.x; j < curr_num_p;
-							j += num_threads) {
+							j += blockDim.x) {
 
 				pbatch_cache.p[j] = pbatch->p[p_done + j];
 
@@ -168,7 +168,7 @@ sieve_kernel_64(p_soa_t *pbatch,
 			__syncthreads();
 
 			for (j = threadIdx.x; j < curr_num_p;
-							j += num_threads) {
+							j += blockDim.x) {
 
 				pbatch_cache.p[j] = pbatch->p[p_done + j];
 
