@@ -350,7 +350,7 @@ sieve_x_run_deg6(root_sieve_t *rs)
 	xline_heap_t xline_heap;
 	uint32 cutoff_score;
 
-	compute_line_size_deg6(rs->max_norm, &xy->apoly,
+	compute_line_size(rs->max_norm, &xy->apoly,
 			rs->dbl_p, rs->dbl_d, direction,
 			-10000, 10000, &line_min, &line_max);
 	if (line_min > line_max)
@@ -405,7 +405,7 @@ sieve_x_run_deg6(root_sieve_t *rs)
 		x->apoly = xy->apoly;
 		x->apoly.coeff[2] += mpz_get_d(rs->curr_y) * rs->dbl_p;
 		x->apoly.coeff[1] -= mpz_get_d(rs->curr_y) * rs->dbl_d;
-		compute_line_size_deg6(rs->max_norm, &x->apoly,
+		compute_line_size(rs->max_norm, &x->apoly,
 				rs->dbl_p, rs->dbl_d, direction,
 				x->last_line_min, x->last_line_max,
 				&line_min, &line_max);

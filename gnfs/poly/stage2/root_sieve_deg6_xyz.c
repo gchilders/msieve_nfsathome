@@ -190,7 +190,7 @@ sieve_xyz_run_deg6(root_sieve_t *rs)
 
 	lattice_size = xyz->lattice_size = 1;
 	xyz->num_lattices = 0;
-	compute_line_size_deg6(rs->max_norm, &rs->apoly,
+	compute_line_size(rs->max_norm, &rs->apoly,
 			rs->dbl_p, rs->dbl_d, direction,
 			-10000, 10000, &line_min, &line_max);
 	if (line_min >= line_max)
@@ -273,7 +273,7 @@ sieve_xyz_run_deg6(root_sieve_t *rs)
 			line_max = 10000;
 		}
 
-		compute_line_size_deg6(rs->max_norm, &apoly,
+		compute_line_size(rs->max_norm, &apoly,
 			rs->dbl_p, rs->dbl_d, direction,
 			line_min, line_max, &line_min, &line_max);
 

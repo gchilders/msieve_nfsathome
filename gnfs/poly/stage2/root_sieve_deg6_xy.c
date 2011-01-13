@@ -519,7 +519,7 @@ sieve_xy_run_deg6(root_sieve_t *rs)
 	uint64 inv_xy;
 	uint64 inv_xyz;
 
-	compute_line_size_deg6(rs->max_norm, &rs->apoly,
+	compute_line_size(rs->max_norm, &rs->apoly,
 			rs->dbl_p, rs->dbl_d, direction,
 			-10000, 10000, &line_min, &line_max);
 	if (line_min > line_max)

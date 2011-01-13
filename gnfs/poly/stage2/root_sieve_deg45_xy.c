@@ -192,7 +192,7 @@ sieve_xy_run_deg45(root_sieve_t *rs)
 
 	lattice_size = xy->lattice_size = 1;
 	xy->num_lattices = 0;
-	compute_line_size_deg6(rs->max_norm, &rs->apoly,
+	compute_line_size(rs->max_norm, &rs->apoly,
 			rs->dbl_p, rs->dbl_d, direction,
 			-10, 10, &line_min, &line_max);
 	if (line_min >= line_max)
@@ -261,7 +261,7 @@ sieve_xy_run_deg45(root_sieve_t *rs)
 		apoly.coeff[2] += rs->dbl_p * curr_y;
 		apoly.coeff[1] -= rs->dbl_d * curr_y;
 
-		compute_line_size_deg6(rs->max_norm, &apoly,
+		compute_line_size(rs->max_norm, &apoly,
 			rs->dbl_p, rs->dbl_d, direction,
 			line_min, line_max, &line_min, &line_max);
 
