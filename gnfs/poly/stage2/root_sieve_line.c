@@ -383,6 +383,9 @@ root_sieve_line(root_sieve_t *rs)
 		dpoly_t apoly = rs->apoly;
 		double size_score, best_skew, best_xlate;
 
+		if (alpha > -4.0)
+			continue;
+
 		mpz_add(rs->curr_x, x->x_base, x->resclass);
 		mpz_addmul_ui(rs->curr_x, x->mp_lattice_size, entry->x_off);
 

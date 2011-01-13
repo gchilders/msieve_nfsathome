@@ -124,7 +124,7 @@ typedef struct {
 	mpz_t y;
 } root_heap_t;
 
-/* definitions for degree 6 root sieve */
+/* definitions for root sieve */
 
 #define MAX_CRT_FACTORS 10
 
@@ -180,8 +180,6 @@ typedef struct {
 	sieve_prime_t lattice_primes[MAX_CRT_FACTORS];
 	uint32 num_lattice_primes;
 
-	dpoly_t apoly;
-
 	uint16 curr_score;
 
 	mpz_t y_base;
@@ -189,11 +187,21 @@ typedef struct {
 
 	mpz_t mp_lattice_size;
 	double dbl_lattice_size;
+
+	/* degree 6 only */
+	dpoly_t apoly;
 	mpz_t crt0;
 	mpz_t crt1;
 	mpz_t resclass_x;
 	mpz_t resclass_y;
 	mpz_t tmp1, tmp2, tmp3, tmp4;
+
+	/* degree 5 only */
+	uint32 num_lattices;
+	lattice_t *lattices;
+	double *x_line_min;
+	double *x_line_max;
+
 } sieve_xy_t;
 
 void sieve_xy_alloc(sieve_xy_t *xy);
@@ -263,9 +271,11 @@ void root_sieve_run(poly_stage2_t *data, double curr_norm,
 
 void root_sieve_run_deg6(poly_stage2_t *data, double curr_norm,
 				double alpha_proj);
-void sieve_xyz_run(root_sieve_t *rs);
-void sieve_xy_run(root_sieve_t *rs);
-void sieve_x_run(root_sieve_t *rs);
+void sieve_xyz_run_deg6(root_sieve_t *rs);
+void sieve_xy_run_deg45(root_sieve_t *rs);
+void sieve_xy_run_deg6(root_sieve_t *rs);
+void sieve_x_run_deg45(root_sieve_t *rs);
+void sieve_x_run_deg6(root_sieve_t *rs);
 void root_sieve_line(root_sieve_t *rs);
 void save_mp_rotation(root_heap_t *heap, mpz_t x, mpz_t y,
 		int64 z, float score);

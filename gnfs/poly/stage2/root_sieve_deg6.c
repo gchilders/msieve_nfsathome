@@ -282,7 +282,7 @@ static const double size_bound[] = {1.05, 1.5, 4.0, 50.0, 100.0};
 #define NUM_BOUNDS (sizeof(size_bound) / sizeof(size_bound[0]))
 
 void
-root_sieve_run_deg6(poly_stage2_t *data, double curr_norm,
+root_sieve_run_core(poly_stage2_t *data, double curr_norm,
 			double alpha_proj)
 {
 	uint32 i;
@@ -304,7 +304,10 @@ root_sieve_run_deg6(poly_stage2_t *data, double curr_norm,
 
 		rs->max_norm = exp(-alpha_proj) * bound;
 
-		sieve_xyz_run(rs);
+		if (data->degree == 6)
+			sieve_xyz_run_deg6(rs);
+		else
+			sieve_xy_run_deg45(rs);
 
 		if (bound == data->max_norm)
 			break;

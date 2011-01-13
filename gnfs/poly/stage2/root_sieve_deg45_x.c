@@ -25,16 +25,23 @@ typedef struct {
 	uint32 num_roots;
 	uint16 contrib;
 	xprog_t *roots;
+} xpower_t;
+
+typedef struct {
+	uint32 num_powers;
+	xpower_t *powers;
+	uint32 sieve_size;
 	uint16 *sieve;
 } xdata_t;
 
 typedef struct {
 	uint16 score;
 	uint32 which_y_block;
+	uint32 which_lattice;
 	uint64 resclass;
 } xline_t;
 
-#define XLINE_HEAP_SIZE 100
+#define XLINE_HEAP_SIZE 300
 
 typedef struct {
 	uint32 num_entries;
@@ -82,7 +89,8 @@ make_heap(xline_t *h, uint32 size) {
 
 static void
 save_xline(xline_heap_t *heap, uint32 score, 
-		uint32 which_y_block, uint64 resclass)
+		uint32 which_y_block, uint32 which_lattice,
+		uint64 resclass)
 {
 	xline_t *h = heap->entries;
 
@@ -90,6 +98,7 @@ save_xline(xline_heap_t *heap, uint32 score,
 		xline_t *s = h + heap->num_entries++;
 		s->score = score;
 		s->which_y_block = which_y_block;
+		s->which_lattice = which_lattice;
 		s->resclass = resclass;
 		if (heap->num_entries == XLINE_HEAP_SIZE)
 			make_heap(h, XLINE_HEAP_SIZE);
@@ -97,6 +106,7 @@ save_xline(xline_heap_t *heap, uint32 score,
 	else if (h->score < score) {
 		h->score = score;
 		h->which_y_block = which_y_block;
+		h->which_lattice = which_lattice;
 		h->resclass = resclass;
 		heapify(h, 0, XLINE_HEAP_SIZE);
 	}
@@ -111,27 +121,65 @@ find_lattice_primes(sieve_prime_t *primes, uint32 num_primes,
 	uint32 i;
 	uint32 num_lattice_primes = 0;
 	uint64 tmp = 1;
-	double target_size = line_length / mpz_get_d(mp_lattice_size) / 1e6;
+	double target_size = line_length / mpz_get_d(mp_lattice_size) / 1e5;
 	double curr_size = 1.0;
+
+	if (line_length < 2000000) {
+		*lattice_size_x = 1;
+		return 0;
+	}
 
 	for (i = 0; i < num_primes; i++) {
 
 		sieve_prime_t *curr_prime = primes + i;
+		uint32 p = curr_prime->prime;
+		uint32 num_powers = 1;
 
 		if (num_lattice_primes == MAX_CRT_FACTORS)
 			break;
 
 		if (curr_prime->powers[0].num_roots == 0 ||
-		    mpz_tdiv_ui(mp_lattice_size, curr_prime->prime) == 0)
+		    mpz_tdiv_ui(mp_lattice_size, p) == 0)
 			continue;
 
-		if (curr_size * curr_prime->prime >= target_size)
+		if (curr_size * p >= target_size)
 			break;
 
-		tmp *= curr_prime->prime;
+		switch (p) {
+		case 2:
+			if (target_size < 1000) {
+				p = 4;
+				num_powers = 2;
+			}
+			else {
+				p = 8;
+				num_powers = 3;
+			}
+			break;
+
+		case 3:
+			if (target_size < 1000) {
+				p = 9;
+				num_powers = 2;
+			}
+			else {
+				p = 27;
+				num_powers = 3;
+			}
+			break;
+
+		case 5:
+			if (target_size > 50000) {
+				p = 25;
+				num_powers = 2;
+			}
+			break;
+		}
+
+		tmp *= p;
 		lattice_primes[num_lattice_primes] = *curr_prime;
-		lattice_primes[num_lattice_primes].num_powers = 1;
-		curr_size *= curr_prime->prime;
+		lattice_primes[num_lattice_primes].num_powers = num_powers;
+		curr_size *= p;
 		num_lattice_primes++;
 	}
 
@@ -145,7 +193,7 @@ find_lattice_primes(sieve_prime_t *primes, uint32 num_primes,
 static void 
 root_sieve_x(root_sieve_t *rs, xdata_t *xdata, 
 		uint32 num_lattice_primes, uint32 which_y_block,
-		xline_heap_t *heap, uint32 cutoff)
+		xline_heap_t *heap, uint32 which_lattice)
 {
 	uint32 i, j, k;
 	hit_t hitlist[MAX_CRT_FACTORS];
@@ -156,12 +204,12 @@ root_sieve_x(root_sieve_t *rs, xdata_t *xdata,
 	for (i = 0; i < num_lattice_primes; i++) {
 
 		xdata_t *curr_xdata = xdata + i;
-		uint32 p = curr_xdata->p;
+		uint32 sieve_size = curr_xdata->sieve_size;
 		uint16 *sieve = curr_xdata->sieve;
 		uint16 max_sieve_val = 0;
 		hit_t *hits = hitlist + i;
 
-		for (j = k = 0; j < p; j++) {
+		for (j = k = 0; j < sieve_size; j++) {
 			if (sieve[j] >= max_sieve_val) {
 
 				if (sieve[j] > max_sieve_val) {
@@ -174,7 +222,7 @@ root_sieve_x(root_sieve_t *rs, xdata_t *xdata,
 			}
 		}
 
-		hits->power = p;
+		hits->power = sieve_size;
 		hits->num_roots = k;
 		num_lattices *= k;
 	}
@@ -184,62 +232,74 @@ root_sieve_x(root_sieve_t *rs, xdata_t *xdata,
 	compute_lattices(hitlist, num_lattice_primes,
 			lattices_x, x->lattice_size, num_lattices, 1);
 
-	if (lattices_x[0].score < cutoff)
-		return;
-
 	if (heap->num_entries < XLINE_HEAP_SIZE ||
 	    lattices_x[0].score > heap->entries[0].score) {
 
 		for (i = 0; i < num_lattices; i++) {
 			save_xline(heap, lattices_x[i].score, 
-					which_y_block, lattices_x[i].x);
+					which_y_block, which_lattice,
+					lattices_x[i].x);
 		}
 	}
-
 }
 
 /*-------------------------------------------------------------------------*/
-static uint32
+static void
 xdata_alloc(sieve_prime_t *lattice_primes, 
 		uint32 num_lattice_primes, 
 		mpz_t mp_lattice_size,
 		xdata_t *xdata)
 {
-	uint32 i;
-	uint32 cutoff = 0;
+	uint32 i, j;
+
+	memset(xdata, 0, sizeof(xdata_t));
 
 	for (i = 0; i < num_lattice_primes; i++) {
 
 		sieve_prime_t *curr_prime = lattice_primes + i;
 		xdata_t *curr_xdata = xdata + i;
-		uint32 p = curr_prime->prime;
-		uint32 num_roots = curr_prime->powers[0].num_roots;
+		uint32 num_powers = curr_prime->num_powers;
+		uint32 sieve_size = curr_prime->powers[num_powers - 1].power;
 
-		curr_xdata->p = p;
-		curr_xdata->latsize_mod_p = mpz_tdiv_ui(mp_lattice_size, p);
-		curr_xdata->num_roots = num_roots;
-		curr_xdata->contrib = curr_prime->powers[0].sieve_contrib;
-		curr_xdata->roots = (xprog_t *)xmalloc(num_roots * 
+		curr_xdata->sieve_size = sieve_size;
+		curr_xdata->sieve = (uint16 *)xmalloc(sieve_size *
+						sizeof(uint16));
+		curr_xdata->num_powers = num_powers;
+		curr_xdata->powers = (xpower_t *)xmalloc(num_powers *
+						sizeof(xpower_t));
+
+		for (j = 0; j < num_powers; j++) {
+			sieve_power_t *sp = curr_prime->powers + j;
+			xpower_t *curr_xpower = curr_xdata->powers + j;
+			uint32 power = sp->power;
+
+			curr_xpower->p = power;
+			curr_xpower->latsize_mod_p = mpz_tdiv_ui(
+						mp_lattice_size, power);
+			curr_xpower->num_roots = sp->num_roots;
+			curr_xpower->contrib = sp->sieve_contrib;
+			curr_xpower->roots = (xprog_t *)xmalloc(sp->num_roots * 
 							sizeof(xprog_t));
-		curr_xdata->sieve = (uint16 *)xmalloc(p * sizeof(uint16));
-
-		cutoff += curr_xdata->contrib * MIN(3, num_roots - 1);
+		}
 	}
-
-	return cutoff;
 }
 
 /*-------------------------------------------------------------------------*/
 static void
 xdata_free(xdata_t *xdata, uint32 num_lattice_primes)
 {
-	uint32 i;
+	uint32 i, j;
 
 	for (i = 0; i < num_lattice_primes; i++) {
 
 		xdata_t *curr_xdata = xdata + i;
 
-		free(curr_xdata->roots);
+		for (j = 0; j < curr_xdata->num_powers; j++) {
+			xpower_t *curr_xpower = curr_xdata->powers + j;
+	
+			free(curr_xpower->roots);
+		}
+		free(curr_xdata->powers);
 		free(curr_xdata->sieve);
 	}
 }
@@ -248,42 +308,74 @@ xdata_free(xdata_t *xdata, uint32 num_lattice_primes)
 static void 
 xdata_init(sieve_prime_t *lattice_primes, xdata_t *xdata,
 		uint32 num_lattice_primes, 
-		mpz_t y_base, mpz_t resclass_y, int64 curr_z)
+		mpz_t y_base, uint64 resclass_y)
 {
-	uint32 i, j;
+	uint32 i, j, k;
 
 	for (i = 0; i < num_lattice_primes; i++) {
 
 		sieve_prime_t *curr_prime = lattice_primes + i;
-		sieve_power_t *sp = curr_prime->powers + 0;
 		xdata_t *curr_xdata = xdata + i;
+		uint32 num_powers = curr_xdata->num_powers;
 
-		uint32 p = curr_xdata->p;
-		uint32 num_roots = curr_xdata->num_roots;
-		xprog_t *roots = curr_xdata->roots;
+		for (j = 0; j < num_powers; j++) {
 
-		uint32 latsize_mod_p = curr_xdata->latsize_mod_p;
-		uint32 yres_mod_p = mpz_tdiv_ui(resclass_y, p);
-		uint32 ybase_mod_p = mpz_fdiv_ui(y_base, p);
-		uint32 y_mod_p = mp_modadd_1(yres_mod_p, ybase_mod_p, p);
-		int32 z_mod = curr_z % p;
-		uint32 z_mod_p = (z_mod < 0) ?  (z_mod + (int32)p) : z_mod;
+			sieve_power_t *sp = curr_prime->powers + j;
+			xpower_t * curr_xpower = curr_xdata->powers + j;
+			uint32 p = curr_xpower->p;
+			uint32 num_roots = curr_xpower->num_roots;
+			xprog_t *roots = curr_xpower->roots;
+
+			uint32 latsize_mod_p = curr_xpower->latsize_mod_p;
+			uint32 yres_mod_p = (uint32)(resclass_y % p);
+			uint32 ybase_mod_p = mpz_fdiv_ui(y_base, p);
+			uint32 y_mod_p = mp_modadd_1(yres_mod_p, 
+							ybase_mod_p, p);
+
+			for (k = 0; k < num_roots; k++) {
+				sieve_root_t *r = sp->roots + k;
+
+				roots[k].stride_y = mp_modmul_1(r->resclass, 
+							latsize_mod_p, p);
+				roots[k].start = mp_modsub_1(r->start, 
+						mp_modmul_1(r->resclass,
+							y_mod_p, p), p);
+			}
+		}
+	}
+}
+
+/*-------------------------------------------------------------------------*/
+static void
+do_sieving(xdata_t *xdata)
+{
+	uint32 i, j;
+	uint32 num_powers = xdata->num_powers;
+	uint16 *sieve = xdata->sieve;
+	uint32 sieve_size = xdata->sieve_size;
+
+	memset(sieve, 0, sieve_size * sizeof(uint16));
+
+	for (i = 0; i < num_powers; i++) {
+
+		xpower_t * curr_xpower = xdata->powers + i;
+		uint32 p = curr_xpower->p;
+		uint32 num_roots = curr_xpower->num_roots;
+		uint16 contrib = curr_xpower->contrib;
+		xprog_t *roots = curr_xpower->roots;
 
 		for (j = 0; j < num_roots; j++) {
-			sieve_root_t *r = sp->roots + j;
-			xprog_t *curr_xprog = roots + j;
-			uint32 start = r->start;
-			uint32 resclass = r->resclass;
-			uint32 resclass2 = mp_modmul_1(resclass, resclass, p);
 
-			curr_xprog->stride_y = mp_modmul_1(resclass, 
-							latsize_mod_p, p);
-			start = mp_modsub_1(start, 
-					mp_modmul_1(resclass, y_mod_p, p), 
-					p);
-			curr_xprog->start = mp_modsub_1(start, 
-					mp_modmul_1(resclass2, z_mod_p, p), 
-					p);
+			xprog_t *curr_prog = roots + j;
+			uint32 start = curr_prog->start;
+
+			while (start < sieve_size) {
+				sieve[start] += contrib;
+				start += p;
+			}
+
+			curr_prog->start = mp_modsub_1(start,
+					curr_prog->stride_y, p);
 		}
 	}
 }
@@ -292,38 +384,40 @@ xdata_init(sieve_prime_t *lattice_primes, xdata_t *xdata,
 static void 
 find_hits(root_sieve_t *rs, xdata_t *xdata, 
 		uint32 num_lattice_primes, uint32 y_blocks,
-		xline_heap_t *heap, uint32 cutoff)
+		xline_heap_t *heap, uint32 which_lattice)
 {
-	uint32 i, j, k;
+	uint32 i, j;
 
 	for (i = 0; i < y_blocks; i++) {
 
-		for(j = 0; j < num_lattice_primes; j++) {
-
-			xdata_t *curr_xdata = xdata + j;
-			uint32 p = curr_xdata->p;
-			uint32 num_roots = curr_xdata->num_roots;
-			uint16 contrib = curr_xdata->contrib;
-			xprog_t *roots = curr_xdata->roots;
-			uint16 *sieve = curr_xdata->sieve;
-
-			memset(sieve, 0, p * sizeof(uint16));
-
-			for (k = 0; k < num_roots; k++) {
-
-				xprog_t *curr_prog = roots + k;
-				uint32 start = curr_prog->start;
-
-				sieve[start] += contrib;
-
-				curr_prog->start = mp_modsub_1(start,
-						curr_prog->stride_y, p);
-			}
-		}
+		for(j = 0; j < num_lattice_primes; j++)
+			do_sieving(xdata + j);
 
 		root_sieve_x(rs, xdata, num_lattice_primes, 
-				i, heap, cutoff);
+				i, heap, which_lattice);
 	}
+}
+
+/*-------------------------------------------------------------------------*/
+void
+sieve_x_alloc(sieve_x_t *x)
+{
+	mpz_init(x->mp_lattice_size);
+	mpz_init(x->resclass);
+	mpz_init(x->crt0);
+	mpz_init(x->crt1);
+	mpz_init(x->tmp1);
+}
+
+/*-------------------------------------------------------------------------*/
+void
+sieve_x_free(sieve_x_t *x)
+{
+	mpz_clear(x->mp_lattice_size);
+	mpz_clear(x->resclass);
+	mpz_clear(x->crt0);
+	mpz_clear(x->crt1);
+	mpz_clear(x->tmp1);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -336,24 +430,29 @@ compare_xlines(const void *x, const void *y)
 }
 
 void
-sieve_x_run_deg6(root_sieve_t *rs)
+sieve_x_run_deg45(root_sieve_t *rs)
 {
-	uint32 i;
+	uint32 i, j;
 	sieve_xy_t *xy = &rs->xydata;
 	sieve_x_t *x = &rs->xdata;
 	sieve_prime_t *lattice_primes = x->lattice_primes;
 	uint32 num_lattice_primes;
 
-	double direction[3] = {1, 0, 0};
 	double line_min, line_max;
 	xdata_t xdata[MAX_CRT_FACTORS];
 	xline_heap_t xline_heap;
 	uint32 cutoff_score;
 
-	compute_line_size_deg6(rs->max_norm, &xy->apoly,
-			rs->dbl_p, rs->dbl_d, direction,
-			-10000, 10000, &line_min, &line_max);
-	if (line_min > line_max)
+	line_min = line_max = 0;
+	for (i = 0; i < xy->y_blocks; i++) {
+		double curr_min = xy->x_line_min[i];
+		double curr_max = xy->x_line_max[i];
+		if (curr_max - curr_min > line_max - line_min) {
+			line_min = curr_min;
+			line_max = curr_max;
+		}
+	}
+	if (line_min == line_max)
 		return;
 
 	num_lattice_primes = x->num_lattice_primes = 
@@ -361,57 +460,95 @@ sieve_x_run_deg6(root_sieve_t *rs)
 					rs->num_primes, xy->mp_lattice_size, 
 					lattice_primes, &x->lattice_size,
 					line_max - line_min);
-	x->last_line_min = line_min;
-	x->last_line_max = line_max;
 
 	uint64_2gmp(x->lattice_size, x->tmp1);
-	mpz_invert(x->crt0, xy->mp_lattice_size, x->tmp1);
-	mpz_invert(x->crt1, x->tmp1, xy->mp_lattice_size);
-	mpz_mul(x->crt0, x->crt0, xy->mp_lattice_size);
-	mpz_mul(x->crt1, x->crt1, x->tmp1);
 	mpz_mul(x->mp_lattice_size, xy->mp_lattice_size, x->tmp1);
 	x->dbl_lattice_size = mpz_get_d(x->mp_lattice_size);
 
-	cutoff_score = xdata_alloc(lattice_primes, 
-				num_lattice_primes, 
-				xy->mp_lattice_size, xdata);
+	if (x->lattice_size == 1) {
+		for (i = 0; i < xy->num_lattices; i++) {
+			lattice_t * curr_lattice = xy->lattices + i;
 
-	xdata_init(lattice_primes, xdata, num_lattice_primes,
-			xy->y_base, xy->resclass_y, 
-			rs->curr_z);
+			uint64_2gmp(curr_lattice->x, xy->resclass_x);
+			uint64_2gmp(curr_lattice->y, xy->resclass_y);
+			mpz_set(x->resclass, xy->resclass_x);
+			mpz_add(rs->curr_y, xy->y_base, xy->resclass_y);
+
+			for (j = 0; j < xy->y_blocks; j++) {
+				line_min = xy->x_line_min[j];
+				line_max = xy->x_line_max[j];
+
+				x->apoly = rs->apoly;
+				x->apoly.coeff[2] += mpz_get_d(rs->curr_y) * 
+								rs->dbl_p;
+				x->apoly.coeff[1] -= mpz_get_d(rs->curr_y) * 
+								rs->dbl_d;
+
+				mpz_set_d(x->x_base, line_min);
+				mpz_tdiv_q(x->x_base, x->x_base, 
+						x->mp_lattice_size);
+				mpz_mul(x->x_base, x->x_base, 
+						x->mp_lattice_size);
+				x->x_blocks = (line_max - line_min) /
+						x->dbl_lattice_size;
+
+				x->curr_score = xy->curr_score;
+
+				root_sieve_line(rs);
+
+				mpz_add(rs->curr_y, rs->curr_y, 
+						xy->mp_lattice_size);
+			}
+		}
+		return;
+	}
+
+	xdata_alloc(lattice_primes, num_lattice_primes, 
+			xy->mp_lattice_size, xdata);
 
 	xline_heap.num_entries = 0;
-	find_hits(rs, xdata, num_lattice_primes, 
-			xy->y_blocks, &xline_heap, 
-			cutoff_score);
+
+	for (i = 0; i < xy->num_lattices; i++) {
+		xdata_init(lattice_primes, xdata, num_lattice_primes,
+				xy->y_base, xy->lattices[i].y);
+
+		find_hits(rs, xdata, num_lattice_primes, 
+				xy->y_blocks, &xline_heap, i);
+	}
 
 	xdata_free(xdata, num_lattice_primes);
 
 	qsort(xline_heap.entries, xline_heap.num_entries,
 			sizeof(xline_t), compare_xlines);
-	cutoff_score = 0.95 * xline_heap.entries[0].score;
+
+	cutoff_score = 0.4 * xline_heap.entries[0].score;
+	mpz_invert(x->crt0, xy->mp_lattice_size, x->tmp1);
+	mpz_invert(x->crt1, x->tmp1, xy->mp_lattice_size);
+	mpz_mul(x->crt0, x->crt0, xy->mp_lattice_size);
+	mpz_mul(x->crt1, x->crt1, x->tmp1);
 
 	for (i = 0; i < xline_heap.num_entries; i++) {
 
 		xline_t *curr_xline = xline_heap.entries + i;
+		lattice_t *curr_xy_lattice = xy->lattices + 
+					curr_xline->which_lattice;
 
 		if (curr_xline->score < cutoff_score)
 			break;
+
+		uint64_2gmp(curr_xy_lattice->x, xy->resclass_x);
+		uint64_2gmp(curr_xy_lattice->y, xy->resclass_y);
 
 		mpz_add(rs->curr_y, xy->y_base, xy->resclass_y);
 		mpz_addmul_ui(rs->curr_y, xy->mp_lattice_size, 
 				curr_xline->which_y_block);
 
-		x->apoly = xy->apoly;
+		x->apoly = rs->apoly;
 		x->apoly.coeff[2] += mpz_get_d(rs->curr_y) * rs->dbl_p;
 		x->apoly.coeff[1] -= mpz_get_d(rs->curr_y) * rs->dbl_d;
-		compute_line_size_deg6(rs->max_norm, &x->apoly,
-				rs->dbl_p, rs->dbl_d, direction,
-				x->last_line_min, x->last_line_max,
-				&line_min, &line_max);
-		if (line_min > line_max ||
-		    line_max - line_min < 10000 * x->dbl_lattice_size)
-			continue;
+
+		line_min = xy->x_line_min[curr_xline->which_y_block];
+		line_max = xy->x_line_max[curr_xline->which_y_block];
 
 		mpz_set_d(x->tmp1, line_min);
 		mpz_tdiv_q(x->x_base, x->tmp1, x->mp_lattice_size);

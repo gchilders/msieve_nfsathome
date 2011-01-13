@@ -884,7 +884,7 @@ static void process_rotations(poly_stage2_t *data,
 
 /*-------------------------------------------------------------------------*/
 static void
-root_sieve_run_deg45(poly_stage2_t *data, double alpha_proj)
+root_sieve_run_old(poly_stage2_t *data, double alpha_proj)
 {
 	uint32 i;
 	double dbl_p;
@@ -937,10 +937,7 @@ root_sieve_run(poly_stage2_t *data, double curr_norm, double alpha_proj)
 
 	init_sieve(c, rs, deg, -alpha_proj);
 
-	if (deg != 6)
-		root_sieve_run_deg45(data, alpha_proj);
-	else
-		root_sieve_run_deg6(data, curr_norm, alpha_proj);
+	root_sieve_run_core(data, curr_norm, alpha_proj);
 }
 
 /*-------------------------------------------------------------------------*/
