@@ -167,8 +167,6 @@ typedef struct {
 	sieve_prime_t lattice_primes[MAX_CRT_FACTORS];
 	uint32 num_lattice_primes;
 
-	uint16 curr_score;
-
 	mpz_t y_base;
 	uint32 y_blocks;
 
@@ -176,6 +174,7 @@ typedef struct {
 	double dbl_lattice_size;
 
 	/* degree 6 only */
+	uint16 curr_score;
 	dpoly_t apoly;
 	mpz_t crt0;
 	mpz_t crt1;
@@ -183,7 +182,7 @@ typedef struct {
 	mpz_t resclass_y;
 	mpz_t tmp1, tmp2, tmp3, tmp4;
 
-	/* degree 5 only */
+	/* degree 4 and 5 only */
 	uint32 num_lattices;
 	lattice_t *lattices;
 	double *x_line_min;

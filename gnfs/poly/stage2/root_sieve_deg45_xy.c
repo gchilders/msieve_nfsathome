@@ -116,14 +116,19 @@ find_hits(sieve_prime_t *lattice_primes,
 			}
 		}
 
+		for (j = 0; j < size; j++) {
+			uint32 curr_score = sieve[j];
+
+			if (curr_score > max_score)
+				max_score = curr_score;
+		}
+
+		max_score = 0.7 * max_score;
+
 		for (j = k = 0; j < size; j++) {
 			uint32 curr_score = sieve[j];
 
 			if (curr_score >= max_score) {
-				if (curr_score > max_score) {
-					max_score = curr_score;
-					k = 0;
-				}
 				if (k == MAX_ROOTS)
 					break;
 
@@ -247,7 +252,6 @@ sieve_xy_run_deg45(root_sieve_t *rs)
 
 	}
 	xy->num_lattices = num_lattices;
-	xy->curr_score = xy->lattices[0].score;
 
 	line_min = -10000;
 	line_max = 10000;

@@ -200,6 +200,7 @@ root_sieve_x(root_sieve_t *rs, xdata_t *xdata,
 	lattice_t lattices_x[MAX_X_LATTICES];
 	sieve_x_t *x = &rs->xdata;
 	uint32 num_lattices = 1;
+	uint32 xy_score = rs->xydata.lattices[which_lattice].score;
 
 	for (i = 0; i < num_lattice_primes; i++) {
 
@@ -209,13 +210,18 @@ root_sieve_x(root_sieve_t *rs, xdata_t *xdata,
 		uint16 max_sieve_val = 0;
 		hit_t *hits = hitlist + i;
 
+		for (j = 0; j < sieve_size; j++) {
+			if (sieve[j] > max_sieve_val)
+				max_sieve_val = sieve[j];
+					k = 0;
+		}
+		max_sieve_val = 0.7 * max_sieve_val;
+
 		for (j = k = 0; j < sieve_size; j++) {
 			if (sieve[j] >= max_sieve_val) {
+				if (k == MAX_ROOTS)
+					break;
 
-				if (sieve[j] > max_sieve_val) {
-					max_sieve_val = sieve[j];
-					k = 0;
-				}
 				hits->score[k] = sieve[j];
 				hits->roots[k][0] = j;
 				k++;
@@ -232,13 +238,14 @@ root_sieve_x(root_sieve_t *rs, xdata_t *xdata,
 	compute_lattices(hitlist, num_lattice_primes,
 			lattices_x, x->lattice_size, num_lattices, 1);
 
-	if (heap->num_entries < XLINE_HEAP_SIZE ||
-	    lattices_x[0].score > heap->entries[0].score) {
+	for (i = 0; i < num_lattices; i++) {
+		uint32 score = xy_score + lattices_x[i].score;
 
-		for (i = 0; i < num_lattices; i++) {
-			save_xline(heap, lattices_x[i].score, 
-					which_y_block, which_lattice,
-					lattices_x[i].x);
+		if (heap->num_entries < XLINE_HEAP_SIZE ||
+		    score > heap->entries[0].score) {
+
+			save_xline(heap, score, which_y_block, 
+					which_lattice, lattices_x[i].x);
 		}
 	}
 }
@@ -474,6 +481,8 @@ sieve_x_run_deg45(root_sieve_t *rs)
 			mpz_set(x->resclass, xy->resclass_x);
 			mpz_add(rs->curr_y, xy->y_base, xy->resclass_y);
 
+			x->curr_score = curr_lattice->score;
+
 			for (j = 0; j < xy->y_blocks; j++) {
 				line_min = xy->x_line_min[j];
 				line_max = xy->x_line_max[j];
@@ -491,8 +500,6 @@ sieve_x_run_deg45(root_sieve_t *rs)
 						x->mp_lattice_size);
 				x->x_blocks = (line_max - line_min) /
 						x->dbl_lattice_size;
-
-				x->curr_score = xy->curr_score;
 
 				root_sieve_line(rs);
 
@@ -561,7 +568,7 @@ sieve_x_run_deg45(root_sieve_t *rs)
 
 		mpz_tdiv_r(x->resclass, x->resclass, x->mp_lattice_size);
 
-		x->curr_score = xy->curr_score + curr_xline->score;
+		x->curr_score = curr_xline->score;
 
 		root_sieve_line(rs);
 	}
