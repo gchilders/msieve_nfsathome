@@ -211,9 +211,9 @@ root_sieve_x(root_sieve_t *rs, xdata_t *xdata,
 		hit_t *hits = hitlist + i;
 
 		for (j = 0; j < sieve_size; j++) {
-			if (sieve[j] > max_sieve_val)
+			if (sieve[j] > max_sieve_val) {
 				max_sieve_val = sieve[j];
-					k = 0;
+			}
 		}
 		max_sieve_val = 0.7 * max_sieve_val;
 
