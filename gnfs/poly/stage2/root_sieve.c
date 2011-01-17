@@ -179,7 +179,7 @@ root_sieve_run_core(poly_stage2_t *data, double curr_norm,
 		if (data->degree == 6)
 			sieve_xyz_run_deg6(rs);
 		else
-			sieve_xy_run_deg45(rs);
+			sieve_xy_run_deg45(rs, data->degree);
 
 		if (bound == data->max_norm)
 			break;

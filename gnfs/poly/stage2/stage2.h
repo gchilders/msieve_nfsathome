@@ -254,7 +254,7 @@ void root_sieve_run(poly_stage2_t *data, double curr_norm,
 				double alpha_proj);
 
 void sieve_xyz_run_deg6(root_sieve_t *rs);
-void sieve_xy_run_deg45(root_sieve_t *rs);
+void sieve_xy_run_deg45(root_sieve_t *rs, uint32 degree);
 void sieve_xy_run_deg6(root_sieve_t *rs);
 void sieve_x_run_deg45(root_sieve_t *rs);
 void sieve_x_run_deg6(root_sieve_t *rs);
