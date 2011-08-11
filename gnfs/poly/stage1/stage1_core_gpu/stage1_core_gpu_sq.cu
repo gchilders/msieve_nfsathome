@@ -12,8 +12,8 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#include "cuda_intrinsics.h"
-#include "stage1_core_sq.h"
+#include "stage1_core_gpu_common.h"
+#include "stage1_core_gpu_sq.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,9 +37,9 @@ typedef struct {
 
 /*------------------------------------------------------------------------*/
 __global__ void
-sieve_kernel_48(p_soa_t *pbatch, 
+sieve_kernel_48(pbatch_soa_t *pbatch, 
 		uint32 num_p,
-		q_soa_t *qbatch,
+		qbatch_soa_t *qbatch,
 		uint32 num_q,
 		uint32 num_roots,
 		found_t *found_array)
@@ -135,9 +135,9 @@ sieve_kernel_48(p_soa_t *pbatch,
 
 /*------------------------------------------------------------------------*/
 __global__ void
-sieve_kernel_64(p_soa_t *pbatch, 
+sieve_kernel_64(pbatch_soa_t *pbatch, 
 		uint32 num_p,
-		q_soa_t *qbatch,
+		qbatch_soa_t *qbatch,
 		uint32 num_q,
 		uint32 num_roots,
 		found_t *found_array)
@@ -238,9 +238,9 @@ typedef struct {
 } sq_soa_shared_t;
 
 __global__ void
-trans_batch_sq(q_soa_t *qbatch,
+trans_batch_sq(qbatch_soa_t *qbatch,
 		uint32 num_q,
-		p_soa_t *sqbatch,
+		pbatch_soa_t *sqbatch,
 		uint32 num_sq,
 		float sieve_size)
 {

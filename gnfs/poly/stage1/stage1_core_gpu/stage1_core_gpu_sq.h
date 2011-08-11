@@ -12,11 +12,11 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#ifndef _STAGE1_CORE_SQ_H_
-#define _STAGE1_CORE_SQ_H_
+#ifndef _STAGE1_CORE_GPU_SQ_H_
+#define _STAGE1_CORE_GPU_SQ_H_
 
 #ifdef __CUDACC__
-#include "cuda_intrinsics.h"
+#include "../cuda_intrinsics.h"
 #endif
 
 #ifdef __cplusplus
@@ -24,17 +24,6 @@ extern "C" {
 #endif
 
 #define SPECIALQ_BATCH_SIZE 40
-
-/* structure indicating a collision */
-
-typedef struct {
-	uint32 p;
-	uint32 q;
-	uint32 k;
-	uint32 pad;
-	uint64 offset;
-	uint64 proot;
-} found_t;
 
 /* the outer loop needs parallel access to different p,
    so we store in SOA format. */
@@ -46,7 +35,7 @@ typedef struct {
 	uint64 start_root[P_SOA_BATCH_SIZE];
 	uint64 roots[SPECIALQ_BATCH_SIZE][P_SOA_BATCH_SIZE];
 	float lsize[SPECIALQ_BATCH_SIZE][P_SOA_BATCH_SIZE];
-} p_soa_t;
+} pbatch_soa_t;
 
 #define Q_SOA_BATCH_SIZE (3*30*384)
 
@@ -55,10 +44,16 @@ typedef struct {
 	uint64 start_root[Q_SOA_BATCH_SIZE];
 	uint64 roots[SPECIALQ_BATCH_SIZE+1][Q_SOA_BATCH_SIZE];
 	float lsize[SPECIALQ_BATCH_SIZE][Q_SOA_BATCH_SIZE];
-} q_soa_t;
+} qbatch_soa_t;
+
+#ifndef __CUDACC__
+uint32 sieve_lattice_gpu_sq_core(msieve_obj *obj, lattice_fb_t *L, 
+		sieve_fb_t *sieve_special_q,
+		uint32 special_q_min, uint32 special_q_max);
+#endif
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* !_STAGE1_CORE_SQ_H_ */
+#endif /* !_STAGE1_CORE_GPU_SQ_H_ */

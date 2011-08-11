@@ -106,6 +106,23 @@ modsub64(uint64 a, uint64 b, uint64 p)
 	return (uint64)r1 << 32 | r0;
 }
 
+/*------------------------------- GCD --------------------------------*/
+
+__device__  uint32
+gcd32(uint32 x, uint32 y) {
+	uint32 tmp;
+
+	if (y < x) {
+		tmp = x; x = y; y = tmp;
+	}
+
+	while (y > 0) {
+		x = x % y;
+		tmp = x; x = y; y = tmp;
+	}
+	return x;
+}
+
 /*-------------------------- Modular inverse -------------------------*/
 
 __device__ uint32 

@@ -12,7 +12,8 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#include "stage1_core_nosq.h"
+#include "stage1_core_gpu_common.h"
+#include "stage1_core_gpu_nosq.h"
 
 #ifdef __cplusplus
 extern "C" {

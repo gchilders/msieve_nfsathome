@@ -137,6 +137,7 @@ typedef struct {
 	gpu_info_t *gpu_info; 
 	CUmodule gpu_module_sq; 
 	CUmodule gpu_module_nosq; 
+	CUmodule gpu_module_sort;
 #endif
 
 	/* function to call when a collision is found */
@@ -318,9 +319,17 @@ typedef struct {
 	void *q_array; 
 	void *sq_array;
 
+	uint64 sieve_step;
+	uint32 num_roots;
+	uint32 num_entries;
+
+	CUfunction gpu_kernel[10];
+	uint32 threads_per_block[10];
+
 	CUdeviceptr gpu_p_array;
 	CUdeviceptr gpu_q_array;
 	CUdeviceptr gpu_found_array;
+	CUdeviceptr gpu_root_array;
 	void *found_array;
 	uint32 found_array_size;
 	void *p_marshall;
@@ -354,20 +363,30 @@ handle_collision(poly_search_t *poly, uint32 p1, uint32 p2,
 double sieve_lattice(msieve_obj *obj, poly_search_t *poly, 
 				double deadline);
 
-/* low-level routines */
+/* the GPU routines are divided into two main
+   versions, one designed to be effective for small
+   input numbers, and one which is effective only
+   for larger input numbers. The point at which we
+   switch from one version of the search to the
+   other is determined below */
+
+#define GPU_LARGE_SEARCH 160 /* digits */
 
 #ifdef HAVE_CUDA
-uint32 sieve_lattice_gpu_sq(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_special_q,
-		uint32 special_q_min, uint32 special_q_max);
 
-uint32 sieve_lattice_gpu_nosq(msieve_obj *obj, lattice_fb_t *L);
+/* GPU search routine for small inputs less than GPU_LARGE_SEARCH digits */
+
+void sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L);
+
+/* GPU search routine for large inputs greater than GPU_LARGE_SEARCH digits */
+
+void sieve_lattice_gpu_sort(msieve_obj *obj, lattice_fb_t *L);
 
 #else
 
-uint32 sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_special_q,
-		uint32 special_q_min, uint32 special_q_max);
+/* CPU search routine */
+
+void sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L);
 #endif
 
 #ifdef __cplusplus

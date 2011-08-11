@@ -14,7 +14,8 @@ $Id$
 
 #include <stage1.h>
 #include <cpu_intrinsics.h>
-#include <stage1_core_gpu/stage1_core_nosq.h>
+#include <stage1_core_gpu/stage1_core_gpu_common.h>
+#include <stage1_core_gpu/stage1_core_gpu_nosq.h>
 
 /*------------------------------------------------------------------------*/
 typedef struct {
@@ -529,7 +530,7 @@ sieve_nospecialq_64(msieve_obj *obj, lattice_fb_t *L,
 
 /*------------------------------------------------------------------------*/
 uint32
-sieve_lattice_gpu_nosq(msieve_obj *obj, lattice_fb_t *L)
+sieve_lattice_gpu_nosq_core(msieve_obj *obj, lattice_fb_t *L)
 {
 	uint32 quit;
 	uint32 large_p_min, large_p_max;

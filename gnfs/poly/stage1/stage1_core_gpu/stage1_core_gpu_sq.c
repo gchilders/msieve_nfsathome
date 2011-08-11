@@ -14,7 +14,8 @@ $Id$
 
 #include <stage1.h>
 #include <cpu_intrinsics.h>
-#include <stage1_core_gpu/stage1_core_sq.h>
+#include <stage1_core_gpu/stage1_core_gpu_common.h>
+#include <stage1_core_gpu/stage1_core_gpu_sq.h>
 
 /*------------------------------------------------------------------------*/
 typedef struct {
@@ -121,8 +122,8 @@ trans_batch_sq(p_soa_var_t *q_array, lattice_fb_t *L,
 {
 	uint32 i;
 
-	p_soa_t *sq_marshall;
-	q_soa_t *q_marshall;
+	pbatch_soa_t *sq_marshall;
+	qbatch_soa_t *q_marshall;
 	uint32 trans_size;
 	uint32 num_q_done;
 	p_soa_var_t *sq_array = (p_soa_var_t *)L->sq_array;
@@ -130,8 +131,8 @@ trans_batch_sq(p_soa_var_t *q_array, lattice_fb_t *L,
 	uint32 num_q_offset;
 	void *gpu_ptr;
 
-	sq_marshall = (p_soa_t *)L->p_marshall;
-	q_marshall = (q_soa_t *)L->q_marshall;
+	sq_marshall = (pbatch_soa_t *)L->p_marshall;
+	q_marshall = (qbatch_soa_t *)L->q_marshall;
 	num_q_done = 0;
 
 	trans_size = threads_per_block * gpu_info->num_compute_units;
@@ -172,7 +173,7 @@ trans_batch_sq(p_soa_var_t *q_array, lattice_fb_t *L,
 		sq_array->num_p * sizeof(uint64));
 
 	CUDA_TRY(cuMemcpyHtoD(L->gpu_p_array, sq_marshall,
-			sizeof(p_soa_t)))
+			sizeof(pbatch_soa_t)))
 
 	while (num_q_done < q_array->num_p) {
 
@@ -212,7 +213,7 @@ trans_batch_sq(p_soa_var_t *q_array, lattice_fb_t *L,
 		CUDA_TRY(cuEventSynchronize(L->end))
 
 		CUDA_TRY(cuMemcpyDtoH(q_marshall, L->gpu_q_array,
-				sizeof(q_soa_t)))
+				sizeof(qbatch_soa_t)))
 
 		for (i = 0; i < sq_array->num_p; i++) {
 			memcpy(q_array->lattice_size[i] + num_q_done,
@@ -241,8 +242,8 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 {
 	uint32 i;
 
-	p_soa_t *p_marshall;
-	q_soa_t *q_marshall;
+	pbatch_soa_t *p_marshall;
+	qbatch_soa_t *q_marshall;
 	found_t *found_array;
 	uint32 found_array_size;
 	uint32 num_q_done;
@@ -255,8 +256,8 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 	uint32 num_q_offset;
 	void *gpu_ptr;
 
-	p_marshall = (p_soa_t *)L->p_marshall;
-	q_marshall = (q_soa_t *)L->q_marshall;
+	p_marshall = (pbatch_soa_t *)L->p_marshall;
+	q_marshall = (qbatch_soa_t *)L->q_marshall;
 	found_array = (found_t *)L->found_array;
 	found_array_size = L->found_array_size;
 	num_q_done = 0;
@@ -351,7 +352,7 @@ sieve_lattice_batch(msieve_obj *obj, lattice_fb_t *L,
 			}
 
 			CUDA_TRY(cuMemcpyHtoD(L->gpu_p_array, p_marshall,
-					sizeof(p_soa_t)))
+					sizeof(pbatch_soa_t)))
 
 			CUDA_TRY(cuParamSeti(gpu_kernel, num_p_offset, 
 						curr_num_p))
@@ -429,16 +430,16 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	CUDA_TRY(cuModuleGetFunction(&gpu_kernel_trans, 
 			gpu_module, "trans_batch_sq"))
 
-	L->p_marshall = (p_soa_t *)xmalloc(sizeof(p_soa_t));
-	L->q_marshall = (q_soa_t *)xmalloc(sizeof(q_soa_t));
+	L->p_marshall = (pbatch_soa_t *)xmalloc(sizeof(pbatch_soa_t));
+	L->q_marshall = (qbatch_soa_t *)xmalloc(sizeof(qbatch_soa_t));
 	p_array = L->p_array = (p_soa_var_t *)xmalloc(
 					sizeof(p_soa_var_t));
 	q_array = L->q_array = (p_soa_var_t *)xmalloc(
 					sizeof(p_soa_var_t));
 	sq_array = L->sq_array = (p_soa_var_t *)xmalloc(sizeof(p_soa_var_t));
 
-	CUDA_TRY(cuMemAlloc(&L->gpu_p_array, sizeof(p_soa_t)))
-	CUDA_TRY(cuMemAlloc(&L->gpu_q_array, sizeof(q_soa_t)))
+	CUDA_TRY(cuMemAlloc(&L->gpu_p_array, sizeof(pbatch_soa_t)))
+	CUDA_TRY(cuMemAlloc(&L->gpu_q_array, sizeof(qbatch_soa_t)))
 
 	CUDA_TRY(cuFuncGetAttribute((int *)&threads_per_block_sieve, 
 			CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
@@ -552,7 +553,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 
 /*------------------------------------------------------------------------*/
 uint32
-sieve_lattice_gpu_sq(msieve_obj *obj, lattice_fb_t *L, 
+sieve_lattice_gpu_sq_core(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_special_q,
 		uint32 special_q_min, uint32 special_q_max)
 {

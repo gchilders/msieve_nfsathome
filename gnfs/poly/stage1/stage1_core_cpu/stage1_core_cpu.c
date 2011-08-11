@@ -14,6 +14,7 @@ $Id$
 
 #include <stage1.h>
 #include <cpu_intrinsics.h>
+#include <stage1_core_cpu/stage1_core_cpu.h>
 
 /* CPU collision search; this code looks for self-collisions
    among arithmetic progressions, by finding k1 and k2 such that
@@ -559,7 +560,7 @@ finished:
 
 /*------------------------------------------------------------------------*/
 uint32 
-sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L, 
+sieve_lattice_cpu_core(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_special_q,
 		uint32 special_q_min, uint32 special_q_max)
 {
@@ -572,7 +573,7 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L,
 	double p_size_max = L->poly->p_size_max;
 
 	p_size_max /= special_q_max;
-	if (sqrt(p_size_max * P_SCALE) > (uint32)1 << 27) {
+	if (sqrt(p_size_max * P_SCALE) > MAX_OTHER) {
 		printf("error: invalid parameters for rational coefficient "
 			"in sieve_lattice_cpu()\n");
 		return 0;
