@@ -400,5 +400,5 @@ mpqs/sieve_core_k8_64_64k.qo: mpqs/sieve_core.c $(COMMON_HDR) $(QS_HDR)
 VPATH = gnfs/poly/stage1/stage1_core_gpu \
 	gnfs/poly/stage1/stage1_core_gpu_sort
 
-%.ptx: %.cu %.h
+%.ptx: %.cu $(NFS_GPU_HDR)
 	nvcc $(NVCCFLAGS) -ptx -o $@ $<
