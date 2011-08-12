@@ -194,6 +194,16 @@ NFS_HDR = \
 	gnfs/sqrt/sqrt.h \
 	gnfs/gnfs.h
 
+NFS_GPU_HDR = \
+	gnfs/poly/stage1/cuda_intrinsics.h \
+	gnfs/poly/stage1/stage1_core_gpu/stage1_core_gpu_common.h \
+	gnfs/poly/stage1/stage1_core_gpu/stage1_core_gpu_nosq.h \
+	gnfs/poly/stage1/stage1_core_gpu/stage1_core_gpu_sq.h \
+	gnfs/poly/stage1/stage1_core_gpu_sort/stage1_core_gpu_sort.h
+
+NFS_NOGPU_HDR = \
+	gnfs/poly/stage1/stage1_core_cpu/stage1_core_cpu.h
+
 NFS_SRCS = \
 	gnfs/poly/poly.c \
 	gnfs/poly/poly_skew.c \
@@ -237,8 +247,6 @@ NFS_GPU_SRCS = \
 	gnfs/poly/stage1/stage1_core_gpu_sort/stage1_sieve_gpu_sort.c
 
 NFS_GPU_OBJS = $(NFS_GPU_SRCS:.c=.no)
-
-NFS_NOGPU_HDR =
 
 NFS_NOGPU_SRCS = \
 	gnfs/poly/stage1/stage1_core_cpu/stage1_core_cpu.c \
@@ -392,5 +400,5 @@ mpqs/sieve_core_k8_64_64k.qo: mpqs/sieve_core.c $(COMMON_HDR) $(QS_HDR)
 VPATH = gnfs/poly/stage1/stage1_core_gpu \
 	gnfs/poly/stage1/stage1_core_gpu_sort
 
-%.ptx: %.cu
+%.ptx: %.cu %.h
 	nvcc $(NVCCFLAGS) -ptx -o $@ $<
