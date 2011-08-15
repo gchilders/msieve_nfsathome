@@ -410,7 +410,7 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 					(int)j_offset, j))
 
 			num_blocks = (L->num_entries / 2 - 1) /
-					L->threads_per_block[GPU_MERGE] + 1;
+					L->threads_per_block[GPU_MERGE1] + 1;
 
 			for (k = j; k > L->threads_per_block[GPU_MERGE];
 								k /= 2) {
@@ -423,7 +423,7 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 			}
 
 			num_blocks = (L->num_entries / 2 - 1) /
-					L->threads_per_block[GPU_MERGE1] + 1;
+					L->threads_per_block[GPU_MERGE] + 1;
 
 			CUDA_TRY(cuLaunchGrid(L->gpu_kernel[GPU_MERGE],
 					num_blocks, 1))
