@@ -632,6 +632,8 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
 				L->gpu_kernel[GPU_MERGE]))
 	i = MIN(i, 2 * L->threads_per_block[GPU_SORT]);
+	i = MIN(i, (L->poly->gpu_info->shared_mem_size - 4096) /
+			SHARED_ELEM_SIZE / 2);
 	L->threads_per_block[GPU_MERGE] = 1 << (int)(log(i) / M_LN2);
 	CUDA_TRY(cuFuncSetBlockShape(L->gpu_kernel[GPU_MERGE],
 				L->threads_per_block[GPU_MERGE], 1, 1))
