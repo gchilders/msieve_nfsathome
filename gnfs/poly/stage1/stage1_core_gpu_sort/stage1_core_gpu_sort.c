@@ -230,6 +230,7 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 	uint64 special_q2 = (uint64)special_q * special_q;
 	uint64 sieve_size;
 	uint64 sieve_start = 0;
+	uint64 sieve_end;
 	float elapsed_ms;
 	void *gpu_ptr;
 	found_t *found_array = (found_t *)L->found_array;
@@ -316,9 +317,14 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 	CUDA_TRY(cuMemsetD8(L->gpu_found_array, 0,
 		L->found_array_size * sizeof(found_t)))
 
-	while (sieve_start < sieve_size) {
-		uint64 sieve_end = sieve_start + MIN(L->sieve_step,
-						sieve_size - sieve_start);
+	while (1) {
+
+		if (sieve_size - sieve_start >= L->sieve_step)
+			sieve_end = sieve_start + L->sieve_step;
+		else if (sieve_start == 0)
+			sieve_end = sieve_size;
+		else
+			break;
 
 		for (i = 0; i < p_array->num_arrays; i++) {
 			p_soa_var_t *soa = p_array->soa + i;
