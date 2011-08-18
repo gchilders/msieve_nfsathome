@@ -29,7 +29,7 @@ sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 	uint64 p2, p2_r, q2, tmp, inv;
 	__shared__ uint64 shared_qroots[BATCH_SPECIALQ_MAX];
 
-	for (j = threadIdx.x; j < num_q_roots; j += blockDim.x)
+	if (threadIdx.x < num_q_roots)
 		shared_qroots[threadIdx.x] = qroots[threadIdx.x];
 
 	__syncthreads();
