@@ -320,11 +320,10 @@ typedef struct {
 	void *sq_array;
 
 	uint64 sieve_step;
-	uint32 num_roots;
 	uint32 num_entries;
 
-	CUfunction gpu_kernel[10];
-	uint32 threads_per_block[10];
+	CUfunction *gpu_kernel;
+	uint32 *threads_per_block;
 
 	CUdeviceptr gpu_p_array;
 	CUdeviceptr gpu_q_array;
