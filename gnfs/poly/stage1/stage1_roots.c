@@ -38,9 +38,18 @@ lift_root_32(uint32 n, uint32 r, uint32 old_power,
 void
 sieve_fb_free(sieve_fb_t *s)
 {
+	uint32 i, j;
+	aprog_list_t *list = &s->aprog_data;
+
 	free_prime_sieve(&s->p_prime);
 
-	free(s->aprog_data.aprogs);
+	for (i = 0; i < list->num_aprogs; i++) {
+		aprog_t *a = list->aprogs + i;
+
+		free(a->powers);
+	}
+
+	free(list->aprogs);
 
 	mpz_clear(s->p);
 	mpz_clear(s->p2);
@@ -116,27 +125,36 @@ sieve_add_aprog(sieve_fb_t *s, poly_search_t *poly, uint32 p,
 
 	list->num_aprogs++;
 	a->num_roots = num_roots;
+
+	power = p;
+	power_limit = (uint32)(-1) / p;
+	for (i = 1; power < power_limit; i++)
+		power *= p;
+
+	a->max_power = i;
+	a->powers = (aprog_power_t *)xmalloc(a->max_power *
+					sizeof(aprog_power_t));
+	a->powers[0].power = p;
+
 	for (i = 0; i < num_roots; i++)
-		a->roots[0][i] = roots[i];
+		a->powers[0].roots[i] = roots[i];
 
 	/* add powers of p as well */
 
 	power = p;
-	a->power[0] = power;
-	power_limit = (uint32)(-1) / p;
-	for (i = 1; i < MAX_POWER && power < power_limit; i++) {
+	for (i = 1; i < a->max_power; i++) {
 
 		power *= p;
-		a->power[i] = power;
+		a->powers[i].power = power;
 
 		nmodp = mpz_tdiv_ui(poly->trans_N, (mp_limb_t)power);
 
 		for (j = 0; j < num_roots; j++)
-			a->roots[i][j] = lift_root_32(nmodp, 
-						a->roots[i - 1][j],
-						a->power[i - 1], p, degree);
+			a->powers[i].roots[j] = lift_root_32(nmodp,
+						a->powers[i - 1].roots[j],
+						a->powers[i - 1].power,
+						p, degree);
 	}
-	a->max_power = i;
 }
 
 /*------------------------------------------------------------------------*/
@@ -146,8 +164,9 @@ sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 		uint32 fb_roots_min, uint32 fb_roots_max,
 		uint32 fb_only)
 {
-	uint32 i, p;
+	uint32 p;
 	aprog_list_t *aprog = &s->aprog_data;
+	prime_sieve_t prime_sieve;
 
 	memset(s, 0, sizeof(sieve_fb_t));
 	s->degree = poly->degree;
@@ -168,16 +187,18 @@ sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 	aprog->aprogs = (aprog_t *)xmalloc(aprog->num_aprogs_alloc *
 						sizeof(aprog_t));
 
-	for (i = p = 0; i < PRECOMPUTED_NUM_PRIMES; i++) {
-		p += prime_delta[i];
+	init_prime_sieve(&prime_sieve, factor_min, factor_max);
 
-		if (p < factor_min)
-			continue;
-		else if (p > factor_max)
+	while (1) {
+		p = get_next_prime(&prime_sieve);
+
+		if (p > factor_max)
 			break;
 
 		sieve_add_aprog(s, poly, p, fb_roots_min, fb_roots_max);
 	}
+
+	free_prime_sieve(&prime_sieve);
 }
 
 /*------------------------------------------------------------------------*/
@@ -393,10 +414,10 @@ get_enum_roots(sieve_fb_t *s)
 
 		/* p_i may be a power */
 
-		p_i[i] = a->power[curr_power[i]];
+		p_i[i] = a->powers[curr_power[i]].power;
 		num_roots[i] = a->num_roots;
 		for (j = 0; j < num_roots[i]; j++)
-			roots[i][j] = a->roots[curr_power[i]][j];
+			roots[i][j] = a->powers[curr_power[i]].roots[j];
 	}
 
 	return combine_roots(s, p, num_factors, p_i, num_roots, roots);

@@ -210,7 +210,7 @@ stage1_bounds_update(msieve_obj *obj, poly_search_t *poly)
 
 	poly->special_q_min = (uint32)special_q_min;
 	poly->special_q_max = (uint32)special_q_max;
-	poly->special_q_fb_max = MIN((uint32)special_q_max, 100000);
+	poly->special_q_fb_max = MIN((uint32)special_q_max, 250000);
 
 	poly->coeff_max = coeff_max;
 	poly->p_size_max = p_size_max;
@@ -249,7 +249,7 @@ sieve_lattice_gpu_sort(msieve_obj *obj, lattice_fb_t *L)
 	sieve_fb_init(&sieve_special_q, poly,
 			5, poly->special_q_fb_max,
 			1, poly->degree,
-			0);
+			1);
 
 	if (special_q_min == 1) { /* handle trivial case */
 

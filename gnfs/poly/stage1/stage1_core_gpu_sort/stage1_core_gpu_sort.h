@@ -36,7 +36,7 @@ typedef struct {
 	uint64 qroot;
 } found_t;
 
-#define BATCH_SPECIALQ_MAX 16
+#define BATCH_SPECIALQ_MAX 32
 
 #define NUM_GPU_FUNCTIONS 6
 #define GPU_TRANS 0

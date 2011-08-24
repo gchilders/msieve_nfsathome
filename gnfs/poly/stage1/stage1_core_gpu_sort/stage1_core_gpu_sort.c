@@ -771,7 +771,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 				specialq.q, curr_num_roots,
 				specialq.roots + i);
 
-			if (++pass_cnt % 8 == 0)
+			if (++pass_cnt % 16 == 0)
 				check_found_array(L);
 
 			if (quit)

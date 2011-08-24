@@ -180,11 +180,15 @@ typedef struct {
 
 #define MAX_P_FACTORS 7
 #define MAX_ROOTS 128
-#define MAX_POWER 4
 
 #define P_SEARCH_DONE ((uint32)(-2))
 
 /* structure for building arithmetic progressions */
+
+typedef struct {
+	uint32 power;
+	uint32 roots[MAX_POLYSELECT_DEGREE];
+} aprog_power_t;
 
 typedef struct {
 	uint32 p;
@@ -192,14 +196,11 @@ typedef struct {
 	/* number of 'degree-th roots' of N (mod p) */
 	uint32 num_roots;
 
-	/* largest e <= MAX_POWER for which p^e < 2^32 */
+	/* largest e for which p^e < 2^32 */
 	uint32 max_power;
 
-	/* power p^e_j for 1 <= j <= max_power */
-	uint32 power[MAX_POWER];
-
-	/* 'degree-th roots' of N (mod p^e_j) */
-	uint32 roots[MAX_POWER][MAX_POLYSELECT_DEGREE];
+	/* power p^e_j and its 'degree-th roots' of N (mod p^e_j) */
+	aprog_power_t *powers;
 
 	/* maximum product of other p which may be
 	   combined with this p */
