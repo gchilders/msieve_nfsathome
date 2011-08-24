@@ -321,6 +321,7 @@ typedef struct {
 
 	uint64 sieve_step;
 	uint32 num_entries;
+	uint32 pass_cnt;
 
 	CUfunction *gpu_kernel;
 	uint32 *threads_per_block;

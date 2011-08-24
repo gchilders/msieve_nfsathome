@@ -251,10 +251,17 @@ sieve_kernel_merge1(uint32 *p_array, uint64 *roots,
 /*------------------------------------------------------------------------*/
 __global__ void
 sieve_kernel_final(uint32 *p_array, uint64 *roots, uint32 num_entries,
-			uint32 num_q_roots, found_t *found_array)
+			uint32 q, uint32 num_q_roots, uint64 *qroots,
+			found_t *found_array)
 {
 	uint32 i, my_threadid, num_threads, p_1, p_2;
 	uint64 root_1, root_2;
+	__shared__ uint64 shared_qroots[BATCH_SPECIALQ_MAX];
+
+	if (threadIdx.x < num_q_roots)
+		shared_qroots[threadIdx.x] = qroots[threadIdx.x];
+
+	__syncthreads();
 
 	i = my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
 	num_threads = gridDim.x * blockDim.x;
@@ -272,9 +279,10 @@ sieve_kernel_final(uint32 *p_array, uint64 *roots, uint32 num_entries,
 
 				found_array[my_threadid].p1 = p_1;
 				found_array[my_threadid].p2 = p_2;
-				found_array[my_threadid].root = root_1;
-				found_array[my_threadid].which_special_q =
-					i / num_entries;
+				found_array[my_threadid].proot = root_1;
+				found_array[my_threadid].q = q;
+				found_array[my_threadid].qroot =
+					shared_qroots[i / num_entries];
 			}
 		}
 

@@ -30,10 +30,10 @@ extern "C" {
 typedef struct {
 	uint32 p1;
 	uint32 p2;
+	uint32 q;
 	uint32 pad;
-	uint32 which_special_q;
-	uint64 root;
-	uint64 pad2;
+	uint64 proot;
+	uint64 qroot;
 } found_t;
 
 #define BATCH_SPECIALQ_MAX 16

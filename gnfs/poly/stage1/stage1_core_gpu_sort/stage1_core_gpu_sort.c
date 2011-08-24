@@ -218,6 +218,37 @@ store_p_soa(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 }
 
 /*------------------------------------------------------------------------*/
+static void
+check_found_array(lattice_fb_t *L)
+{
+	uint32 i;
+	found_t *found_array = (found_t *)L->found_array;
+
+	CUDA_TRY(cuMemcpyDtoH(found_array, L->gpu_found_array,
+			L->found_array_size * sizeof(found_t)))
+	CUDA_TRY(cuMemsetD8(L->gpu_found_array, 0,
+		L->found_array_size * sizeof(found_t)))
+
+	for (i = 0; i < L->found_array_size; i++) {
+		found_t *found = found_array + i;
+
+		if (found->p1 != 0) {
+			uint128 res;
+
+			res.w[0] = (uint32)found->proot;
+			res.w[1] = (uint32)(found->proot >> 32);
+			res.w[2] = 0;
+			res.w[3] = 0;
+
+			handle_collision(L->poly, found->p1,
+				found->p2, found->q,
+				found->qroot,
+				res);
+		}
+	}
+}
+
+/*------------------------------------------------------------------------*/
 static uint32
 handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 		uint32 special_q, uint32 num_q_roots, uint64 *q_roots)
@@ -233,7 +264,6 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 	uint64 sieve_end;
 	float elapsed_ms;
 	void *gpu_ptr;
-	found_t *found_array = (found_t *)L->found_array;
 
 	CUDA_TRY(cuEventRecord(L->start, 0))
 
@@ -245,10 +275,8 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 
 	sieve_size = 2 * L->poly->sieve_size / special_q2;
 
-	if (special_q > 1) {
-		CUDA_TRY(cuMemcpyHtoD(L->gpu_q_array, q_roots,
-				sizeof(uint64) * num_q_roots))
-	}
+	CUDA_TRY(cuMemcpyHtoD(L->gpu_q_array, q_roots,
+			sizeof(uint64) * num_q_roots))
 
 	for (i = 0; i < p_array->num_arrays; i++) {
 		p_soa_var_t *soa = p_array->soa + i;
@@ -313,9 +341,6 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 					num_blocks, 1, soa->stream))
 		}
 	}
-
-	CUDA_TRY(cuMemsetD8(L->gpu_found_array, 0,
-		L->found_array_size * sizeof(found_t)))
 
 	while (1) {
 
@@ -485,8 +510,19 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 
 		CUDA_ALIGN_PARAM(j, __alignof(uint32));
 		CUDA_TRY(cuParamSeti(L->gpu_kernel[GPU_FINAL], (int)j,
+				special_q))
+		j += sizeof(uint32);
+
+		CUDA_ALIGN_PARAM(j, __alignof(uint32));
+		CUDA_TRY(cuParamSeti(L->gpu_kernel[GPU_FINAL], (int)j,
 				num_q_roots))
 		j += sizeof(uint32);
+
+		gpu_ptr = (void *)(size_t)L->gpu_q_array;
+		CUDA_ALIGN_PARAM(j, __alignof(gpu_ptr));
+		CUDA_TRY(cuParamSetv(L->gpu_kernel[GPU_FINAL], (int)j,
+				&gpu_ptr, sizeof(gpu_ptr)))
+		j += sizeof(gpu_ptr);
 
 		gpu_ptr = (void *)(size_t)L->gpu_found_array;
 		CUDA_ALIGN_PARAM(j, __alignof(gpu_ptr));
@@ -511,25 +547,8 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 		}
 	}
 
-	CUDA_TRY(cuMemcpyDtoH(found_array, L->gpu_found_array,
-			L->found_array_size * sizeof(found_t)))
-
-	for (i = 0; i < L->found_array_size; i++) {
-		found_t *found = found_array + i;
-
-		if (found->p1 != 0) {
-			uint128 res;
-
-			res.w[0] = (uint32)found->root;
-			res.w[1] = (uint32)(found->root >> 32);
-			res.w[2] = 0;
-			res.w[3] = 0;
-
-			handle_collision(L->poly, found->p1,
-				found->p2, special_q,
-				q_roots[found->which_special_q], res);
-		}
-	}
+	if (++L->pass_cnt % 8 == 0)
+		check_found_array(L);
 
 	CUDA_TRY(cuEventRecord(L->end, 0))
 	CUDA_TRY(cuEventSynchronize(L->end))
@@ -577,6 +596,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	L->p_array = &p_array;
 	p_soa_array_init(&p_array, degree);
 	L->sieve_step = (uint64)p_min * p_min;
+	L->pass_cnt = 0;
 
 	/* build all the arithmetic progressions */
 
@@ -706,12 +726,18 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	CUDA_TRY(cuMemsetD32(L->gpu_root_array, (uint32)(-1),
 			2 * BATCH_SPECIALQ_MAX * L->num_entries))
 
+	CUDA_TRY(cuMemAlloc(&L->gpu_q_array,
+			sizeof(uint64) * BATCH_SPECIALQ_MAX))
+
 	L->found_array_size = L->threads_per_block[GPU_FINAL] *
 				L->poly->gpu_info->num_compute_units;
 	CUDA_TRY(cuMemAlloc(&L->gpu_found_array, sizeof(found_t) *
 			L->found_array_size))
 	L->found_array = (found_t *)xmalloc(sizeof(found_t) *
 			L->found_array_size);
+
+	CUDA_TRY(cuMemsetD8(L->gpu_found_array, 0,
+		L->found_array_size * sizeof(found_t)))
 
 	num_roots = 0;
 	for (i = 0; i < p_array.num_arrays; i++) {
@@ -727,13 +753,12 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	}
 
 	if (special_q_min == 1) {
-		quit = handle_special_q(obj, L, 1, 1, NULL);
+		uint64 tmp_qroot = 0;
+
+		quit = handle_special_q(obj, L, 1, 1, &tmp_qroot);
 		if (quit || special_q_max == 1)
 			goto finished;
 	}
-
-	CUDA_TRY(cuMemAlloc(&L->gpu_q_array,
-			sizeof(uint64) * BATCH_SPECIALQ_MAX))
 
 	sieve_fb_reset(sieve_special_q, special_q_min, special_q_max, 
 			degree, MAX_ROOTS);
@@ -762,6 +787,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	}
 
 finished:
+	check_found_array(L);
 	CUDA_TRY(cuMemFree(L->gpu_p_array))
 	CUDA_TRY(cuMemFree(L->gpu_q_array))
 	CUDA_TRY(cuMemFree(L->gpu_root_array))
