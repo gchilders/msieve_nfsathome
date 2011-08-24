@@ -547,9 +547,6 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 		}
 	}
 
-	if (++L->pass_cnt % 8 == 0)
-		check_found_array(L);
-
 	CUDA_TRY(cuEventRecord(L->end, 0))
 	CUDA_TRY(cuEventSynchronize(L->end))
 	CUDA_TRY(cuEventElapsedTime(&elapsed_ms, L->start, L->end))
@@ -590,13 +587,13 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	p_soa_array_t p_array;
 	uint32 degree = L->poly->degree;
 	uint32 num_p, num_roots;
+	uint32 pass_cnt = 0;
 	double cpu_start_time = get_cpu_time();
 	CUmodule gpu_module = L->poly->gpu_module_sort;
 
 	L->p_array = &p_array;
 	p_soa_array_init(&p_array, degree);
 	L->sieve_step = (uint64)p_min * p_min;
-	L->pass_cnt = 0;
 
 	/* build all the arithmetic progressions */
 
@@ -773,6 +770,9 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 			quit = handle_special_q(obj, L,
 				specialq.q, curr_num_roots,
 				specialq.roots + i);
+
+			if (++pass_cnt % 8 == 0)
+				check_found_array(L);
 
 			if (quit)
 				goto finished;
