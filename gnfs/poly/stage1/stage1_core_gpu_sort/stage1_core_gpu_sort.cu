@@ -115,7 +115,7 @@ sieve_kernel_step(uint32 *p_array, uint32 num_p, uint64 *roots,
 
 /*------------------------------------------------------------------------*/
 __global__ void
-sieve_kernel_sort(uint32 *p_array, uint64 *roots, uint32 num)
+sieve_kernel_sort(uint32 *p_array, uint64 *roots)
 {
 	uint32 my_threadid, offset, j, k, u, dir, tmp;
 	extern __shared__ char shared_cache[];
@@ -124,7 +124,8 @@ sieve_kernel_sort(uint32 *p_array, uint64 *roots, uint32 num)
 	uint64 root_1, root_2;
 
 	my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
-	offset = my_threadid + blockIdx.x * blockDim.x;
+	offset = 2 * (blockIdx.y * gridDim.x + blockIdx.x) * blockDim.x +
+							threadIdx.x;
 
 	p_cache = (uint32 *)shared_cache;
 	root_cache = (uint64 *)(p_cache + blockDim.x * 2);
@@ -139,7 +140,7 @@ sieve_kernel_sort(uint32 *p_array, uint64 *roots, uint32 num)
 
 	for (j = 1; j <= blockDim.x; j *= 2) {
 
-		dir = !!(my_threadid & (num - 1) & j);
+		dir = !!(my_threadid & j);
 		for (k = j; k; k /= 2) {
 
 			u = (threadIdx.x & ~(k - 1)) * 2 +
@@ -171,8 +172,7 @@ sieve_kernel_sort(uint32 *p_array, uint64 *roots, uint32 num)
 
 /*------------------------------------------------------------------------*/
 __global__ void
-sieve_kernel_merge(uint32 *p_array, uint64 *roots,
-			uint32 num, uint32 j)
+sieve_kernel_merge(uint32 *p_array, uint64 *roots, uint32 j)
 {
 	uint32 my_threadid, offset, k, u, dir, tmp;
 	extern __shared__ char shared_cache[];
@@ -181,7 +181,8 @@ sieve_kernel_merge(uint32 *p_array, uint64 *roots,
 	uint64 root_1, root_2;
 
 	my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
-	offset = my_threadid + blockIdx.x * blockDim.x;
+	offset = 2 * (blockIdx.y * gridDim.x + blockIdx.x) * blockDim.x +
+							threadIdx.x;
 
 	p_cache = (uint32 *)shared_cache;
 	root_cache = (uint64 *)(p_cache + blockDim.x * 2);
@@ -194,7 +195,7 @@ sieve_kernel_merge(uint32 *p_array, uint64 *roots,
 
 	__syncthreads();
 
-	dir = !!(my_threadid & (num - 1)  & j);
+	dir = !!(my_threadid & j);
 	for (k = blockDim.x; k; k /= 2) {
 
 		u = (threadIdx.x & ~(k - 1)) * 2 +
@@ -225,19 +226,20 @@ sieve_kernel_merge(uint32 *p_array, uint64 *roots,
 
 /*------------------------------------------------------------------------*/
 __global__ void
-sieve_kernel_merge1(uint32 *p_array, uint64 *roots,
-			uint32 num, uint32 j, uint32 k)
+sieve_kernel_merge1(uint32 *p_array, uint64 *roots, uint32 j, uint32 k)
 {
 	uint32 my_threadid, offset, tmp;
 	uint64 root_1, root_2;
 
 	my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
-	offset = (my_threadid & ~(k - 1)) * 2 + (my_threadid & (k - 1));
+	offset = (blockIdx.y * gridDim.x + blockIdx.x) * blockDim.x +
+							threadIdx.x;
+	offset = (offset & ~(k - 1)) * 2 + (offset & (k - 1));
 
 	root_1 = roots[offset];
 	root_2 = roots[offset + k];
 
-	if ((!!(my_threadid & (num - 1)  & j)) != (root_1 > root_2)) {
+	if ((!!(my_threadid & j)) != (root_1 > root_2)) {
 
 		tmp = p_array[offset];
 		p_array[offset] = p_array[offset + k];

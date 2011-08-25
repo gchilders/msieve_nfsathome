@@ -434,15 +434,6 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 				&gpu_ptr, sizeof(gpu_ptr)))
 		j += sizeof(gpu_ptr);
 
-		CUDA_ALIGN_PARAM(j, __alignof(uint32));
-		CUDA_TRY(cuParamSeti(L->gpu_kernel[GPU_SORT], (int)j,
-				(int)L->num_entries / 2))
-		CUDA_TRY(cuParamSeti(L->gpu_kernel[GPU_MERGE], (int)j,
-				(int)L->num_entries / 2))
-		CUDA_TRY(cuParamSeti(L->gpu_kernel[GPU_MERGE1], (int)j,
-				(int)L->num_entries / 2))
-		j += sizeof(uint32);
-
 		CUDA_TRY(cuParamSetSize(L->gpu_kernel[GPU_SORT], j))
 
 		CUDA_ALIGN_PARAM(j, __alignof(uint32));
@@ -457,10 +448,11 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 
 		CUDA_TRY(cuParamSetSize(L->gpu_kernel[GPU_MERGE1], j))
 
-		num_blocks = (L->num_entries * num_q_roots / 2 - 1) /
+		num_blocks = (L->num_entries / 2 - 1) /
 				L->threads_per_block[GPU_SORT] + 1;
 
-		CUDA_TRY(cuLaunchGrid(L->gpu_kernel[GPU_SORT], num_blocks, 1))
+		CUDA_TRY(cuLaunchGrid(L->gpu_kernel[GPU_SORT],
+				num_blocks, num_q_roots))
 
 		j = 2 * L->threads_per_block[GPU_SORT];
 		for (; j < L->num_entries; j *= 2) {
@@ -470,7 +462,7 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 			CUDA_TRY(cuParamSeti(L->gpu_kernel[GPU_MERGE1],
 					(int)j_offset, j))
 
-			num_blocks = (L->num_entries * num_q_roots / 2 - 1) /
+			num_blocks = (L->num_entries / 2 - 1) /
 					L->threads_per_block[GPU_MERGE1] + 1;
 
 			for (k = j; k > L->threads_per_block[GPU_MERGE];
@@ -480,14 +472,14 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 						(int)k_offset, k))
 
 				CUDA_TRY(cuLaunchGrid(L->gpu_kernel[GPU_MERGE1],
-						num_blocks, 1))
+						num_blocks, num_q_roots))
 			}
 
-			num_blocks = (L->num_entries * num_q_roots / 2 - 1) /
+			num_blocks = (L->num_entries / 2 - 1) /
 					L->threads_per_block[GPU_MERGE] + 1;
 
 			CUDA_TRY(cuLaunchGrid(L->gpu_kernel[GPU_MERGE],
-					num_blocks, 1))
+					num_blocks, num_q_roots))
 		}
 
 		j = 0;
