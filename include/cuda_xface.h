@@ -34,7 +34,7 @@ typedef struct {
 	int32 num_compute_units;
 	int32 constant_mem_size;
 	int32 shared_mem_size;
-	uint32 global_mem_size;
+	size_t global_mem_size;
 	int32 registers_per_block;
 	int32 max_threads_per_block;
 	int32 can_overlap;

@@ -95,6 +95,7 @@ gpu_init(gpu_config_t *config)
 			info->max_grid_size[j] = prop.maxGridSize[j];
 		}
 		
+		info->global_mem_size = 0;
 		CUDA_TRY(cuDeviceTotalMem(
 			&info->global_mem_size, device))
 
