@@ -26,6 +26,7 @@ extern "C"
 
 typedef unsigned int uint32;
 typedef unsigned long long uint64;
+typedef long long int64;
 
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 

@@ -18,13 +18,68 @@ $Id$
 
 /*------------------------------------------------------------------------*/
 static void
+stage1_bounds_update(poly_search_t *poly)
+{
+	/* determine the parametrs for the collision search,
+	   given one leading algebraic coefficient a_d */
+
+	uint32 degree = poly->degree;
+	double N = mpz_get_d(poly->N);
+	double high_coeff = mpz_get_d(poly->high_coeff);
+	double m0 = pow(N / high_coeff, 1./degree);
+	double skewness_min, coeff_max;
+
+	/* we don't know the optimal skewness for this polynomial
+	   but at least can bound the skewness. The value of the
+	   third-highest coefficient is from Kleinjung's 2006
+	   poly selection algorithm as published in Math. Comp. */
+
+	switch (degree) {
+	case 4:
+		skewness_min = sqrt(m0 / poly->norm_max);
+		coeff_max = poly->norm_max;
+		break;
+
+	case 5:
+		skewness_min = pow(m0 / poly->norm_max, 2./3.);
+		coeff_max = poly->norm_max / sqrt(skewness_min);
+		break;
+
+	case 6:
+		skewness_min = sqrt(m0 / poly->norm_max);
+		coeff_max = poly->norm_max / skewness_min;
+		break;
+
+	default:
+		printf("error: unexpected poly degree %d\n", degree);
+		exit(-1);
+	}
+
+	poly->m0 = m0;
+	poly->coeff_max = coeff_max;
+	poly->p_size_max = coeff_max / skewness_min;
+
+	/* we perform the collision search on a transformed version
+	   of N and the low-order rational coefficient m. In the
+	   transformed coordinates, a_d is 1 and a_{d-1} is 0. When
+	   a hit is found, we undo the transformation to recover
+	   the correction to m that makes the new polynomial 'work' */
+
+	mpz_mul_ui(poly->trans_N, poly->high_coeff, (mp_limb_t)degree);
+	mpz_pow_ui(poly->trans_N, poly->trans_N, (mp_limb_t)(degree - 1));
+	mpz_mul_ui(poly->trans_N, poly->trans_N, (mp_limb_t)degree);
+	mpz_mul(poly->trans_N, poly->trans_N, poly->N);
+	mpz_root(poly->trans_m0, poly->trans_N, (mp_limb_t)degree);
+}
+
+/*------------------------------------------------------------------------*/
+static void
 poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 {
 	mpz_init_set(poly->N, data->gmp_N);
 	mpz_init(poly->high_coeff);
 	mpz_init(poly->trans_N);
 	mpz_init(poly->trans_m0);
-	mpz_init(poly->mp_sieve_size);
 	mpz_init(poly->m);
 	mpz_init(poly->p);
 	mpz_init(poly->tmp1);
@@ -52,12 +107,10 @@ poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 	   collision search and one for ordinary collision 
 	   search */
 
-	CUDA_TRY(cuModuleLoad(&poly->gpu_module_sq, 
-				"stage1_core_gpu_sq.ptx"))
-	CUDA_TRY(cuModuleLoad(&poly->gpu_module_nosq, 
-				"stage1_core_gpu_nosq.ptx"))
-	CUDA_TRY(cuModuleLoad(&poly->gpu_module_sort, 
-				"stage1_core_gpu_sort.ptx"))
+	CUDA_TRY(cuModuleLoad(&poly->gpu_module_2prog, 
+				"stage1_core_2prog.ptx"))
+	CUDA_TRY(cuModuleLoad(&poly->gpu_module_3prog, 
+				"stage1_core_3prog.ptx"))
 #endif
 }
 
@@ -69,7 +122,6 @@ poly_search_free(poly_search_t *poly)
 	mpz_clear(poly->high_coeff);
 	mpz_clear(poly->trans_N);
 	mpz_clear(poly->trans_m0);
-	mpz_clear(poly->mp_sieve_size);
 	mpz_clear(poly->m);
 	mpz_clear(poly->p);
 	mpz_clear(poly->tmp1);
@@ -322,7 +374,12 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		if (find_next_ad(&ad_sieve, poly))
 			break;
 
-		/* sieve for polynomials using
+		/* recalculate internal parameters used
+		   for search */
+
+		stage1_bounds_update(poly);
+
+		/* finally, sieve for polynomials using
 		   Kleinjung's improved algorithm */
 
 		elapsed = sieve_lattice(obj, poly, deadline_per_coeff);

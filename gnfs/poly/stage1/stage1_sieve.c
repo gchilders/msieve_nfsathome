@@ -21,33 +21,30 @@ $Id$
 
 /*------------------------------------------------------------------------*/
 void
-handle_collision(poly_search_t *poly, uint32 p1, uint32 p2,
-		uint32 special_q, uint64 special_q_root, uint128 res)
+handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
+		uint64 special_q_root, int64 res)
 {
-	/* the proposed rational coefficient is p1*p2*special_q;
-	   all these pieces must be coprime. The 'trivial
+	/* the proposed rational coefficient is p*special_q;
+	   p and special_q must be coprime. The 'trivial
 	   special q' has special_q = 1 and special_q_root = 0 */
 
-	if (mp_gcd_1(special_q, p1) != 1 ||
-	    mp_gcd_1(special_q, p2) != 1 ||
-	    mp_gcd_1(p1, p2) != 1)
+	uint64_2gmp(p, poly->p);
+	mpz_gcd_ui(poly->tmp1, poly->p, (unsigned long)special_q);
+	if (mpz_cmp_ui(poly->tmp1, (unsigned long)1))
 		return;
 
-	mpz_set_ui(poly->p, (unsigned long)p1);
-	mpz_mul_ui(poly->p, poly->p, (unsigned long)p2);
 	mpz_mul_ui(poly->p, poly->p, (unsigned long)special_q);
 
 	/* the corresponding correction to trans_m0 is 
-	   special_q_root + res * special_q^2 - sieve_size,
-	   and can be positive or negative */
+	   special_q_root + res * special_q^2, and can be
+	   positive or negative */
 
 	uint64_2gmp(special_q_root, poly->tmp1);
-	mpz_import(poly->tmp2, 4, -1, sizeof(uint32), 0, 0, &res);
+	int64_2gmp(res, poly->tmp2);
 	mpz_set_ui(poly->tmp3, (unsigned long)special_q);
 
 	mpz_mul(poly->tmp3, poly->tmp3, poly->tmp3);
 	mpz_addmul(poly->tmp1, poly->tmp2, poly->tmp3);
-	mpz_sub(poly->tmp1, poly->tmp1, poly->mp_sieve_size);
 	mpz_add(poly->m, poly->trans_m0, poly->tmp1);
 
 	/* a lot can go wrong before this function is called!
@@ -105,22 +102,18 @@ handle_collision(poly_search_t *poly, uint32 p1, uint32 p2,
 double
 sieve_lattice(msieve_obj *obj, poly_search_t *poly, double deadline)
 {
-	uint32 digits = mpz_sizeinbase(poly->N, 10);
 	lattice_fb_t L;
 
 	L.poly = poly;
 	L.deadline = deadline;
 
 #ifdef HAVE_CUDA
-
-	if (digits <= GPU_LARGE_SEARCH)
-		sieve_lattice_gpu(obj, &L);
+	if (poly->degree <= 4)
+		sieve_lattice_gpu_2prog(obj, &L);
 	else
-		sieve_lattice_gpu_sort(obj, &L);
-
+		sieve_lattice_gpu_3prog(obj, &L);
 #else
 	sieve_lattice_cpu(obj, &L);
-
 #endif
 
 	return deadline - L.deadline;

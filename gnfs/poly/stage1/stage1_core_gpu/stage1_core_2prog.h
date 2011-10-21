@@ -12,51 +12,46 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#ifndef _STAGE1_CORE_GPU_SORT_H_
-#define _STAGE1_CORE_GPU_SORT_H_
+#ifndef _STAGE1_CORE_GPU_2PROG_H_
+#define _STAGE1_CORE_GPU_2PROG_H_
 
 #ifdef __CUDACC__
-#include "../cuda_intrinsics.h"
+#include "cuda_intrinsics.h"
+#define MAX_ROOTS 128
 #endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define MAX_SPECIAL_Q ((uint32)(-1))
-#define MAX_OTHER ((uint32)1 << 22)
-#define SPECIAL_Q_SCALE 5
+/* structure indicating a collision */
 
 typedef struct {
-	uint32 p1;
-	uint32 p2;
+	uint32 p;
 	uint32 q;
-	uint32 pad;
-	uint64 proot;
 	uint64 qroot;
+	int64 offset;
 } found_t;
 
-#define BATCH_SPECIALQ_MAX 32
+#define Q_ARRAY_WORDS 1000
 
-#define NUM_GPU_FUNCTIONS 6
-#define GPU_TRANS 0
-#define GPU_STEP 1
-#define GPU_SORT 2
-#define GPU_MERGE 3
-#define GPU_MERGE1 4
-#define GPU_FINAL 5
+#define Q_PACKED_HEADER_WORDS 1
 
-#define SHARED_ELEM_SIZE (sizeof(uint32) + sizeof(uint64))
+typedef struct {
+	uint32 p;
+	uint32 num_roots;
+	uint64 roots[MAX_ROOTS];
+} q_packed_t;
 
-#ifndef __CUDACC__
-uint32 sieve_lattice_gpu_sort_core(msieve_obj *obj, lattice_fb_t *L, 
-		sieve_fb_t *sieve_special_q,
-		uint32 special_q_min, uint32 special_q_max);
-#endif
+#define P_SOA_BATCH_SIZE (3*30*384)
+
+typedef struct {
+	uint32 p[P_SOA_BATCH_SIZE];
+	uint64 roots[MAX_ROOTS][P_SOA_BATCH_SIZE];
+} p_soa_t;
 
 #ifdef __cplusplus
 }
-
 #endif
 
-#endif /* !_STAGE1_CORE_GPU_SORT_H_ */
+#endif /* !_STAGE1_CORE_GPU_2PROG_H_ */

@@ -12,21 +12,24 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#include "../cuda_intrinsics.h"
-#include "stage1_core_gpu_sort.h"
+#include "stage1_core_3prog.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#define INVALID_ROOT 9223372036854775807LL
+
 /*------------------------------------------------------------------------*/
 __global__ void
 sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
-			uint64 *roots, uint32 num_roots,
-			uint32 q, uint32 num_q_roots, uint64 *qroots)
+			uint32 num_roots, uint32 *p_out, int64 *roots_out,
+			uint32 q, uint32 num_q_roots, uint64 *qroots,
+			uint32 num_entries)
 {
-	uint32 offset, j, p, p2_w, end, gcd;
-	uint64 p2, p2_r, q2, tmp, inv;
+	uint32 offset, i, p, pp_w, end, gcd;
+	uint64 pp, pp_r, qq, proot, tmp, inv;
+	int64 newroot;
 	__shared__ uint64 shared_qroots[BATCH_SPECIALQ_MAX];
 
 	if (threadIdx.x < num_q_roots)
@@ -39,76 +42,40 @@ sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 		return;
 
 	p = p_array[offset];
-	p2 = wide_sqr32(p);
-	p2_w = montmul24_w((uint32)p2);
-	p2_r = montmul48_r(p2, p2_w);
-	q2 = wide_sqr32(q) % p2;
+	pp = wide_sqr32(p);
+	pp_w = montmul32_w((uint32)pp);
+	pp_r = montmul64_r(pp, pp_w);
+	qq = wide_sqr32(q) % pp;
 	end = num_p * num_roots;
 	gcd = gcd32(p, q);
 
 	tmp = modinv32(q % p, p);
 	tmp = wide_sqr32(tmp);
-	tmp = montmul48(tmp, p2_r, p2, p2_w);
-	inv = montmul48(q2, tmp, p2, p2_w);
-	inv = modsub64((uint64)2, inv, p2);
-	inv = montmul48(inv, tmp, p2, p2_w);
-	inv = montmul48(inv, p2_r, p2, p2_w);
+	tmp = montmul64(tmp, pp_r, pp, pp_w);
+	inv = montmul64(qq, tmp, pp, pp_w);
+	inv = modsub64((uint64)2, inv, pp);
+	inv = montmul64(inv, tmp, pp, pp_w);
+	inv = montmul64(inv, pp_r, pp, pp_w);
 
 	for (; offset < end; offset += num_p) {
-		uint64 proot = start_roots[offset];
+		proot = start_roots[offset];
 
-		for (j = 0; j < num_q_roots; j++) {
-			uint64 newroot;
+		for (i = 0; i < num_q_roots; i++) {
 
 			if (gcd != 1) {
-				newroot = (uint64)(-1);
+				newroot = INVALID_ROOT;
 			}
 			else {
 				newroot = modsub64(proot,
-						shared_qroots[j] % p2, p2);
-				newroot = montmul48(newroot, inv, p2, p2_w);
+						shared_qroots[i] % pp, pp);
+				newroot = montmul64(newroot, inv, pp, pp_w);
+
+				if (newroot > pp / 2)
+					newroot -= pp;
 			}
 
-			roots[offset + end * j] = newroot;
-		}
-	}
-}
-
-/*------------------------------------------------------------------------*/
-__global__ void
-sieve_kernel_step(uint32 *p_array, uint32 num_p, uint64 *roots,
-			uint32 num_roots, uint32 *p_out, uint64 *roots_out,
-			uint64 sieve_end, uint32 num_q_roots,
-			uint32 num_entries)
-{
-	uint32 offset, j, p, end;
-	uint64 p2;
-
-	offset = blockIdx.x * blockDim.x + threadIdx.x;
-	if (offset >= num_p)
-		return;
-
-	p = p_array[offset];
-	p2 = wide_sqr32(p);
-
-	end = num_p * num_roots;
-	for (; offset < end; offset += num_p) {
-
-		for (j = 0; j < num_q_roots; j++) {
-			uint32 tmp_p;
-			uint64 tmp_root;
-
-			tmp_root = roots[offset + end * j];
-			if (tmp_root < sieve_end) {
-				tmp_p = p;
-				roots[offset + end * j] = tmp_root +
-					MIN(p2, (uint64)(-1) - tmp_root);
-			}
-			else {
-				tmp_p = (uint32)(-1);
-			}
-			p_out[offset + num_entries * j] = tmp_p;
-			roots_out[offset + num_entries * j] = tmp_root;
+			p_out[offset + num_entries * i] = p;
+			roots_out[offset + num_entries * i] = newroot;
 		}
 	}
 }
@@ -252,12 +219,12 @@ sieve_kernel_merge1(uint32 *p_array, uint64 *roots, uint32 j, uint32 k)
 
 /*------------------------------------------------------------------------*/
 __global__ void
-sieve_kernel_final(uint32 *p_array, uint64 *roots, uint32 num_entries,
+sieve_kernel_final(uint32 *p_array, int64 *roots, uint32 num_entries,
 			uint32 q, uint32 num_q_roots, uint64 *qroots,
 			found_t *found_array)
 {
 	uint32 i, my_threadid, num_threads, p_1, p_2;
-	uint64 root_1, root_2;
+	int64 root_1, root_2;
 	__shared__ uint64 shared_qroots[BATCH_SPECIALQ_MAX];
 
 	if (threadIdx.x < num_q_roots)
@@ -274,17 +241,17 @@ sieve_kernel_final(uint32 *p_array, uint64 *roots, uint32 num_entries,
 		root_1 = roots[i];
 		root_2 = roots[i + 1];
 
-		if (p_1 < (uint32)(-1) && p_2 < (uint32)(-1) &&
-		    root_1 == root_2) {
+		if (p_1 > 0 && p_2 > 0 && root_1 == root_2 &&
+		    root_1 != INVALID_ROOT) {
 
 			if (gcd32(p_1, p_2) == 1) {
+				found_t *f = found_array + my_threadid;
 
-				found_array[my_threadid].p1 = p_1;
-				found_array[my_threadid].p2 = p_2;
-				found_array[my_threadid].proot = root_1;
-				found_array[my_threadid].q = q;
-				found_array[my_threadid].qroot =
-					shared_qroots[i / num_entries];
+				f->p1 = p_1;
+				f->p2 = p_2;
+				f->q = q;
+				f->qroot = shared_qroots[i / num_entries];
+				f->offset = root_1;
 			}
 		}
 

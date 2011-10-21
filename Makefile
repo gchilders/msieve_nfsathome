@@ -177,9 +177,8 @@ QS_CORE_OBJS_X86_64 = \
 #---------------------------------- GPU file lists -------------------------
 
 GPU_OBJS = \
-	stage1_core_gpu_nosq.ptx \
-	stage1_core_gpu_sq.ptx \
-	stage1_core_gpu_sort.ptx
+	stage1_core_2prog.ptx \
+	stage1_core_3prog.ptx
 
 #---------------------------------- NFS file lists -------------------------
 
@@ -195,14 +194,11 @@ NFS_HDR = \
 	gnfs/gnfs.h
 
 NFS_GPU_HDR = \
-	gnfs/poly/stage1/cuda_intrinsics.h \
-	gnfs/poly/stage1/stage1_core_gpu/stage1_core_gpu_common.h \
-	gnfs/poly/stage1/stage1_core_gpu/stage1_core_gpu_nosq.h \
-	gnfs/poly/stage1/stage1_core_gpu/stage1_core_gpu_sq.h \
-	gnfs/poly/stage1/stage1_core_gpu_sort/stage1_core_gpu_sort.h
+	gnfs/poly/stage1/stage1_core_gpu/cuda_intrinsics.h \
+	gnfs/poly/stage1/stage1_core_gpu/stage1_core_2prog.h \
+	gnfs/poly/stage1/stage1_core_gpu/stage1_core_3prog.h
 
-NFS_NOGPU_HDR = \
-	gnfs/poly/stage1/stage1_core_cpu/stage1_core_cpu.h
+NFS_NOGPU_HDR =
 
 NFS_SRCS = \
 	gnfs/poly/poly.c \
@@ -240,17 +236,13 @@ NFS_SRCS = \
 NFS_OBJS = $(NFS_SRCS:.c=.no)
 
 NFS_GPU_SRCS = \
-	gnfs/poly/stage1/stage1_core_gpu/stage1_core_gpu_nosq.c \
-	gnfs/poly/stage1/stage1_core_gpu/stage1_core_gpu_sq.c \
-	gnfs/poly/stage1/stage1_core_gpu/stage1_sieve_gpu.c \
-	gnfs/poly/stage1/stage1_core_gpu_sort/stage1_core_gpu_sort.c \
-	gnfs/poly/stage1/stage1_core_gpu_sort/stage1_sieve_gpu_sort.c
+	gnfs/poly/stage1/stage1_sieve_gpu_2prog.c \
+	gnfs/poly/stage1/stage1_sieve_gpu_3prog.c
 
 NFS_GPU_OBJS = $(NFS_GPU_SRCS:.c=.no)
 
 NFS_NOGPU_SRCS = \
-	gnfs/poly/stage1/stage1_core_cpu/stage1_core_cpu.c \
-	gnfs/poly/stage1/stage1_core_cpu/stage1_sieve_cpu.c
+	gnfs/poly/stage1/stage1_sieve_cpu.c
 
 NFS_NOGPU_OBJS = $(NFS_NOGPU_SRCS:.c=.no)
 
@@ -397,8 +389,5 @@ mpqs/sieve_core_k8_64_64k.qo: mpqs/sieve_core.c $(COMMON_HDR) $(QS_HDR)
 
 # GPU build rules
 
-VPATH = gnfs/poly/stage1/stage1_core_gpu \
-	gnfs/poly/stage1/stage1_core_gpu_sort
-
-%.ptx: %.cu $(NFS_GPU_HDR)
+%.ptx: gnfs/poly/stage1/stage1_core_gpu/%.cu $(NFS_GPU_HDR)
 	nvcc $(NVCCFLAGS) -ptx -o $@ $<

@@ -51,24 +51,7 @@ extern "C" {
 
 #define HIGH_COEFF_SIEVE_LIMIT 1e12
 
-/* 128-bit integers */
-
-typedef struct {
-	uint32 w[4];
-} uint128;
-
 /*-----------------------------------------------------------------------*/
-
-/* Kleinjung's algorithm essentially reduces to an all-against-all
-   search between two large collections of arithmetic progressions,
-   looking for pairs of progressions that satisfy a specific
-   modular property. For the CPU version the two collections are
-   identical so we look for collisions within a single set, and for
-   the GPU version the two collections are separate. The following
-   controls how much larger the largest element in a collection
-   is, compared to the smallest */
-
-#define P_SCALE 1.5
 
 /* main structure used in stage 1 */
 
@@ -76,14 +59,18 @@ typedef struct {
 
 	uint32 degree;
 
+	/* approximately (N/a_d) ^ (1/d) for input N, high
+	   coefficient a_d and poly degree d */
+
+	double m0;
+
 	/* bound on the norm used in stage 1; this is the maximum
 	   value of (poly coefficient i) * (optimal skew)^i across
 	   all poly coefficients. The low-order poly coefficients
-	   are bounded in size by (N/a_d) ^ (1/d) for input N,
-	   high coefficient a_d and poly degree d, because the
-	   polynomial is essentially N/a_d split into d pieces. Our
-	   job is to find a 'stage 1 hit' that obeys the norm
-	   bound even for the high-order algebraic coefficients */
+	   are bounded in size by m0, because the polynomial is
+	   essentially N split into d+1 pieces. Our job is to find
+	   a 'stage 1 hit' that obeys the norm bound even for the
+	   high-order algebraic coefficients */
 
 	double norm_max; 
 
@@ -97,17 +84,6 @@ typedef struct {
 	/* bound on the leading rational poly coefficient */
 
 	double p_size_max;
-
-	/* used to bound the work in the collision search */
-
-	double sieve_size;
-
-	/* these are used to implement 'lattice sieving' for
-	   the largest problems */
-
-	uint32 special_q_min;
-	uint32 special_q_max;
-	uint32 special_q_fb_max;
 
 	/* the range on a_d, provided by calling code */
 
@@ -127,7 +103,6 @@ typedef struct {
 	mpz_t tmp3;
 	mpz_t tmp4;
 	mpz_t tmp5;
-	mpz_t mp_sieve_size;
 
 #ifdef HAVE_CUDA
 
@@ -135,9 +110,8 @@ typedef struct {
 
 	CUcontext gpu_context;
 	gpu_info_t *gpu_info; 
-	CUmodule gpu_module_sq; 
-	CUmodule gpu_module_nosq; 
-	CUmodule gpu_module_sort;
+	CUmodule gpu_module_2prog; 
+	CUmodule gpu_module_3prog; 
 #endif
 
 	/* function to call when a collision is found */
@@ -147,6 +121,15 @@ typedef struct {
 } poly_search_t;
 
 /*-----------------------------------------------------------------------*/
+
+/* Kleinjung's algorithm essentially reduces to an
+   all-against-all search between two large collections of
+   arithmetic progressions, looking for pairs of progressions
+   that satisfy a specific modular property. The following
+   controls how much larger the largest element in a collection
+   is, compared to the smallest */
+
+#define P_SCALE 2.4
 
 /* Rational leading coeffs of NFS polynomials are assumed 
    to be the product of 2 or 3 coprime groups of factors p; 
@@ -162,8 +145,7 @@ typedef struct {
 
    	- p1 and p2 are coprime
 	- aprog1(k1) = aprog2(k2)
-	- the common value is less than sieve_size above in 
-		absolute value
+	- the common value is "close to" m0
    
    If p has several prime factors p_i, the exact number of 
    roots that a given p has is the product of the number of 
@@ -254,7 +236,7 @@ typedef struct {
 
 	p_enum_t p_enum;
 
-	mpz_t p, p2, nmodp2, tmp1, tmp2, tmp3, gmp_root;
+	mpz_t p, pp, nmodpp, tmp1, tmp2, tmp3, gmp_root;
 } sieve_fb_t;
 
 /* externally visible interface */
@@ -311,16 +293,13 @@ typedef struct {
 
 	/* GPU-specific stuff */
 
-	/* the collections of p. sq_array stores 'special q'
-	   that force members of p_array and q_array to all
-	   fall on some third, 'special q' arithmetic 
-	   progression */
+	/* the collections of p. q_array stores 'special q'
+	   that force members of p_array to all fall on some
+	   'special q' arithmetic progression */
 
 	void *p_array; 
 	void *q_array; 
-	void *sq_array;
 
-	uint64 sieve_step;
 	uint32 num_entries;
 
 	CUfunction *gpu_kernel;
@@ -355,8 +334,8 @@ typedef struct {
 /* what to do when the collision search finds a 'stage 1 hit' */
 
 void
-handle_collision(poly_search_t *poly, uint32 p1, uint32 p2,
-		uint32 special_q, uint64 special_q_root, uint128 res);
+handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
+		uint64 special_q_root, int64 res);
 
 /* main search routine */
 
@@ -366,21 +345,19 @@ double sieve_lattice(msieve_obj *obj, poly_search_t *poly,
 /* the GPU routines are divided into two main
    versions, one designed to be effective for small
    input numbers, and one which is effective only
-   for larger input numbers. The point at which we
-   switch from one version of the search to the
-   other is determined below */
-
-#define GPU_LARGE_SEARCH 160 /* digits */
+   for larger input numbers */
 
 #ifdef HAVE_CUDA
 
-/* GPU search routine for small inputs less than GPU_LARGE_SEARCH digits */
+/* GPU search routine for finding collisions
+   between two arithmetic progressions */
 
-void sieve_lattice_gpu(msieve_obj *obj, lattice_fb_t *L);
+void sieve_lattice_gpu_2prog(msieve_obj *obj, lattice_fb_t *L);
 
-/* GPU search routine for large inputs greater than GPU_LARGE_SEARCH digits */
+/* GPU search routine for finding collisions
+   between three arithmetic progressions */
 
-void sieve_lattice_gpu_sort(msieve_obj *obj, lattice_fb_t *L);
+void sieve_lattice_gpu_3prog(msieve_obj *obj, lattice_fb_t *L);
 
 #else
 

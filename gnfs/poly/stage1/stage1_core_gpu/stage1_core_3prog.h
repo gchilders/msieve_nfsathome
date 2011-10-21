@@ -12,33 +12,31 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#ifndef _STAGE1_CORE_GPU_COMMON_H_
-#define _STAGE1_CORE_GPU_COMMON_H_
+#ifndef _STAGE1_CORE_GPU_3PROG_H_
+#define _STAGE1_CORE_GPU_3PROG_H_
 
 #ifdef __CUDACC__
-#include "../cuda_intrinsics.h"
+#include "cuda_intrinsics.h"
 #endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* structure indicating a collision */
+#define BATCH_SPECIALQ_MAX 32
 
 typedef struct {
-	uint32 p;
+	uint32 p1;
+	uint32 p2;
 	uint32 q;
-	uint32 k;
-	uint64 offset;
-	uint64 proot;
+	uint32 pad;
+	uint64 qroot;
+	int64 offset;
 } found_t;
-
-#define MAX_SPECIAL_Q ((uint32)(-1))
-#define MAX_OTHER ((uint32)(-1))
-#define SPECIAL_Q_SCALE 16
 
 #ifdef __cplusplus
 }
+
 #endif
 
-#endif /* !_STAGE1_CORE_GPU_COMMON_H_ */
+#endif /* !_STAGE1_CORE_GPU_3PROG_H_ */

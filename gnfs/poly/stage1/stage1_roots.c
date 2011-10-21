@@ -38,7 +38,7 @@ lift_root_32(uint32 n, uint32 r, uint32 old_power,
 void
 sieve_fb_free(sieve_fb_t *s)
 {
-	uint32 i, j;
+	uint32 i;
 	aprog_list_t *list = &s->aprog_data;
 
 	free_prime_sieve(&s->p_prime);
@@ -52,8 +52,8 @@ sieve_fb_free(sieve_fb_t *s)
 	free(list->aprogs);
 
 	mpz_clear(s->p);
-	mpz_clear(s->p2);
-	mpz_clear(s->nmodp2);
+	mpz_clear(s->pp);
+	mpz_clear(s->nmodpp);
 	mpz_clear(s->tmp1);
 	mpz_clear(s->tmp2);
 	mpz_clear(s->tmp3);
@@ -173,12 +173,14 @@ sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 	s->fb_only = fb_only;
 
 	mpz_init(s->p);
-	mpz_init(s->p2);
-	mpz_init(s->nmodp2);
+	mpz_init(s->pp);
+	mpz_init(s->nmodpp);
 	mpz_init(s->tmp1);
 	mpz_init(s->tmp2);
 	mpz_init(s->tmp3);
 	mpz_init(s->gmp_root);
+
+	factor_max = MIN(factor_max, 1000000);
 
 	if (factor_max <= factor_min)
 		return;
@@ -281,28 +283,25 @@ lift_roots(sieve_fb_t *s, poly_search_t *poly, uint32 p, uint32 num_roots)
 {
 	/* we have num_roots arithmetic progressions mod p;
 	   convert the progressions to be mod p^2, using
-	   Hensel lifting, and then move the origin of the 
-	   result (trans_m0 - sieve_size) units to the left.  
-	   This means we can 'sieve' up to 2*poly->sieve_size 
-	   units past the new origin */
+	   Hensel lifting, and then move the origin of the
+	   result trans_m0 units to the left. */
 
 	uint32 i;
 	unsigned long degree = s->degree;
 
 	mpz_set_ui(s->p, (unsigned long)p);
-	mpz_mul(s->p2, s->p, s->p);
-	mpz_tdiv_r(s->nmodp2, poly->trans_N, s->p2);
-	mpz_sub(s->tmp1, poly->trans_m0, poly->mp_sieve_size);
-	mpz_tdiv_r(s->tmp3, s->tmp1, s->p2);
+	mpz_mul(s->pp, s->p, s->p);
+	mpz_tdiv_r(s->nmodpp, poly->trans_N, s->pp);
+	mpz_tdiv_r(s->tmp3, poly->trans_m0, s->pp);
 
 	for (i = 0; i < num_roots; i++) {
 
 		uint64_2gmp(s->roots[i], s->gmp_root);
 
-		mpz_powm_ui(s->tmp1, s->gmp_root, degree, s->p2);
-		mpz_sub(s->tmp1, s->nmodp2, s->tmp1);
+		mpz_powm_ui(s->tmp1, s->gmp_root, degree, s->pp);
+		mpz_sub(s->tmp1, s->nmodpp, s->tmp1);
 		if (mpz_cmp_ui(s->tmp1, (mp_limb_t)0) < 0)
-			mpz_add(s->tmp1, s->tmp1, s->p2);
+			mpz_add(s->tmp1, s->tmp1, s->pp);
 		mpz_tdiv_q(s->tmp1, s->tmp1, s->p);
 
 		mpz_powm_ui(s->tmp2, s->gmp_root, degree-1, s->p);
@@ -314,7 +313,7 @@ lift_roots(sieve_fb_t *s, poly_search_t *poly, uint32 p, uint32 num_roots)
 		mpz_addmul(s->gmp_root, s->tmp1, s->p);
 		mpz_sub(s->gmp_root, s->gmp_root, s->tmp3);
 		if (mpz_cmp_ui(s->gmp_root, (unsigned long)0) < 0)
-			mpz_add(s->gmp_root, s->gmp_root, s->p2);
+			mpz_add(s->gmp_root, s->gmp_root, s->pp);
 
 		s->roots[i] = gmp2uint64(s->gmp_root);
 	}
