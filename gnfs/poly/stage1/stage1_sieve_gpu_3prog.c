@@ -545,6 +545,13 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 		}
 	}
 
+	for (i = 2; ; i *= 2) {
+		if (i >= num_roots) {
+			L->num_entries = i;
+			break;
+		}
+	}
+
 #if 1
 	printf("aprogs: %u entries, %u roots\n", num_p, num_roots);
 #endif
@@ -586,6 +593,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	CUDA_TRY(cuFuncGetAttribute((int *)&i,
 				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
 				L->gpu_kernel[GPU_SORT]))
+	i = MIN(i, L->num_entries / 2);
 	i = MIN(i, (L->poly->gpu_info->shared_mem_size - 4096) /
 			SHARED_ELEM_SIZE / 2);
 	L->threads_per_block[GPU_SORT] = 1 << (int)(log(i) / M_LN2);
@@ -609,14 +617,6 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	CUDA_TRY(cuFuncSetSharedSize(L->gpu_kernel[GPU_MERGE],
 				2 * L->threads_per_block[GPU_MERGE] *
 				SHARED_ELEM_SIZE))
-
-	for (i = 2 * L->threads_per_block[GPU_SORT]; ; i *= 2) {
-
-		if (i >= num_roots) {
-			L->num_entries = i;
-			break;
-		}
-	}
 
 	num_batch_specialq = MIN(BATCH_SPECIALQ_MAX,
 					L->poly->gpu_info->global_mem_size
