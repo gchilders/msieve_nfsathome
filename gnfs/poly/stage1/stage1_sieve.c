@@ -91,9 +91,6 @@ handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
 	mpz_submul(poly->m, poly->tmp2, poly->p);
 	mpz_tdiv_q(poly->m, poly->m, poly->tmp1);
 
-	gmp_printf("poly %Zd %Zd %Zd\n",
-			poly->high_coeff, poly->p, poly->m);
-
 	poly->callback(poly->high_coeff, poly->p, poly->m,
 			poly->coeff_max, poly->callback_data);
 }
