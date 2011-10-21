@@ -622,6 +622,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 					L->poly->gpu_info->global_mem_size
 					* 0.33 / L->num_entries
 					/ SHARED_ELEM_SIZE - 1);
+	num_batch_specialq = MAX(1, num_batch_specialq);
 	printf("batch size %u\n", num_batch_specialq);
 
 	CUDA_TRY(cuMemAlloc(&L->gpu_p_array,
