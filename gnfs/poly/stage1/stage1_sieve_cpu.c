@@ -629,6 +629,9 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L)
 		int64 sieve_size = MIN(sieve_bound * pow((double)p_min, 4.),
 					SIEVE_MAX);
 
+		if (sieve_size == SIEVE_MAX && i > 0)
+			break;
+
 		num_pieces = (double)special_q_max * p_max
 				/ log(special_q_max) / log(p_max)
 				/ 3e9;
@@ -661,7 +664,7 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L)
 				&sieve_special_q, &sieve_p,
 				special_q_min2, special_q_max2, p_min, p_max);
 
-		if (quit || special_q_max < 250 || sieve_size == SIEVE_MAX ||
+		if (quit || special_q_max < 250 ||
 		    p_max >= MAX_OTHER / P_SCALE)
 			break;
 
