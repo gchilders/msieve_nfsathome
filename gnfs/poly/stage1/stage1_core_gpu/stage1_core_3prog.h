@@ -34,6 +34,12 @@ typedef struct {
 	int64 offset;
 } found_t;
 
+typedef struct {
+	uint32 p;
+	uint32 pad;
+	uint64 root;
+} specialq_t;
+
 #ifdef __cplusplus
 }
 

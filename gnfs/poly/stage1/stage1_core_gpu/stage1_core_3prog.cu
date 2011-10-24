@@ -18,24 +18,19 @@ $Id$
 extern "C" {
 #endif
 
+__constant__ specialq_t q_batch[BATCH_SPECIALQ_MAX];
+
 #define INVALID_ROOT 9223372036854775807LL
 
 /*------------------------------------------------------------------------*/
 __global__ void
 sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 			uint32 num_roots, uint32 *p_out, int64 *roots_out,
-			uint32 q, uint32 num_q_roots, uint64 *qroots,
-			uint32 num_entries)
+			uint32 num_specialq, uint32 num_entries)
 {
-	uint32 offset, i, p, pp_w, end, gcd;
+	uint32 offset, i, j, p, pp_w, q, end, gcd;
 	uint64 pp, pp_r, qq, proot, tmp, inv;
 	int64 newroot;
-	__shared__ uint64 shared_qroots[BATCH_SPECIALQ_MAX];
-
-	if (threadIdx.x < num_q_roots)
-		shared_qroots[threadIdx.x] = qroots[threadIdx.x];
-
-	__syncthreads();
 
 	offset = blockIdx.x * blockDim.x + threadIdx.x;
 	if (offset >= num_p)
@@ -45,37 +40,41 @@ sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 	pp = wide_sqr32(p);
 	pp_w = montmul32_w((uint32)pp);
 	pp_r = montmul64_r(pp, pp_w);
-	qq = wide_sqr32(q) % pp;
 	end = num_p * num_roots;
-	gcd = gcd32(p, q);
 
-	tmp = modinv32(q % p, p);
-	tmp = wide_sqr32(tmp);
-	tmp = montmul64(tmp, pp_r, pp, pp_w);
-	inv = montmul64(qq, tmp, pp, pp_w);
-	inv = modsub64((uint64)2, inv, pp);
-	inv = montmul64(inv, tmp, pp, pp_w);
-	inv = montmul64(inv, pp_r, pp, pp_w);
+	q = 0;
+	for (i = 0; i < num_specialq; i++) {
+		if (q != q_batch[i].p) {
+			q = q_batch[i].p;
+			qq = wide_sqr32(q) % pp;
+			gcd = gcd32(p, q);
 
-	for (; offset < end; offset += num_p) {
-		proot = start_roots[offset];
+			tmp = modinv32(q % p, p);
+			tmp = wide_sqr32(tmp);
+			tmp = montmul64(tmp, pp_r, pp, pp_w);
+			inv = montmul64(qq, tmp, pp, pp_w);
+			inv = modsub64((uint64)2, inv, pp);
+			inv = montmul64(inv, tmp, pp, pp_w);
+			inv = montmul64(inv, pp_r, pp, pp_w);
+		}
 
-		for (i = 0; i < num_q_roots; i++) {
+		for (j = offset; j < end; j += num_p) {
+			proot = start_roots[j];
 
 			if (gcd != 1) {
 				newroot = INVALID_ROOT;
 			}
 			else {
 				newroot = modsub64(proot,
-						shared_qroots[i] % pp, pp);
+						q_batch[i].root % pp, pp);
 				newroot = montmul64(newroot, inv, pp, pp_w);
 
 				if (newroot > pp / 2)
 					newroot -= pp;
 			}
 
-			p_out[offset + num_entries * i] = p;
-			roots_out[offset + num_entries * i] = newroot;
+			p_out[j + num_entries * i] = p;
+			roots_out[j + num_entries * i] = newroot;
 		}
 	}
 }
@@ -220,22 +219,15 @@ sieve_kernel_merge1(uint32 *p_array, uint64 *roots, uint32 j, uint32 k)
 /*------------------------------------------------------------------------*/
 __global__ void
 sieve_kernel_final(uint32 *p_array, int64 *roots, uint32 num_entries,
-			uint32 q, uint32 num_q_roots, uint64 *qroots,
-			found_t *found_array)
+			uint32 num_specialq, found_t *found_array)
 {
 	uint32 i, my_threadid, num_threads, p_1, p_2;
 	int64 root_1, root_2;
-	__shared__ uint64 shared_qroots[BATCH_SPECIALQ_MAX];
-
-	if (threadIdx.x < num_q_roots)
-		shared_qroots[threadIdx.x] = qroots[threadIdx.x];
-
-	__syncthreads();
 
 	i = my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
 	num_threads = gridDim.x * blockDim.x;
 
-	while (i < num_entries * num_q_roots - 1) {
+	while (i < num_entries * num_specialq - 1) {
 		p_1 = p_array[i];
 		p_2 = p_array[i + 1];
 		root_1 = roots[i];
@@ -249,8 +241,8 @@ sieve_kernel_final(uint32 *p_array, int64 *roots, uint32 num_entries,
 
 				f->p1 = p_1;
 				f->p2 = p_2;
-				f->q = q;
-				f->qroot = shared_qroots[i / num_entries];
+				f->q = q_batch[i / num_entries].p;
+				f->qroot = q_batch[i / num_entries].root;
 				f->offset = root_1;
 			}
 		}
