@@ -598,8 +598,6 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L)
 
 	special_q_min = 1;
 	special_q_max = MIN(MAX_SPECIAL_Q, p_size_max / p_max / p_max);
-	if (special_q_max <= 10)
-		special_q_max = 1;
 
 	/* set up the special q factory; special-q may have 
 	   arbitrary factors, but many small factors are 
