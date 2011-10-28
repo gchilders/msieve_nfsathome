@@ -725,7 +725,7 @@ sieve_lattice_gpu_3prog(msieve_obj *obj, lattice_fb_t *L)
 	sieve_bound = coeff_max / m0 / degree;
 
 	p_min = MIN(MAX_OTHER / P_SCALE, sqrt(0.5 / sieve_bound));
-	p_min = MIN(p_min, sqrt(p_size_max) / P_SCALE / P_SCALE);
+	p_min = MIN(p_min, sqrt(p_size_max) / P_SCALE);
 
 	p_max = p_min * P_SCALE;
 

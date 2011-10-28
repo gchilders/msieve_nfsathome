@@ -592,7 +592,7 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L)
 
 	p_min = MIN(MAX_OTHER / P_SCALE, sqrt(2.5 / sieve_bound));
 	p_min = MIN(p_min, pow((double)SIEVE_MAX / sieve_bound, 1. / 4.) - 1);
-	p_min = MIN(p_min, sqrt(p_size_max) / P_SCALE / P_SCALE);
+	p_min = MIN(p_min, sqrt(p_size_max) / P_SCALE);
 
 	p_max = p_min * P_SCALE;
 
