@@ -565,9 +565,10 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 
 	CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel[GPU_MERGE1],
 				gpu_module, "sieve_kernel_merge1"))
-	CUDA_TRY(cuFuncGetAttribute((int *)&L->threads_per_block[GPU_MERGE1],
+	CUDA_TRY(cuFuncGetAttribute((int *)&i,
 				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
 				L->gpu_kernel[GPU_MERGE1]))
+	L->threads_per_block[GPU_MERGE1] = 1 << (int)(log(i) / M_LN2);
 	CUDA_TRY(cuFuncSetBlockShape(L->gpu_kernel[GPU_MERGE1],
 				L->threads_per_block[GPU_MERGE1], 1, 1))
 
