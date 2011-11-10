@@ -98,7 +98,7 @@ typedef struct {
 	uint32 num_p;
 	uint32 num_roots;
 	uint32 p_size_alloc;
-	int64 sieve_size;
+	uint64 sieve_size;
 	p_packed_t *curr;
 	p_packed_t *packed_array;
 } p_packed_var_t;
@@ -177,15 +177,14 @@ store_p_packed(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 	curr->mont_w = montmul32_w((uint32)curr->pp);
 	curr->mont_r = montmul64_r(curr->pp);
 
-	if (s->sieve_size > 0)
-		curr->ss_mod_pp = s->sieve_size % curr->pp;
+	curr->ss_mod_pp = s->sieve_size % curr->pp;
 
 	s->num_p++;
 	s->num_roots += num_roots;
 	s->curr = p_packed_next(s->curr);
 }
 
-#define SIEVE_MAX 9223372036854775807LL
+#define SIEVE_MAX 9223372036854775807ULL
 
 #define MAX_SPECIAL_Q ((uint32)(-1))
 #define MAX_OTHER ((uint32)1 << 27)
@@ -195,7 +194,7 @@ static uint32
 handle_special_q(msieve_obj *obj, hash_entry_t *hashtable,
 		uint32 hashtable_size, p_packed_var_t *hash_array,
 		lattice_fb_t *L, uint32 special_q, uint64 special_q_root,
-		int64 block_size, uint64 *inv_array)
+		uint64 block_size, uint64 *inv_array)
 {
 	/* perform the hashtable search for a single special-q
 
@@ -207,13 +206,13 @@ handle_special_q(msieve_obj *obj, hash_entry_t *hashtable,
 	uint32 quit = 0;
 	p_packed_t *tmp;
 	uint32 num_entries = hash_array->num_p;
-	int64 sieve_size = hash_array->sieve_size;
+	uint64 sieve_size = hash_array->sieve_size;
 	int64 sieve_start = -sieve_size;
 	uint32 num_blocks = 0;
 	uint32 hashmask = ((uint32)1 << hashtable_size) - 1;
 
-	if (sieve_size < 0 || block_size < 0) {
-		printf("error: sieve size and block size must be positive "
+	if (sieve_start > 0) {
+		printf("error: sieve size must fit in signed int "
 			"in handle_special_q()\n");
 		exit(1);
 	}
@@ -287,7 +286,7 @@ handle_special_q(msieve_obj *obj, hash_entry_t *hashtable,
 	   one entry to the hashtable. The hashtable is refilled
 	   from scratch when the next block runs */
 
-	while (sieve_start < sieve_size) {
+	while (sieve_start < (int64)sieve_size) {
 		int64 sieve_end = sieve_start + MIN(block_size,
 						sieve_size - sieve_start);
 
@@ -422,7 +421,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, int64 sieve_size,
 	uint32 num_p;
 	uint32 num_roots;
 	uint32 hashtable_size;
-	int64 block_size;
+	uint64 block_size;
 	uint64 *invtable = NULL;
 	double cpu_start_time = get_cpu_time();
 	mpz_t qprod;
@@ -431,7 +430,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, int64 sieve_size,
 	p_packed_init(&hash_array);
 	mpz_init(qprod);
 	hash_array.sieve_size = sieve_size;
-	block_size = (int64)p_min * p_min;
+	block_size = (uint64)p_min * p_min;
 
 	/* build all the arithmetic progressions */
 
