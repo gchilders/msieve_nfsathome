@@ -53,6 +53,9 @@ $Id$
    problems, e.g. 200-digit GNFS */
 
 
+#define P_BITS 27
+#define HASHITER_BITS (32 - P_BITS)
+
 /* one element of the hashtable. The table is keyed by the
    offset ito the sieve interval, i.e. by the first field below.
    We arbitrarily assume the offset will not exceed 2^64 and
@@ -60,7 +63,8 @@ $Id$
 
 typedef struct {
 	int64 offset;
-	uint32 p;
+	uint32 p : P_BITS;
+	uint32 iter : HASHITER_BITS;
 } hash_entry_t;
 
 /* every progression keeps a running count of the current sieve
@@ -99,6 +103,7 @@ typedef struct {
 	uint32 num_roots;
 	uint32 p_size_alloc;
 	uint64 sieve_size;
+	uint32 curr_hashiter;
 	p_packed_t *curr;
 	p_packed_t *packed_array;
 } p_packed_var_t;
@@ -187,7 +192,7 @@ store_p_packed(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 #define SIEVE_MAX 9223372036854775807ULL
 
 #define MAX_SPECIAL_Q ((uint32)(-1))
-#define MAX_OTHER ((uint32)1 << 27)
+#define MAX_OTHER (((uint32)1 << P_BITS) - 1)
 
 /*------------------------------------------------------------------------*/
 static uint32
@@ -287,12 +292,16 @@ handle_special_q(msieve_obj *obj, hash_entry_t *hashtable,
 	   from scratch when the next block runs */
 
 	while (sieve_start < (int64)sieve_size) {
+		uint32 iter = hash_array->curr_hashiter;
 		int64 sieve_end = sieve_start + MIN(block_size,
 						sieve_size - sieve_start);
 
 		tmp = hash_array->packed_array;
-		memset(hashtable, 0, sizeof(hash_entry_t) *
-				((uint32)1 << hashtable_size));
+
+		if (iter == 0) {
+			memset(hashtable, 0, sizeof(hash_entry_t) *
+					((uint32)1 << hashtable_size));
+		}
 
 		for (i = 0; i < num_entries; i++) {
 
@@ -307,13 +316,15 @@ handle_special_q(msieve_obj *obj, hash_entry_t *hashtable,
 
 				key = offset & hashmask;
 
-				while (hashtable[key].p != 0 &&
+				while (hashtable[key].iter == iter &&
+				      hashtable[key].p != 0 &&
 				      hashtable[key].offset != offset) {
 
 					key = (key + 1) & hashmask;
 				}
 
-				if (hashtable[key].p != 0) {
+				if (hashtable[key].iter == iter &&
+				   hashtable[key].p != 0) {
 
 					if (mp_gcd_1(hashtable[key].p,
 							tmp->p) == 1) {
@@ -337,6 +348,7 @@ handle_special_q(msieve_obj *obj, hash_entry_t *hashtable,
 					/* no hit; insert this offset
 					   for root j into the table */
 
+					hashtable[key].iter = iter;
 					hashtable[key].p = tmp->p;
 					hashtable[key].offset = offset;
 				}
@@ -358,6 +370,9 @@ handle_special_q(msieve_obj *obj, hash_entry_t *hashtable,
 
 		sieve_start = sieve_end;
 		num_blocks++;
+
+		hash_array->curr_hashiter++;
+		hash_array->curr_hashiter %= ((uint32)1 << HASHITER_BITS);
 
 		/* check for interrupt after every block */
 
