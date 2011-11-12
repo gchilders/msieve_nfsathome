@@ -720,10 +720,17 @@ sieve_lattice_gpu_3prog(msieve_obj *obj, lattice_fb_t *L)
 	double m0 = poly->m0;
 	double coeff_max = poly->coeff_max;
 	double p_size_max = poly->p_size_max;
-	double sieve_bound;
+	double sieve_bound = coeff_max / m0 / degree;
 	sieve_fb_t sieve_p, sieve_special_q;
 
-	sieve_bound = coeff_max / m0 / degree;
+	/* size the problem; we choose p_min so that we can use
+	   exactly one offset from each progression (the one
+	   nearest to m0) in the search. Choosing larger p
+	   implies that we could use more of their offsets, but
+	   it appears not to be optimal to do so since the
+	   biggest part of the search difficulty is the sorting
+	   phase, and larger p implies that we need to sort more
+	   of them to find each collision */
 
 	p_min = MIN(MAX_OTHER / P_SCALE, sqrt(0.5 / sieve_bound));
 	p_min = MIN(p_min, sqrt(p_size_max) / P_SCALE);
@@ -745,11 +752,11 @@ sieve_lattice_gpu_3prog(msieve_obj *obj, lattice_fb_t *L)
 			1, degree,
 			1);
 
-	/* size the problem; because special-q can have any factors,
-	   we require that the progressions we generate use p that
-	   have somewhat large factors. This minimizes the chance
-	   that a given special-q has factors in common with many
-	   progressions in the set */
+	/* because special-q can have any factors, we require that
+	   the progressions we generate use p that have somewhat
+	   large factors. This minimizes the chance that a given
+	   special-q has factors in common with many progressions
+	   in the set */
 
 	sieve_fb_init(&sieve_p, poly, 
 			100, 5000,
@@ -760,6 +767,10 @@ sieve_lattice_gpu_3prog(msieve_obj *obj, lattice_fb_t *L)
 			/ log(special_q_max) / log(p_max)
 			/ 3e9;
 	num_pieces = MIN(num_pieces, 450);
+
+	/* large search problems can be randomized so that
+	   multiple runs over the same range of leading
+	   a_d will likely generate different results */
 
 	if (num_pieces > 1) { /* randomize the special_q range */
 		uint32 piece_length = (special_q_max - special_q_min)

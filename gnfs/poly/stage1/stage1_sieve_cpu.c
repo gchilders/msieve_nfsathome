@@ -57,9 +57,7 @@ $Id$
 #define HASHITER_BITS (32 - P_BITS)
 
 /* one element of the hashtable. The table is keyed by the
-   offset ito the sieve interval, i.e. by the first field below.
-   We arbitrarily assume the offset will not exceed 2^64 and
-   choose special-q to force this */
+   offset ito the sieve interval, i.e. by the first field below. */
 
 typedef struct {
 	int64 offset;
@@ -87,6 +85,9 @@ typedef struct {
 	uint64 ss_mod_pp;
 	hash_list_t roots[MAX_ROOTS];
 } p_packed_t;
+
+/* P_PACKED_HEADER_WORDS is the number of uint64 sized elements
+   preceding hash_list_t roots in the above structure */
 
 #define P_PACKED_HEADER_WORDS 5
 
@@ -301,6 +302,11 @@ handle_special_q(msieve_obj *obj, hash_entry_t *hashtable,
 		tmp = hash_array->packed_array;
 		hashtable_count = 0;
 
+		/* only reset the hashtable memory when the iteration
+		   count loops back to zero. In other cases, we can
+		   ignore stale data in the hashtable by checking its
+		   iteration count, and save a memset here */
+
 		if (iter == 0) {
 			memset(hashtable, 0, sizeof(hash_entry_t) *
 							hashtable_size);
@@ -472,6 +478,10 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, int64 sieve_size,
 	block_size = (uint64)p_min * p_min;
 	block_size = MIN(block_size, (uint64)2 * sieve_size);
 
+	/* estimate how many entries each hashtable will contain,
+	   in order to allocate just enough memory to hold all the
+	   entries */
+
 	calc_hashtable_size = 0;
 	for (i = 0, tmp = hash_array.packed_array; i < num_p; i++) {
 
@@ -620,8 +630,18 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L)
 	double m0 = poly->m0;
 	double coeff_max = poly->coeff_max;
 	double p_size_max = poly->p_size_max;
-	sieve_fb_t sieve_p, sieve_special_q;
 	double sieve_bound = coeff_max / m0 / degree;
+	sieve_fb_t sieve_p, sieve_special_q;
+
+	/* size the problem; we choose p_min so that we will get
+	   to use a small number of each progression's offsets in
+	   the hashtable search, while respecting the bound on
+	   a_{d-2}. Choosing larger p implies that we can use more
+	   of its offsets while choosing smaller p means we must
+	   use fewer (or sometimes none) of its offsets. Larger p
+	   also implies that each pair of p are less likely to
+	   yield a collision, which makes the search more
+	   difficult */
 
 	p_min = MIN(MAX_OTHER / P_SCALE, sqrt(2.5 / sieve_bound));
 	p_min = MIN(p_min, pow((double)SIEVE_MAX / sieve_bound, 1. / 4.) - 1);
@@ -644,11 +664,11 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L)
 			1, degree,
 			0);
 
-	/* size the problem; because special-q can have any factors,
-	   we require that the progressions we generate use p that
-	   have somewhat large factors. This minimizes the chance
-	   that a given special-q has factors in common with many
-	   progressions in the set */
+	/* because special-q can have any factors, we require that
+	   the progressions we generate use p that have somewhat
+	   large factors. This minimizes the chance that a given
+	   special-q has factors in common with many progressions
+	   in the set */
 
 	sieve_fb_init(&sieve_p, poly, 
 			35, 5000,
@@ -664,6 +684,10 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L)
 
 		if (sieve_size == SIEVE_MAX && i > 0)
 			break;
+
+		/* large search problems can be randomized so that
+		   multiple runs over the same range of leading
+		   a_d will likely generate different results */
 
 		num_pieces = (double)special_q_max * p_max
 				/ log(special_q_max) / log(p_max)
