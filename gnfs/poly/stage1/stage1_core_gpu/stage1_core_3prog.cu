@@ -20,8 +20,6 @@ extern "C" {
 
 __constant__ specialq_t q_batch[BATCH_SPECIALQ_MAX];
 
-#define INVALID_ROOT 9223372036854775807LL
-
 /*------------------------------------------------------------------------*/
 __global__ void
 sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
@@ -29,7 +27,7 @@ sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 			uint32 num_specialq, uint32 num_entries)
 {
 	uint32 offset, i, j, p, pp_w, q, end, gcd;
-	uint64 pp, pp_r, qq, proot, tmp, inv;
+	uint64 pp, pp_r, qq, tmp, inv;
 	int64 newroot;
 
 	offset = blockIdx.x * blockDim.x + threadIdx.x;
@@ -46,35 +44,33 @@ sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 	for (i = 0; i < num_specialq; i++) {
 		if (q != q_batch[i].p) {
 			q = q_batch[i].p;
-			qq = wide_sqr32(q) % pp;
 			gcd = gcd32(p, q);
 
-			tmp = modinv32(q % p, p);
-			tmp = wide_sqr32(tmp);
-			tmp = montmul64(tmp, pp_r, pp, pp_w);
-			inv = montmul64(qq, tmp, pp, pp_w);
-			inv = modsub64((uint64)2, inv, pp);
-			inv = montmul64(inv, tmp, pp, pp_w);
-			inv = montmul64(inv, pp_r, pp, pp_w);
+			if (gcd == 1) {
+				qq = wide_sqr32(q) % pp;
+				tmp = modinv32(q % p, p);
+				tmp = wide_sqr32(tmp);
+				tmp = montmul64(tmp, pp_r, pp, pp_w);
+				inv = montmul64(qq, tmp, pp, pp_w);
+				inv = modsub64((uint64)2, inv, pp);
+				inv = montmul64(inv, tmp, pp, pp_w);
+				inv = montmul64(inv, pp_r, pp, pp_w);
+			}
 		}
 
 		for (j = offset; j < end; j += num_p) {
-			proot = start_roots[j];
 
-			if (gcd != 1) {
-				newroot = INVALID_ROOT;
-			}
-			else {
-				newroot = modsub64(proot,
+			if (gcd == 1) {
+				newroot = modsub64(start_roots[j],
 						q_batch[i].root % pp, pp);
 				newroot = montmul64(newroot, inv, pp, pp_w);
 
 				if (newroot > pp / 2)
 					newroot -= pp;
-			}
 
-			p_out[j + num_entries * i] = p;
-			roots_out[j + num_entries * i] = newroot;
+				p_out[j + num_entries * i] = p;
+				roots_out[j + num_entries * i] = newroot;
+			}
 		}
 	}
 }
@@ -233,8 +229,7 @@ sieve_kernel_final(uint32 *p_array, int64 *roots, uint32 num_entries,
 		root_1 = roots[i];
 		root_2 = roots[i + 1];
 
-		if (p_1 > 0 && p_2 > 0 && root_1 == root_2 &&
-		    root_1 != INVALID_ROOT) {
+		if (p_1 > 0 && p_2 > 0 && root_1 == root_2) {
 
 			if (gcd32(p_1, p_2) == 1) {
 				found_t *f = found_array + my_threadid;

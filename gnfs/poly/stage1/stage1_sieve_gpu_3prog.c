@@ -240,7 +240,7 @@ check_found_array(lattice_fb_t *L)
 }
 
 #define MAX_SPECIAL_Q ((uint32)(-1))
-#define MAX_OTHER ((uint32)1 << 23)
+#define MAX_OTHER ((uint32)1 << 27)
 
 #define NUM_GPU_FUNCTIONS 5
 #define GPU_TRANS 0
@@ -253,7 +253,7 @@ check_found_array(lattice_fb_t *L)
 
 /*------------------------------------------------------------------------*/
 static uint32
-handle_special_q(msieve_obj *obj, lattice_fb_t *L,
+handle_special_q_batch(msieve_obj *obj, lattice_fb_t *L,
 		specialq_t *specialq_batch, uint32 num_specialq)
 {
 	uint32 i, j, k;
@@ -366,8 +366,7 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 
 	CUDA_TRY(cuParamSetSize(L->gpu_kernel[GPU_MERGE1], j))
 
-	num_blocks = (L->num_entries / 2 - 1) /
-			L->threads_per_block[GPU_SORT] + 1;
+	num_blocks = L->num_entries / L->threads_per_block[GPU_SORT] / 2;
 
 	CUDA_TRY(cuLaunchGrid(L->gpu_kernel[GPU_SORT],
 			num_blocks, num_specialq))
@@ -380,8 +379,8 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 		CUDA_TRY(cuParamSeti(L->gpu_kernel[GPU_MERGE1],
 				(int)j_offset, j))
 
-		num_blocks = (L->num_entries / 2 - 1) /
-				L->threads_per_block[GPU_MERGE1] + 1;
+		num_blocks = L->num_entries /
+				L->threads_per_block[GPU_MERGE1] / 2;
 
 		for (k = j; k > L->threads_per_block[GPU_MERGE];
 							k /= 2) {
@@ -393,8 +392,8 @@ handle_special_q(msieve_obj *obj, lattice_fb_t *L,
 					num_blocks, num_specialq))
 		}
 
-		num_blocks = (L->num_entries / 2 - 1) /
-				L->threads_per_block[GPU_MERGE] + 1;
+		num_blocks = L->num_entries /
+				L->threads_per_block[GPU_MERGE] / 2;
 
 		CUDA_TRY(cuLaunchGrid(L->gpu_kernel[GPU_MERGE],
 				num_blocks, num_specialq))
@@ -475,18 +474,28 @@ store_specialq(uint32 q, uint32 num_roots, uint64 *roots, void *extra)
 }
 
 /*------------------------------------------------------------------------*/
+static INLINE uint32
+next_2pow(uint32 n)
+{
+	uint32 i;
+
+	for (i = 1; i > 0 && i < n; i *= 2);
+
+	return i;
+}
+
+/*------------------------------------------------------------------------*/
 static uint32
 sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, 
 		sieve_fb_t *sieve_special_q, sieve_fb_t *sieve_p, 
 		uint32 special_q_min, uint32 special_q_max, 
 		uint32 p_min, uint32 p_max)
 {
-	uint32 i, j;
+	uint32 i, j, k;
 	uint32 quit = 0;
 	specialq_array_t q_array;
 	p_soa_array_t p_array;
 	uint32 degree = L->poly->degree;
-	uint32 num_p, num_roots;
 	uint32 num_batch_specialq;
 	uint32 pass_cnt = 0;
 	double cpu_start_time = get_cpu_time();
@@ -504,13 +513,43 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	}
 	p_soa_array_compact(&p_array);
 
-	num_p = p_array.num_p;
-	num_roots = 0;
-	for (i = 0; i < p_array.num_arrays; i++) {
+	for (i = j = 0; i < p_array.num_arrays; i++) {
+		p_soa_var_t *soa = p_array.soa + i;
+
+		j += soa->num_p * soa->num_roots;
+	}
+	L->num_entries = next_2pow(j);
+
+#if 1
+	printf("aprogs: %u entries, %u roots\n", p_array.num_p, j);
+#endif
+
+	num_batch_specialq = MIN(BATCH_SPECIALQ_MAX,
+				L->poly->gpu_info->num_compute_units * 3);
+	num_batch_specialq = MIN(num_batch_specialq,
+					L->poly->gpu_info->global_mem_size /
+					L->num_entries / 3 /
+					SHARED_ELEM_SIZE - 1);
+	num_batch_specialq = MAX(1, num_batch_specialq);
+	printf("batch size %u\n", num_batch_specialq);
+
+	CUDA_TRY(cuMemAlloc(&L->gpu_p_array,
+			num_batch_specialq *
+			L->num_entries * sizeof(uint32)))
+	CUDA_TRY(cuMemAlloc(&L->gpu_root_array,
+			num_batch_specialq *
+			L->num_entries * sizeof(uint64)))
+	CUDA_TRY(cuModuleGetGlobal(&L->gpu_q_array, 
+			NULL, gpu_module, "q_batch"))
+
+	for (i = j = 0; i < p_array.num_arrays; i++) {
 		p_soa_var_t *soa = p_array.soa + i;
 		uint32 num = soa->num_p;
 
-		num_roots += num * soa->num_roots;
+		soa->dev_p_entry = L->gpu_p_array + j * sizeof(uint32);
+		soa->dev_root_entry = L->gpu_root_array + j * sizeof(uint64);
+
+		j += num * soa->num_roots;
 
 		CUDA_TRY(cuStreamCreate(&soa->stream, 0))
 
@@ -521,23 +560,12 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 		CUDA_TRY(cuMemcpyHtoD(soa->dev_p, soa->p,
 				num * sizeof(uint32)))
 
-		for (j = 0; j < soa->num_roots; j++) {
+		for (k = 0; k < soa->num_roots; k++) {
 			CUDA_TRY(cuMemcpyHtoD(soa->dev_start_roots +
-					j * num * sizeof(uint64),
-					soa->roots[j], num * sizeof(uint64)))
+					k * num * sizeof(uint64),
+					soa->roots[k], num * sizeof(uint64)))
 		}
 	}
-
-	for (i = 2; ; i *= 2) {
-		if (i >= num_roots) {
-			L->num_entries = i;
-			break;
-		}
-	}
-
-#if 1
-	printf("aprogs: %u entries, %u roots\n", num_p, num_roots);
-#endif
 
 	CUDA_TRY(cuEventCreate(&L->start, CU_EVENT_BLOCKING_SYNC))
 	CUDA_TRY(cuEventCreate(&L->end, CU_EVENT_BLOCKING_SYNC))
@@ -568,7 +596,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	CUDA_TRY(cuFuncGetAttribute((int *)&i,
 				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
 				L->gpu_kernel[GPU_MERGE1]))
-	L->threads_per_block[GPU_MERGE1] = 1 << (int)(log(i) / M_LN2);
+	L->threads_per_block[GPU_MERGE1] = next_2pow(i + 1) / 2;
 	CUDA_TRY(cuFuncSetBlockShape(L->gpu_kernel[GPU_MERGE1],
 				L->threads_per_block[GPU_MERGE1], 1, 1))
 
@@ -580,7 +608,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	i = MIN(i, L->num_entries / 2);
 	i = MIN(i, (L->poly->gpu_info->shared_mem_size - 4096) /
 			SHARED_ELEM_SIZE / 2);
-	L->threads_per_block[GPU_SORT] = 1 << (int)(log(i) / M_LN2);
+	L->threads_per_block[GPU_SORT] = next_2pow(i + 1) / 2;
 	CUDA_TRY(cuFuncSetBlockShape(L->gpu_kernel[GPU_SORT],
 				L->threads_per_block[GPU_SORT], 1, 1))
 	CUDA_TRY(cuFuncSetSharedSize(L->gpu_kernel[GPU_SORT],
@@ -595,28 +623,12 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	i = MIN(i, 2 * L->threads_per_block[GPU_SORT]);
 	i = MIN(i, (L->poly->gpu_info->shared_mem_size - 4096) /
 			SHARED_ELEM_SIZE / 2);
-	L->threads_per_block[GPU_MERGE] = 1 << (int)(log(i) / M_LN2);
+	L->threads_per_block[GPU_MERGE] = next_2pow(i + 1) / 2;
 	CUDA_TRY(cuFuncSetBlockShape(L->gpu_kernel[GPU_MERGE],
 				L->threads_per_block[GPU_MERGE], 1, 1))
 	CUDA_TRY(cuFuncSetSharedSize(L->gpu_kernel[GPU_MERGE],
 				2 * L->threads_per_block[GPU_MERGE] *
 				SHARED_ELEM_SIZE))
-
-	num_batch_specialq = MIN(BATCH_SPECIALQ_MAX,
-					L->poly->gpu_info->global_mem_size
-					* 0.33 / L->num_entries
-					/ SHARED_ELEM_SIZE - 1);
-	num_batch_specialq = MAX(1, num_batch_specialq);
-	printf("batch size %u\n", num_batch_specialq);
-
-	CUDA_TRY(cuMemAlloc(&L->gpu_p_array,
-			num_batch_specialq *
-			L->num_entries * sizeof(uint32)))
-	CUDA_TRY(cuMemAlloc(&L->gpu_root_array,
-			num_batch_specialq *
-			L->num_entries * sizeof(uint64)))
-	CUDA_TRY(cuModuleGetGlobal(&L->gpu_q_array, 
-			NULL, gpu_module, "q_batch"))
 
 	L->found_array_size = L->threads_per_block[GPU_FINAL] *
 			L->poly->gpu_info->num_compute_units;
@@ -628,26 +640,12 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	CUDA_TRY(cuMemsetD8(L->gpu_found_array, 0,
 		L->found_array_size * sizeof(found_t)))
 
-	num_roots = 0;
-	for (i = 0; i < p_array.num_arrays; i++) {
-		p_soa_var_t *soa = p_array.soa + i;
-		uint32 num = soa->num_p;
-
-		soa->dev_p_entry = L->gpu_p_array +
-				num_roots * sizeof(uint32);
-		soa->dev_root_entry = L->gpu_root_array +
-				num_roots * sizeof(uint64);
-
-		num_roots += num * soa->num_roots;
-	}
-
 	q_array.num_specialq = 0;
 	if (special_q_min == 1) {
-		specialq_t tmp_specialq;
 
-		tmp_specialq.p = 1;
-		tmp_specialq.root = 0;
-		q_array.specialq[q_array.num_specialq++] = tmp_specialq;
+		q_array.specialq[0].p = 1;
+		q_array.specialq[0].root = 0;
+		q_array.num_specialq++;
 	}
 
 	sieve_fb_reset(sieve_special_q, special_q_min, special_q_max, 
@@ -664,7 +662,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 						MIN(q_array.num_specialq - i,
 							num_batch_specialq);
 
-				quit = handle_special_q(obj, L,
+				quit = handle_special_q_batch(obj, L,
 						q_array.specialq + i,
 						curr_num_specialq);
 
