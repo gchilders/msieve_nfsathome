@@ -23,7 +23,7 @@ $Id$
 extern "C" {
 #endif
 
-#define BATCH_SPECIALQ_MAX 64
+#define BATCH_SPECIALQ_MAX 128
 
 typedef struct {
 	uint32 p1;

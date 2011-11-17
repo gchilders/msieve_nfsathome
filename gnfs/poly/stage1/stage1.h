@@ -109,9 +109,8 @@ typedef struct {
 	/* main structures for GPU-based sieving */
 
 	CUcontext gpu_context;
-	gpu_info_t *gpu_info; 
-	CUmodule gpu_module_2prog; 
-	CUmodule gpu_module_3prog; 
+	gpu_info_t *gpu_info;
+	CUmodule gpu_module;
 #endif
 
 	/* function to call when a collision is found */
@@ -286,52 +285,6 @@ uint32 sieve_fb_next(sieve_fb_t *s,
 
 /*-----------------------------------------------------------------------*/
 
-/* structure for handling collision search */
-
-typedef struct {
-
-#ifdef HAVE_CUDA
-
-	/* GPU-specific stuff */
-
-	/* the collections of p. q_array stores 'special q'
-	   that force members of p_array to all fall on some
-	   'special q' arithmetic progression */
-
-	void *p_array; 
-	void *q_array; 
-
-	uint32 num_entries;
-
-	CUfunction *gpu_kernel;
-	uint32 *threads_per_block;
-
-	CUdeviceptr gpu_p_array;
-	CUdeviceptr gpu_q_array;
-	CUdeviceptr gpu_found_array;
-	CUdeviceptr gpu_root_array;
-	void *found_array;
-	uint32 found_array_size;
-	void *p_marshall;
-	void *q_marshall;
-	CUevent start;
-	CUevent end;
-#endif
-
-	poly_search_t *poly;
-
-	/* enforce a CPU-time limit on the collision search.
-	   For large inputs the search space for Kleinjung's 
-	   algorithm is essentially infinite, so rather than 
-	   make a search deterministic we just let the code go 
-	   as far as it can in the time specified */
-
-	/* for GPU-based search, the deadline limits the
-	   combined CPU+GPU time spent in the search */
-
-	double deadline;
-} lattice_fb_t;
-
 /* what to do when the collision search finds a 'stage 1 hit' */
 
 void
@@ -340,31 +293,20 @@ handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
 
 /* main search routine */
 
-double sieve_lattice(msieve_obj *obj, poly_search_t *poly, 
-				double deadline);
-
-/* the GPU routines are divided into two main
-   versions, one designed to be effective for small
-   input numbers, and one which is effective only
-   for larger input numbers */
-
 #ifdef HAVE_CUDA
 
-/* GPU search routine for finding collisions
-   between two arithmetic progressions */
+/* GPU search routine */
 
-void sieve_lattice_gpu_2prog(msieve_obj *obj, lattice_fb_t *L);
-
-/* GPU search routine for finding collisions
-   between three arithmetic progressions */
-
-void sieve_lattice_gpu_3prog(msieve_obj *obj, lattice_fb_t *L);
+double sieve_lattice_gpu(msieve_obj *obj,
+			poly_search_t *poly, double deadline);
 
 #else
 
 /* CPU search routine */
 
-void sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L);
+double sieve_lattice_cpu(msieve_obj *obj,
+			poly_search_t *poly, double deadline);
+
 #endif
 
 #ifdef __cplusplus

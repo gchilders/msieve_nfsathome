@@ -197,10 +197,10 @@ store_p_packed(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 
 /*------------------------------------------------------------------------*/
 static uint32
-handle_special_q(msieve_obj *obj, hash_entry_t *hashtable,
-		uint32 hashtable_size_log2, p_packed_var_t *hash_array,
-		lattice_fb_t *L, uint32 special_q, uint64 special_q_root,
-		uint64 block_size, uint64 *inv_array)
+handle_special_q(msieve_obj *obj, poly_search_t *poly,
+		hash_entry_t *hashtable, uint32 hashtable_size_log2,
+		p_packed_var_t *hash_array, uint32 special_q,
+		uint64 special_q_root, uint64 block_size, uint64 *inv_array)
 {
 	/* perform the hashtable search for a single special-q
 
@@ -347,7 +347,7 @@ handle_special_q(msieve_obj *obj, hash_entry_t *hashtable,
 						p = tmp->p;
 						p = p * hashtable[key].p;
 
-						handle_collision(L->poly,
+						handle_collision(poly,
 							p, special_q,
 							special_q_root,
 							offset);
@@ -434,10 +434,10 @@ batch_invert(uint32 *qlist, uint32 num_q, uint64 *invlist,
 
 /*------------------------------------------------------------------------*/
 static uint32
-sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, int64 sieve_size,
+sieve_specialq_64(msieve_obj *obj, poly_search_t *poly, int64 sieve_size,
 		sieve_fb_t *sieve_special_q, sieve_fb_t *sieve_p, 
 		uint32 special_q_min, uint32 special_q_max, 
-		uint32 p_min, uint32 p_max)
+		uint32 p_min, uint32 p_max, double deadline, double *elapsed)
 {
 	/* core search code */
 
@@ -464,8 +464,8 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, int64 sieve_size,
 	/* build all the arithmetic progressions */
 
 	sieve_fb_reset(sieve_p, p_min, p_max, 1, MAX_ROOTS);
-	while (sieve_fb_next(sieve_p, L->poly, 
-			store_p_packed, &hash_array) != P_SEARCH_DONE) {
+	while (sieve_fb_next(sieve_p, poly, store_p_packed,
+			&hash_array) != P_SEARCH_DONE) {
 		;
 	}
 
@@ -497,8 +497,9 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, int64 sieve_size,
 
 	/* handle trivial lattice */
 	if (special_q_min == 1) {
-		quit = handle_special_q(obj, hashtable, hashtable_size_log2,
-				&hash_array, L, 1, 0, block_size, NULL);
+		quit = handle_special_q(obj, poly, hashtable,
+				hashtable_size_log2, &hash_array,
+				1, 0, block_size, NULL);
 		if (quit || special_q_max == 1)
 			goto finished;
 	}
@@ -522,7 +523,7 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, int64 sieve_size,
 		   roots they use */
 
 		p_packed_reset(&specialq_array);
-		while (sieve_fb_next(sieve_special_q, L->poly, store_p_packed,
+		while (sieve_fb_next(sieve_special_q, poly, store_p_packed,
 					&specialq_array) != P_SEARCH_DONE) {
 			if (specialq_array.num_p == SPECIALQ_BATCH_SIZE)
 				break;
@@ -582,16 +583,16 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L, int64 sieve_size,
 		for (i = 0; i < num_q; i++) {
 
 			for (j = 0; j < qptr->num_roots; j++) {
-				quit = handle_special_q(obj,
+				quit = handle_special_q(obj, poly,
 						hashtable, hashtable_size_log2,
-						&hash_array, L, qptr->p, 
+						&hash_array, qptr->p, 
 						qptr->roots[j].start_offset,
 						block_size, invtmp);
 				if (quit)
 					goto finished;
 			}
 
-			if (get_cpu_time() - cpu_start_time > L->deadline) {
+			if (get_cpu_time() - cpu_start_time > deadline) {
 				quit = 1;
 				goto finished;
 			}
@@ -613,24 +614,22 @@ finished:
 	p_packed_free(&specialq_array);
 	p_packed_free(&hash_array);
 	mpz_clear(qprod);
-	L->deadline -= get_cpu_time() - cpu_start_time;
+	*elapsed = get_cpu_time() - cpu_start_time;
 	return quit;
 }
 
 /*------------------------------------------------------------------------*/
-void
-sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L)
+double
+sieve_lattice_cpu(msieve_obj *obj, poly_search_t *poly, double deadline)
 {
 	uint32 i;
-	poly_search_t *poly = L->poly;
 	uint32 degree = poly->degree;
 	uint32 p_min, p_max;
 	uint32 special_q_min, special_q_max;
 	uint32 special_q_fb_max;
-	double m0 = poly->m0;
-	double coeff_max = poly->coeff_max;
 	double p_size_max = poly->p_size_max;
-	double sieve_bound = coeff_max / m0 / degree;
+	double sieve_bound = poly->coeff_max / poly->m0 / degree;
+	double elapsed_total = 0;
 	sieve_fb_t sieve_p, sieve_special_q;
 
 	/* size the problem; we choose p_min so that we will get
@@ -679,6 +678,7 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L)
 		uint32 quit;
 		uint32 num_pieces;
 		uint32 special_q_min2, special_q_max2;
+		double elapsed = 0;
 		int64 sieve_size = MIN(sieve_bound * pow((double)p_min, 4.),
 					SIEVE_MAX);
 
@@ -717,9 +717,13 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L)
 				special_q_min2, special_q_max2,
 				p_min, p_max);
 
-		quit = sieve_specialq_64(obj, L, sieve_size,
+		quit = sieve_specialq_64(obj, poly, sieve_size,
 				&sieve_special_q, &sieve_p,
-				special_q_min2, special_q_max2, p_min, p_max);
+				special_q_min2, special_q_max2,
+				p_min, p_max, deadline, &elapsed);
+
+		elapsed_total += elapsed;
+		deadline -= elapsed;
 
 		if (quit || special_q_max < 250 ||
 		    p_max >= MAX_OTHER / P_SCALE)
@@ -732,4 +736,5 @@ sieve_lattice_cpu(msieve_obj *obj, lattice_fb_t *L)
 
 	sieve_fb_free(&sieve_special_q);
 	sieve_fb_free(&sieve_p);
+	return elapsed_total;
 }
