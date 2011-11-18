@@ -693,7 +693,9 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 
 		if (all_q_done || q_array.num_specialq == NUM_SPECIALQ_ALLOC) {
 
-			for (i = 0; i < q_array.num_specialq; ) {
+			i = 0;
+			while (i < q_array.num_specialq) {
+
 				uint32 curr_num_specialq =
 						MIN(q_array.num_specialq - i,
 							num_batch_specialq);
