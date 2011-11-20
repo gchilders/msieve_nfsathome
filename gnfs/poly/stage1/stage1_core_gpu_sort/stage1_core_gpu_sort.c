@@ -637,36 +637,30 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 
 	CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel[GPU_TRANS],
 				gpu_module, "sieve_kernel_trans"))
-	CUDA_TRY(cuFuncGetAttribute((int *)&L->threads_per_block[GPU_TRANS],
+	CUDA_TRY(cuFuncGetAttribute((int *)&i,
 				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
 				L->gpu_kernel[GPU_TRANS]))
+	L->threads_per_block[GPU_TRANS] = MIN(i, 256);
 	CUDA_TRY(cuFuncSetBlockShape(L->gpu_kernel[GPU_TRANS],
 				L->threads_per_block[GPU_TRANS], 1, 1))
 
 	CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel[GPU_STEP],
 				gpu_module, "sieve_kernel_step"))
-	CUDA_TRY(cuFuncGetAttribute((int *)&L->threads_per_block[GPU_STEP],
+	CUDA_TRY(cuFuncGetAttribute((int *)&i,
 				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
 				L->gpu_kernel[GPU_STEP]))
+	L->threads_per_block[GPU_STEP] = MIN(i, 256);
 	CUDA_TRY(cuFuncSetBlockShape(L->gpu_kernel[GPU_STEP],
 				L->threads_per_block[GPU_STEP], 1, 1))
 
 	CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel[GPU_FINAL],
 				gpu_module, "sieve_kernel_final"))
-	CUDA_TRY(cuFuncGetAttribute((int *)&L->threads_per_block[GPU_FINAL],
-				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
-				L->gpu_kernel[GPU_FINAL]))
-	CUDA_TRY(cuFuncSetBlockShape(L->gpu_kernel[GPU_FINAL],
-				L->threads_per_block[GPU_FINAL], 1, 1))
-
-	CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel[GPU_MERGE1],
-				gpu_module, "sieve_kernel_merge1"))
 	CUDA_TRY(cuFuncGetAttribute((int *)&i,
 				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
-				L->gpu_kernel[GPU_MERGE1]))
-	L->threads_per_block[GPU_MERGE1] = 1 << (int)(log(i) / M_LN2);
-	CUDA_TRY(cuFuncSetBlockShape(L->gpu_kernel[GPU_MERGE1],
-				L->threads_per_block[GPU_MERGE1], 1, 1))
+				L->gpu_kernel[GPU_FINAL]))
+	L->threads_per_block[GPU_FINAL] = MIN(i, 256);
+	CUDA_TRY(cuFuncSetBlockShape(L->gpu_kernel[GPU_FINAL],
+				L->threads_per_block[GPU_FINAL], 1, 1))
 
 	CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel[GPU_SORT],
 				gpu_module, "sieve_kernel_sort"))
@@ -696,6 +690,16 @@ sieve_specialq_64(msieve_obj *obj, lattice_fb_t *L,
 	CUDA_TRY(cuFuncSetSharedSize(L->gpu_kernel[GPU_MERGE],
 				2 * L->threads_per_block[GPU_MERGE] *
 				SHARED_ELEM_SIZE))
+
+	CUDA_TRY(cuModuleGetFunction(&L->gpu_kernel[GPU_MERGE1],
+				gpu_module, "sieve_kernel_merge1"))
+	CUDA_TRY(cuFuncGetAttribute((int *)&i,
+				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+				L->gpu_kernel[GPU_MERGE1]))
+	i = MIN(i, 2 * L->threads_per_block[GPU_SORT]);
+	L->threads_per_block[GPU_MERGE1] = MIN(1 << (int)(log(i) / M_LN2, 256);
+	CUDA_TRY(cuFuncSetBlockShape(L->gpu_kernel[GPU_MERGE1],
+				L->threads_per_block[GPU_MERGE1], 1, 1))
 
 	for (i = 2 * L->threads_per_block[GPU_SORT]; ; i *= 2) {
 
