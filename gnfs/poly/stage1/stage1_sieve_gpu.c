@@ -613,28 +613,21 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 
 	CUDA_TRY(cuModuleGetFunction(&data.gpu_kernel[GPU_TRANS],
 				gpu_module, "sieve_kernel_trans"))
-	CUDA_TRY(cuFuncGetAttribute((int *)&data.threads_per_block[GPU_TRANS],
+	CUDA_TRY(cuFuncGetAttribute((int *)&i,
 				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
 				data.gpu_kernel[GPU_TRANS]))
+	data.threads_per_block[GPU_TRANS] = MIN(i, 256);
 	CUDA_TRY(cuFuncSetBlockShape(data.gpu_kernel[GPU_TRANS],
 				data.threads_per_block[GPU_TRANS], 1, 1))
 
 	CUDA_TRY(cuModuleGetFunction(&data.gpu_kernel[GPU_FINAL],
 				gpu_module, "sieve_kernel_final"))
-	CUDA_TRY(cuFuncGetAttribute((int *)&data.threads_per_block[GPU_FINAL],
-				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
-				data.gpu_kernel[GPU_FINAL]))
-	CUDA_TRY(cuFuncSetBlockShape(data.gpu_kernel[GPU_FINAL],
-				data.threads_per_block[GPU_FINAL], 1, 1))
-
-	CUDA_TRY(cuModuleGetFunction(&data.gpu_kernel[GPU_MERGE1],
-				gpu_module, "sieve_kernel_merge1"))
 	CUDA_TRY(cuFuncGetAttribute((int *)&i,
 				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
-				data.gpu_kernel[GPU_MERGE1]))
-	data.threads_per_block[GPU_MERGE1] = next_2pow(i + 1) / 2;
-	CUDA_TRY(cuFuncSetBlockShape(data.gpu_kernel[GPU_MERGE1],
-				data.threads_per_block[GPU_MERGE1], 1, 1))
+				data.gpu_kernel[GPU_FINAL]))
+	data.threads_per_block[GPU_FINAL] = MIN(i, 256);
+	CUDA_TRY(cuFuncSetBlockShape(data.gpu_kernel[GPU_FINAL],
+				data.threads_per_block[GPU_FINAL], 1, 1))
 
 	CUDA_TRY(cuModuleGetFunction(&data.gpu_kernel[GPU_SORT],
 				gpu_module, "sieve_kernel_sort"))
@@ -665,6 +658,16 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 	CUDA_TRY(cuFuncSetSharedSize(data.gpu_kernel[GPU_MERGE],
 				2 * data.threads_per_block[GPU_MERGE] *
 				SHARED_ELEM_SIZE))
+
+	CUDA_TRY(cuModuleGetFunction(&data.gpu_kernel[GPU_MERGE1],
+				gpu_module, "sieve_kernel_merge1"))
+	CUDA_TRY(cuFuncGetAttribute((int *)&i,
+				CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+				data.gpu_kernel[GPU_MERGE1]))
+	i = MIN(i, 2 * data.threads_per_block[GPU_SORT]);
+	data.threads_per_block[GPU_MERGE1] = MIN(next_2pow(i + 1) / 2, 256);
+	CUDA_TRY(cuFuncSetBlockShape(data.gpu_kernel[GPU_MERGE1],
+				data.threads_per_block[GPU_MERGE1], 1, 1))
 
 	data.found_array_size = data.threads_per_block[GPU_FINAL] *
 			poly->gpu_info->num_compute_units;
