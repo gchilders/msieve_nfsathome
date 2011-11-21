@@ -119,9 +119,6 @@
     <ClCompile Include="..\..\gnfs\poly\stage2\root_sieve_deg5_xy.c">
       <Filter>Source Files\poly\Stage2</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\gnfs\poly\stage1\stage1_sieve_cpu.c">
-      <Filter>Source Files\poly\Stage1</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\gnfs\poly\stage1\stage1_sieve_gpu.c">
       <Filter>Source Files\poly\Stage1</Filter>
     </ClCompile>
