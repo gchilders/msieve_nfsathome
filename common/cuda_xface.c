@@ -135,18 +135,21 @@ void gpu_launch_init(CUmodule gpu_module, const char *func_name,
 		switch(arg_desc->arg_type[i]) {
 		case GPU_ARG_PTR: 
 			CUDA_ALIGN_PARAM(j, __alignof(void *));
+			launch->arg_offsets[i] = j;
 			j += sizeof(void *);
 			break;
 
 		case GPU_ARG_INT32: 
 		case GPU_ARG_UINT32: 
 			CUDA_ALIGN_PARAM(j, __alignof(uint32));
+			launch->arg_offsets[i] = j;
 			j += sizeof(uint32);
 			break;
 
 		case GPU_ARG_INT64:
 		case GPU_ARG_UINT64:
 			CUDA_ALIGN_PARAM(j, __alignof(uint64));
+			launch->arg_offsets[i] = j;
 			j += sizeof(uint64);
 			break;
 
@@ -154,8 +157,6 @@ void gpu_launch_init(CUmodule gpu_module, const char *func_name,
 			printf("unknown GPU argument type\n");
 			exit(-1);
 		}
-
-		launch->arg_offsets[i] = j;
 	}
 
 	CUDA_TRY(cuParamSetSize(launch->kernel_func, j))
