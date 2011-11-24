@@ -18,13 +18,144 @@ $Id$
 
 /*------------------------------------------------------------------------*/
 static void
+stage1_bounds_update(poly_search_t *poly)
+{
+	/* determine the parametrs for the collision search,
+	   given one leading algebraic coefficient a_d */
+
+	uint32 degree = poly->degree;
+	double N = mpz_get_d(poly->N);
+	double high_coeff = mpz_get_d(poly->high_coeff);
+	double m0 = pow(N / high_coeff, 1./degree);
+	double skewness_min, coeff_max;
+
+	/* we don't know the optimal skewness for this polynomial
+	   but at least can bound the skewness. The value of the
+	   third-highest coefficient is from Kleinjung's 2006
+	   poly selection algorithm as published in Math. Comp. */
+
+	switch (degree) {
+	case 4:
+		skewness_min = sqrt(m0 / poly->norm_max);
+		coeff_max = poly->norm_max;
+		break;
+
+	case 5:
+		skewness_min = pow(m0 / poly->norm_max, 2./3.);
+		coeff_max = poly->norm_max / sqrt(skewness_min);
+		break;
+
+	case 6:
+		skewness_min = sqrt(m0 / poly->norm_max);
+		coeff_max = poly->norm_max / skewness_min;
+		break;
+
+	default:
+		printf("error: unexpected poly degree %d\n", degree);
+		exit(-1);
+	}
+
+	poly->m0 = m0;
+	poly->coeff_max = coeff_max;
+	poly->p_size_max = coeff_max / skewness_min;
+
+	/* we perform the collision search on a transformed version
+	   of N and the low-order rational coefficient m. In the
+	   transformed coordinates, a_d is 1 and a_{d-1} is 0. When
+	   a hit is found, we undo the transformation to recover
+	   the correction to m that makes the new polynomial 'work' */
+
+	mpz_mul_ui(poly->trans_N, poly->high_coeff, (mp_limb_t)degree);
+	mpz_pow_ui(poly->trans_N, poly->trans_N, (mp_limb_t)(degree - 1));
+	mpz_mul_ui(poly->trans_N, poly->trans_N, (mp_limb_t)degree);
+	mpz_mul(poly->trans_N, poly->trans_N, poly->N);
+	mpz_root(poly->trans_m0, poly->trans_N, (mp_limb_t)degree);
+}
+
+/*------------------------------------------------------------------------*/
+void
+handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
+		uint64 special_q_root, int64 res)
+{
+	/* the proposed rational coefficient is p*special_q;
+	   p and special_q must be coprime. The 'trivial
+	   special q' has special_q = 1 and special_q_root = 0 */
+
+	uint64_2gmp(p, poly->p);
+	mpz_gcd_ui(poly->tmp1, poly->p, (unsigned long)special_q);
+	if (mpz_cmp_ui(poly->tmp1, (unsigned long)1))
+		return;
+
+	mpz_mul_ui(poly->p, poly->p, (unsigned long)special_q);
+
+	/* the corresponding correction to trans_m0 is 
+	   special_q_root + res * special_q^2, and can be
+	   positive or negative */
+
+	uint64_2gmp(special_q_root, poly->tmp1);
+	int64_2gmp(res, poly->tmp2);
+	mpz_set_ui(poly->tmp3, (unsigned long)special_q);
+
+	mpz_mul(poly->tmp3, poly->tmp3, poly->tmp3);
+	mpz_addmul(poly->tmp1, poly->tmp2, poly->tmp3);
+	mpz_add(poly->m, poly->trans_m0, poly->tmp1);
+
+	/* a lot can go wrong before this function is called!
+	   Check that Kleinjung's modular condition is satisfied */
+
+	mpz_pow_ui(poly->tmp1, poly->m, (mp_limb_t)poly->degree);
+	mpz_mul(poly->tmp2, poly->p, poly->p);
+	mpz_sub(poly->tmp1, poly->trans_N, poly->tmp1);
+	mpz_tdiv_r(poly->tmp3, poly->tmp1, poly->tmp2);
+	if (mpz_cmp_ui(poly->tmp3, (mp_limb_t)0)) {
+		gmp_printf("poly %Zd %Zd %Zd\n",
+				poly->high_coeff, poly->p, poly->m);
+		printf("crap\n");
+		return;
+	}
+
+	/* the pair works, now translate the computed m back
+	   to the original polynomial. We have
+
+	   computed_m = degree * high_coeff * real_m +
+	   			(second_highest_coeff) * p
+
+	   and need to solve for real_m and second_highest_coeff.
+	   Per the CADO code: reducing the above modulo
+	   degree*high_coeff causes the first term on the right
+	   to disappear, so second_highest_coeff can be found
+	   modulo degree*high_coeff and real_m then follows */
+
+	mpz_mul_ui(poly->tmp1, poly->high_coeff, (mp_limb_t)poly->degree);
+	mpz_tdiv_r(poly->tmp2, poly->m, poly->tmp1);
+	mpz_invert(poly->tmp3, poly->p, poly->tmp1);
+	mpz_mul(poly->tmp2, poly->tmp3, poly->tmp2);
+	mpz_tdiv_r(poly->tmp2, poly->tmp2, poly->tmp1);
+
+	/* make second_highest_coeff as small as possible in
+	   absolute value */
+
+	mpz_tdiv_q_2exp(poly->tmp3, poly->tmp1, 1);
+	if (mpz_cmp(poly->tmp2, poly->tmp3) > 0) {
+		mpz_sub(poly->tmp2, poly->tmp2, poly->tmp1);
+	}
+
+	/* solve for real_m */
+	mpz_submul(poly->m, poly->tmp2, poly->p);
+	mpz_tdiv_q(poly->m, poly->m, poly->tmp1);
+
+	poly->callback(poly->high_coeff, poly->p, poly->m,
+			poly->coeff_max, poly->callback_data);
+}
+
+/*------------------------------------------------------------------------*/
+static void
 poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 {
 	mpz_init_set(poly->N, data->gmp_N);
 	mpz_init(poly->high_coeff);
 	mpz_init(poly->trans_N);
 	mpz_init(poly->trans_m0);
-	mpz_init(poly->mp_sieve_size);
 	mpz_init(poly->m);
 	mpz_init(poly->p);
 	mpz_init(poly->tmp1);
@@ -52,12 +183,7 @@ poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 	   collision search and one for ordinary collision 
 	   search */
 
-	CUDA_TRY(cuModuleLoad(&poly->gpu_module_sq, 
-				"stage1_core_gpu_sq.ptx"))
-	CUDA_TRY(cuModuleLoad(&poly->gpu_module_nosq, 
-				"stage1_core_gpu_nosq.ptx"))
-	CUDA_TRY(cuModuleLoad(&poly->gpu_module_sort, 
-				"stage1_core_gpu_sort.ptx"))
+	CUDA_TRY(cuModuleLoad(&poly->gpu_module, "stage1_core.ptx"))
 #endif
 }
 
@@ -69,7 +195,6 @@ poly_search_free(poly_search_t *poly)
 	mpz_clear(poly->high_coeff);
 	mpz_clear(poly->trans_N);
 	mpz_clear(poly->trans_m0);
-	mpz_clear(poly->mp_sieve_size);
 	mpz_clear(poly->m);
 	mpz_clear(poly->p);
 	mpz_clear(poly->tmp1);
@@ -322,10 +447,20 @@ search_coeffs(msieve_obj *obj, poly_search_t *poly, uint32 deadline)
 		if (find_next_ad(&ad_sieve, poly))
 			break;
 
-		/* sieve for polynomials using
+		/* recalculate internal parameters used
+		   for search */
+
+		stage1_bounds_update(poly);
+
+		/* finally, sieve for polynomials using
 		   Kleinjung's improved algorithm */
 
-		elapsed = sieve_lattice(obj, poly, deadline_per_coeff);
+#ifdef HAVE_CUDA
+		elapsed = sieve_lattice_gpu(obj, poly, deadline_per_coeff);
+#else
+		elapsed = sieve_lattice_cpu(obj, poly, deadline_per_coeff);
+#endif
+
 		cumulative_time += elapsed;
 
 		if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)

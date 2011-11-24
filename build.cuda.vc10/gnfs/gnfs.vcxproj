@@ -78,7 +78,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.0\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;...\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.0\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;_DEBUG;_LIB;HAVE_CUDA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -102,8 +102,8 @@
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.0\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_LIB;HAVE_CUDA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;...\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.0\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_WIN64;_DEBUG;_LIB;HAVE_CUDA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -124,7 +124,7 @@
     <ClCompile>
       <Optimization>Full</Optimization>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
-      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.0\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.0\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;HAVE_CUDA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <PrecompiledHeader>
@@ -147,8 +147,8 @@
     <ClCompile>
       <Optimization>Full</Optimization>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
-      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.0\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;HAVE_CUDA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v4.0\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_WIN64;NDEBUG;_LIB;HAVE_CUDA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <PrecompiledHeader>
       </PrecompiledHeader>
@@ -168,8 +168,7 @@
     <ClCompile Include="..\..\gnfs\ffpoly.c" />
     <ClCompile Include="..\..\gnfs\gf2.c" />
     <ClCompile Include="..\..\gnfs\gnfs.c" />
-    <ClCompile Include="..\..\gnfs\poly\stage1\stage1_sieve_gpu_nosq.c" />
-    <ClCompile Include="..\..\gnfs\poly\stage1\stage1_sieve_gpu_sq.c" />
+    <ClCompile Include="..\..\gnfs\poly\stage1\stage1_sieve_gpu.c" />
     <ClCompile Include="..\..\gnfs\poly\stage2\optimize_deg6.c" />
     <ClCompile Include="..\..\gnfs\poly\stage2\root_sieve_deg45_x.c" />
     <ClCompile Include="..\..\gnfs\poly\stage2\root_sieve_deg5_xy.c" />
@@ -189,7 +188,6 @@
     <ClCompile Include="..\..\gnfs\poly\size_score.c" />
     <ClCompile Include="..\..\gnfs\poly\stage1\stage1.c" />
     <ClCompile Include="..\..\gnfs\poly\stage1\stage1_roots.c" />
-    <ClCompile Include="..\..\gnfs\poly\stage1\stage1_sieve.c" />
     <ClCompile Include="..\..\gnfs\poly\stage2\optimize.c" />
     <ClCompile Include="..\..\gnfs\poly\stage2\root_sieve.c" />
     <ClCompile Include="..\..\gnfs\poly\stage2\stage2.c" />

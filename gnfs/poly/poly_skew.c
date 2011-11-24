@@ -101,8 +101,8 @@ static const poly_param_t prebuilt_params_deg5[] = {
 	{151, 1.55E+023, 2.11E+021, 3.83E-012},
 	{152, 2.27E+023, 3.01E+021, 3.36E-012},
 	{153, 3.32E+023, 4.30E+021, 2.95E-012},
-	{154, 8.00E+023, 1.00E+022, 2.40E-012},
-	{155, 1.00E+024, 1.50E+022, 2.00E-012},
+	{154, 8.00E+023, 4.90E+021, 2.40E-012},
+	{155, 1.00E+024, 6.80E+021, 2.00E-012},
 
 	/* contributed by Tom Womack */
 
@@ -123,11 +123,11 @@ static const poly_param_t prebuilt_params_deg5[] = {
 
 	/* only a guess */
 
-	{200, 3.10E+030, 2.10E+029, 1.50E-015},
-	{205, 2.00E+031, 1.50E+030, 5.50E-016},
-	{210, 1.00E+032, 6.50E+030, 1.90E-016},
-	{215, 6.00E+032, 3.75E+031, 7.00E-017},
-	{220, 2.40E+033, 1.60E+032, 3.00E-017},
+	{200, 3.10E+030, 1.10E+029, 1.50E-015},
+	{205, 2.00E+031, 5.70E+029, 5.50E-016},
+	{210, 1.00E+032, 3.00E+030, 1.90E-016},
+	{215, 6.00E+032, 1.50E+031, 7.00E-017},
+	{220, 2.40E+033, 7.70E+031, 3.00E-017},
 };
 
 static const poly_param_t prebuilt_params_deg6[] = {
@@ -139,8 +139,13 @@ static const poly_param_t prebuilt_params_deg6[] = {
 
  	{200, 1.00E+026, 1.00E+025, 8.0e-018},
  	{205, 1.00E+027, 1.00E+026, 6.0e-019},
- 	{230, 3.00E+029, 1.00E+029, 6.0e-019},
- 	{235, 1.50E+030, 3.00E+029, 6.0e-019},
+ 	{230, 3.00E+029, 3.00E+029, 6.0e-019},
+ 	{235, 1.50E+030, 8.00E+029, 6.0e-019},
+
+	/* better than nothing (marginally) */
+
+ 	{305, 1.00E+040, 1.00E+041, 0},
+ 	{310, 1.00E+042, 1.00E+043, 0},
 };
 
 /*--------------------------------------------------------------------*/
@@ -216,6 +221,7 @@ static void get_poly_params(double digits, poly_param_t *params,
 static void stage1_callback(mpz_t high_coeff, mpz_t p, mpz_t m, 
 				double coeff_bound, void *extra) {
 	
+	gmp_printf("%Zd %Zd %Zd\n", high_coeff, p, m);
 	poly_stage2_run((poly_stage2_t *)extra, high_coeff, p, m, 
 			coeff_bound, NULL);
 }
@@ -225,6 +231,7 @@ static void stage1_callback_log(mpz_t high_coeff, mpz_t p, mpz_t m,
 				double coeff_bound, void *extra) {
 	
 	FILE *mfile = (FILE *)extra;
+	gmp_printf("%Zd %Zd %Zd\n", high_coeff, p, m);
 	gmp_fprintf(mfile, "%Zd %Zd %Zd\n",
 			high_coeff, p, m);
 	fflush(mfile);
@@ -240,30 +247,25 @@ stage2_callback(void *extra, uint32 degree,
 {
 	uint32 i;
 	poly_select_t poly;
-	mp_poly_t *rpoly;
-	mp_poly_t *apoly;
+	mpz_poly_t *rpoly;
+	mpz_poly_t *apoly;
 	stage2_callback_data_t *data = (stage2_callback_data_t *)extra;
 	poly_config_t *config = data->config;
 
 	memset(&poly, 0, sizeof(poly_select_t));
 	rpoly = &poly.rpoly;
 	apoly = &poly.apoly;
+	mpz_poly_init(rpoly);
+	mpz_poly_init(apoly);
 
 	rpoly->degree = 1;
-	for (i = 0; i <= 1; i++) {
-		gmp2mp(coeff2[i], &rpoly->coeff[i].num);
-		rpoly->coeff[i].sign = POSITIVE;
-		if (mpz_sgn(coeff2[i]) < 0)
-			rpoly->coeff[i].sign = NEGATIVE;
-	}
+	for (i = 0; i <= 1; i++)
+		mpz_set(rpoly->coeff[i], coeff2[i]);
 
 	apoly->degree = degree;
-	for (i = 0; i <= degree; i++) {
-		gmp2mp(coeff1[i], &apoly->coeff[i].num);
-		apoly->coeff[i].sign = POSITIVE;
-		if (mpz_sgn(coeff1[i]) < 0)
-			apoly->coeff[i].sign = NEGATIVE;
-	}
+	for (i = 0; i <= degree; i++)
+		mpz_set(apoly->coeff[i], coeff1[i]);
+
 	poly.root_score = root_score;
 	poly.size_score = size_score;
 	poly.combined_score = combined_score;
@@ -277,25 +279,19 @@ stage2_callback(void *extra, uint32 degree,
 		"# norm %le alpha %lf e %.3le rroots %u\nskew: %.2lf\n", 
 		size_score, root_score, combined_score, 
 		num_real_roots, skewness);
-	for (i = 0; i <= degree; i++) {
-		fprintf(data->all_poly_file, "c%u: %s", i,
-				mpz_sgn(coeff1[i]) >= 0 ? " " : "");
-		mpz_out_str(data->all_poly_file, 10, coeff1[i]);
-		fprintf(data->all_poly_file, "\n");
-	}
-	for (i = 0; i <= 1; i++) {
-		fprintf(data->all_poly_file, "Y%u: %s", i,
-				mpz_sgn(coeff2[i]) >= 0 ? " " : "");
-		mpz_out_str(data->all_poly_file, 10, coeff2[i]);
-		fprintf(data->all_poly_file, "\n");
-	}
+	for (i = 0; i <= degree; i++)
+		gmp_fprintf(data->all_poly_file, "c%u: %Zd\n", i, coeff1[i]);
+	for (i = 0; i <= 1; i++)
+		gmp_fprintf(data->all_poly_file, "Y%u: %Zd\n", i, coeff2[i]);
 	fflush(data->all_poly_file);
 
 	save_poly(config, &poly);
+	mpz_poly_free(rpoly);
+	mpz_poly_free(apoly);
 }
 
 /*------------------------------------------------------------------*/
-static void find_poly_core(msieve_obj *obj, mp_t *n,
+static void find_poly_core(msieve_obj *obj, mpz_t n,
 			poly_config_t *config,
 			uint32 degree, uint32 deadline) {
 
@@ -315,7 +311,7 @@ static void find_poly_core(msieve_obj *obj, mp_t *n,
 
 	/* get poly select parameters */
 
-	digits = mp_log(n) / log(10.0);
+	digits = log(mpz_get_d(n)) / log(10.0);
 
 	switch (degree) {
 	case 4:
@@ -368,7 +364,7 @@ static void find_poly_core(msieve_obj *obj, mp_t *n,
 
 		/* fill stage 1 data */
 
-		mp2gmp(n, stage1_data.gmp_N);
+		mpz_set(stage1_data.gmp_N, n);
 		stage1_data.degree = degree;
 		stage1_data.norm_max = params.stage1_norm;
 		stage1_data.deadline = deadline;
@@ -395,13 +391,15 @@ static void find_poly_core(msieve_obj *obj, mp_t *n,
 			logprintf(obj, "time limit set to %.2f CPU-hours\n",
 				stage1_data.deadline / 3600.0);
 
-		if(digits >= 110) {
-			/* SB: tried L[1/3,c] fit; it is no better than this */
-			double e0 = exp(-log(10) * (0.0607 * digits + 2.25));
+		{ /* SB: tried L[1/3,c] fit; it is no better than this */
+			double e0 = (digits >= 121) ? (0.0607 * digits + 2.25):
+				                      (0.0526 * digits + 3.23);
+			if (degree == 4) e0 = 0.0625 * digits + 1.69;
+			e0 = exp(-log(10) * e0); 
 			logprintf(obj, "expecting poly E from %.2le to %.2le\n",
 				e0, 1.15 * e0);
 			/* seen exceptional polys with +40% but that's */
-			/* very rare. The fit is good for 110..232 digits */
+			/* very rare. The fit is good for 88..232 digits */
 		}
  
 		logprintf(obj, "searching leading coefficients from "
@@ -419,7 +417,7 @@ static void find_poly_core(msieve_obj *obj, mp_t *n,
 
 		/* fill stage 2 data */
 
-		mp2gmp(n, stage2_data.gmp_N);
+		mpz_set(stage2_data.gmp_N, n);
 		stage2_data.degree = degree;
 		stage2_data.max_norm = params.stage2_norm;
 		stage2_data.min_e = params.final_norm;
@@ -492,6 +490,9 @@ static void find_poly_core(msieve_obj *obj, mp_t *n,
 			if (gmp_sscanf(tmp, "%Zd %Zd", p, m) != 2)
 				continue;
 
+			if (arg == NULL)
+				gmp_printf("poly %Zd %Zd %Zd\n", ad, p, m);
+
 			poly_stage2_run(&stage2_data, ad, p, m, 1e100, arg);
 
 			if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
@@ -510,13 +511,13 @@ static void find_poly_core(msieve_obj *obj, mp_t *n,
 }
 
 /*------------------------------------------------------------------*/
-void find_poly_skew(msieve_obj *obj, mp_t *n,
+void find_poly_skew(msieve_obj *obj, mpz_t n,
 			poly_config_t *config,
 			uint32 deadline) {
 
 	/* search for NFS polynomials */
 
-	uint32 bits = mp_bits(n);
+	uint32 bits = mpz_sizeinbase(n, 2);
 
 	if (bits < 363) {		/* <= 110 digits */
 		find_poly_core(obj, n, config, 4, deadline);

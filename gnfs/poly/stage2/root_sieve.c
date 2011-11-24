@@ -189,7 +189,7 @@ root_sieve_run_core(poly_stage2_t *data, double initial_norm,
 	mpz_set_ui(rs->xdata.mp_lattice_size, 1);
 	line_min = -10;
 	line_max = 10;
-	max_norm = MIN(data->max_norm, 100 * initial_norm);
+	max_norm = MIN(data->max_norm * alpha_bias, 100 * initial_norm);
 
 	num_bounds = 0;
 	for (curr_norm = 0; curr_norm < max_norm;
@@ -202,7 +202,7 @@ root_sieve_run_core(poly_stage2_t *data, double initial_norm,
 		if (curr_norm > max_norm)
 			curr_norm = max_norm;
 
-		tmp_bound.max_norm = alpha_bias * curr_norm;
+		tmp_bound.max_norm = curr_norm;
 		compute_line_size(tmp_bound.max_norm,
 				&rs->apoly, rs->dbl_p, rs->dbl_d,
 				direction, line_min, line_max,
@@ -349,10 +349,11 @@ void root_sieve_init(root_sieve_t *rs)
 		curr_prime->num_powers = num_powers;
 		curr_prime->powers = (sieve_power_t *)xmalloc(num_powers *
 						sizeof(sieve_power_t));
-		curr_prime->contrib_array_size = power;
+		curr_prime->contrib_array_size = power * 
+					(MAX_SIEVE_PRIME_POWER / power);
 		curr_prime->contrib_array = (uint16 *)aligned_malloc(
-						power * UNROLL * 
-						sizeof(uint16), 64);
+					UNROLL * sizeof(uint16) * 
+					curr_prime->contrib_array_size, 64);
 
 		for (j = 0, power = p; j < num_powers; j++, power *= p) {
 
