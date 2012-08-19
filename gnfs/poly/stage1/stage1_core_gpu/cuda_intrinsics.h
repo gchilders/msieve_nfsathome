@@ -167,69 +167,6 @@ modinv32(uint32 a, uint32 p) {
 }
 
 /*------------------- Montgomery arithmetic --------------------------*/
-#ifdef HAVE_FERMI
-#define montmul48(a,b,n,w) montmul64(a,b,n,w)
-#else
-__device__ uint64 
-montmul48(uint64 a, uint64 b,
-		uint64 n, uint32 w) {
-
-	uint32 a0 = (uint32)a;
-	uint32 a1 = (uint32)(a >> 24);
-	uint32 b0 = (uint32)b;
-	uint32 b1 = (uint32)(b >> 24);
-	uint32 n0 = (uint32)n;
-	uint32 n1 = (uint32)(n >> 24);
-	uint32 acc0, acc1;
-	uint32 q0, q1;
-	uint32 prod_lo, prod_hi;
-	uint64 r;
-
-	acc0 = __umul24(a0, b0);
-	acc1 = __umul24hi(a0, b0) >> 16;
-	q0 = __umul24(acc0, w);
-	prod_lo = __umul24(q0, n0);
-	prod_hi = __umul24hi(q0, n0) >> 16;
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(acc1, prod_hi);
-	acc0 = acc0 >> 24 | acc1 << 8;
-
-	prod_lo = __umul24(a0, b1);
-	prod_hi = __umul24hi(a0, b1) >> 16;
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(0, prod_hi);
-	prod_lo = __umul24(a1, b0);
-	prod_hi = __umul24hi(a1, b0) >> 16;
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(acc1, prod_hi);
-	prod_lo = __umul24(q0, n1);
-	prod_hi = __umul24hi(q0, n1) >> 16;
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(acc1, prod_hi);
-	q1 = __umul24(acc0, w);
-	prod_lo = __umul24(q1, n0);
-	prod_hi = __umul24hi(q1, n0) >> 16;
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(acc1, prod_hi);
-	acc0 = acc0 >> 24 | acc1 << 8;
-
-	prod_lo = __umul24(a1, b1);
-	prod_hi = __umul24hi(a1, b1) >> 16;
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(0, prod_hi);
-	prod_lo = __umul24(q1, n1);
-	prod_hi = __umul24hi(q1, n1) >> 16;
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(acc1, prod_hi);
-
-	r = (uint64)acc1 << 32 | acc0;
-	if (r >= n)
-		return r - n;
-	else
-		return r;
-}
-#endif
-
 __device__ uint64 
 montmul64(uint64 a, uint64 b,
 		uint64 n, uint32 w) {
@@ -295,20 +232,6 @@ montmul64(uint64 a, uint64 b,
 }
 
 /*------------------ Initializing Montgomery arithmetic -----------------*/
-
-#ifdef HAVE_FERMI
-#define montmul24_w(n) montmul32_w(n)
-#else
-__device__ uint32 
-montmul24_w(uint32 n) {
-
-	uint32 res = 8 - (n % 8);
-	res = __umul24(res, 2 + __umul24(n, res));
-	res = __umul24(res, 2 + __umul24(n, res));
-	return __umul24(res, 2 + __umul24(n, res));
-}
-#endif
-
 __device__ uint32 
 montmul32_w(uint32 n) {
 
@@ -318,37 +241,6 @@ montmul32_w(uint32 n) {
 	res = res * (2 + n * res);
 	return res * (2 + n * res);
 }
-
-#ifdef HAVE_FERMI
-#define montmul48_r(n,w) montmul64_r(n,w)
-#else
-__device__ uint64 
-montmul48_r(uint64 n, uint32 w) {
-
-	uint32 shift;
-	uint32 i;
-	uint64 shifted_n;
-	uint64 res;
-
-	shift = __clzll(n);
-	shifted_n = n << shift;
-	res = -shifted_n;
-
-	for (i = 64 - shift; i < 60; i++) {
-		if (res >> 63)
-			res = res + res - shifted_n;
-		else
-			res = res + res;
-
-		if (res >= shifted_n)
-			res -= shifted_n;
-	}
-
-	res = res >> shift;
-	res = montmul48(res, res, n, w);
-	return montmul48(res, res, n, w);
-}
-#endif
 
 __device__ uint64 
 montmul64_r(uint64 n, uint32 w) {
