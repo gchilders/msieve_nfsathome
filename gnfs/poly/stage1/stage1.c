@@ -187,7 +187,7 @@ load_sort_engine(msieve_obj *obj, poly_search_t *poly)
 	}
 
 	poly->sort_engine_handle = load_dynamic_lib(libname);
-	if (poly->sort_engine == NULL) {
+	if (poly->sort_engine_handle == NULL) {
 		printf("error: failed to load GPU sorting engine\n");
 		exit(-1);
 	}
