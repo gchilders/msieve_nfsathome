@@ -186,7 +186,7 @@ load_sort_engine(msieve_obj *obj, poly_search_t *poly)
 		}
 	}
 
-	poly->sort_engine = load_dynamic_lib(libname);
+	poly->sort_engine_handle = load_dynamic_lib(libname);
 	if (poly->sort_engine == NULL) {
 		printf("error: failed to load GPU sorting engine\n");
 		exit(-1);
@@ -231,18 +231,22 @@ poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 
 	/* the sort engine uses the same CUDA context */
 
-	poly->sort_engine_init = get_lib_symbol(poly->sort_engine,
-						"sort_engine_init");
-	poly->sort_engine_free = get_lib_symbol(poly->sort_engine,
-						"sort_engine_free");
-	poly->sort_engine_run = get_lib_symbol(poly->sort_engine,
-						"sort_engine_run");
+	poly->sort_engine_init = get_lib_symbol(
+					poly->sort_engine_handle,
+					"sort_engine_init");
+	poly->sort_engine_free = get_lib_symbol(
+					poly->sort_engine_handle,
+					"sort_engine_free");
+	poly->sort_engine_run = get_lib_symbol(
+					poly->sort_engine_handle,
+					"sort_engine_run");
 	if (poly->sort_engine_init == NULL ||
 	    poly->sort_engine_free == NULL ||
 	    poly->sort_engine_run == NULL) {
 		printf("error: cannot find GPU sorting function\n");
 		exit(-1);
 	}
+	poly->sort_engine = poly->sort_engine_init();
 #endif
 }
 
@@ -264,8 +268,9 @@ poly_search_free(poly_search_t *poly)
 	mpz_clear(poly->gmp_high_coeff_begin);
 	mpz_clear(poly->gmp_high_coeff_end);
 #ifdef HAVE_CUDA
+	poly->sort_engine_free(poly->sort_engine);
+	unload_dynamic_lib(poly->sort_engine_handle);
 	CUDA_TRY(cuCtxDestroy(poly->gpu_context)) 
-	unload_dynamic_lib(poly->sort_engine);
 #endif
 }
 

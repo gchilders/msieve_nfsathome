@@ -115,7 +115,8 @@ typedef struct {
 
 	/* external sorting library, loaded dynamically */
 
-	libhandle_t sort_engine;
+	libhandle_t sort_engine_handle;
+	void * sort_engine;
 	sort_engine_init_func sort_engine_init;
 	sort_engine_free_func sort_engine_free;
 	sort_engine_run_func sort_engine_run;
