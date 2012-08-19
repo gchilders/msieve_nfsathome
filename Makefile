@@ -53,11 +53,11 @@ ifeq ($(CUDA),1)
 	# CUDA_LIB_DIR = /usr/lib
 	# CUDA_LIB_DIR = /usr/lib64
 
-	CFLAGS += -I"$(CUDA_INC_DIR)" -DHAVE_CUDA
+	CFLAGS += -I"$(CUDA_INC_DIR)" -I../b40c -DHAVE_CUDA
 
 	# the CUDA driver library has a different name in linux
-	# LIBS += "$(CUDA_LIB_DIR)/cuda.lib"
-	LIBS += -lcuda
+	LIBS += "$(CUDA_LIB_DIR)/cuda.lib"
+	# LIBS += -lcuda
 endif
 ifeq ($(MPI),1)
 	CC = mpicc -D_FILE_OFFSET_BITS=64

@@ -523,3 +523,51 @@ uint64 get_ram_size(void) {
 	return 0;
 #endif
 }
+
+/*--------------------------------------------------------------------*/
+libhandle_t load_dynamic_lib(const char *libname)
+{
+#if defined(WIN32) || defined(_WIN64)
+	HMODULE h = LoadLibraryA((LPCSTR)libname);
+
+	if (h == NULL)
+		printf("cannot load library '%s', error %u\n", 
+				libname, (uint32)GetLastError());
+#else
+	void * h = dlopen(libname, RTLD_LAZY);
+
+	if (h == NULL)
+		printf("cannot load library '%s': %s\n", 
+				libname, dlerror());
+#endif
+	return h;
+}
+
+/*--------------------------------------------------------------------*/
+void unload_dynamic_lib(libhandle_t h)
+{
+#if defined(WIN32) || defined(_WIN64)
+	FreeLibrary(h);
+#else
+	dlclose(h);
+#endif
+}
+
+/*--------------------------------------------------------------------*/
+void * get_lib_symbol(libhandle_t h, const char *symbol_name)
+{
+#if defined(WIN32) || defined(_WIN64)
+	void *s = GetProcAddress(h, (LPCSTR)symbol_name);
+
+	if (s == NULL)
+		printf("cannot load symbol '%s', error %u\n", 
+				symbol_name, (uint32)GetLastError());
+#else
+	void * s = dlsym(h, symbol_name);
+
+	if (s == NULL)
+		printf("cannot load symbol '%s': %s\n", 
+				symbol_name, dlerror());
+#endif
+	return s;
+}

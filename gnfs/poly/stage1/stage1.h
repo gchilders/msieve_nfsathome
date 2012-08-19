@@ -22,6 +22,7 @@ $Id$
 
 #include <poly_skew.h>
 #include <cuda_xface.h>
+#include <sort_engine.h> /* interface to GPU sorting library */
 
 #ifdef __cplusplus
 extern "C" {
@@ -111,6 +112,13 @@ typedef struct {
 	CUcontext gpu_context;
 	gpu_info_t *gpu_info;
 	CUmodule gpu_module;
+
+	/* external sorting library, loaded dynamically */
+
+	libhandle_t sort_engine;
+	sort_engine_init_func sort_engine_init;
+	sort_engine_free_func sort_engine_free;
+	sort_engine_run_func sort_engine_run;
 #endif
 
 	/* function to call when a collision is found */
