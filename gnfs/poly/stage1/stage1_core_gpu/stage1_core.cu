@@ -18,13 +18,12 @@ $Id$
 extern "C" {
 #endif
 
-__constant__ specialq_t q_batch[BATCH_SPECIALQ_MAX];
-
 /*------------------------------------------------------------------------*/
 __global__ void
 sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 			uint32 num_roots, uint32 *p_out, int64 *roots_out,
-			uint32 num_specialq, uint32 num_entries)
+			specialq_t *q_batch, uint32 num_specialq, 
+			uint32 num_entries, uint32 shift)
 {
 	uint32 offset, i, j, p, pp_w, q, end, gcd;
 	uint64 pp, pp_r, qq, tmp, inv;
@@ -68,7 +67,7 @@ sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 				if (newroot > pp / 2)
 					newroot -= pp;
 
-				p_out[j + num_entries * i] = p;
+				p_out[j + num_entries * i] = (i << shift) | p;
 				roots_out[j + num_entries * i] = newroot;
 			}
 		}
@@ -76,36 +75,76 @@ sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 }
 
 /*------------------------------------------------------------------------*/
+#define HASH1(word) ((uint32)(word) * (uint32)(2654435761UL))
+#define HASH2(word) ((uint32)(word) * ((uint32)40499 * 65543))
+
+__device__ void
+store_hit(found_t *found_array, uint32 found_array_size,
+		uint32 p1, uint32 p2,
+		int64 root, specialq_t *q)
+{
+	found_t *f = found_array + 
+		(((HASH1(p1) ^ HASH2(p2)) >> 8) % found_array_size);
+
+	f->p1 = p1;
+	f->p2 = p2;
+	f->q = q->p;
+	f->qroot = q->root;
+	f->offset = root;
+}
+
 __global__ void
 sieve_kernel_final(uint32 *p_array, int64 *roots, uint32 num_entries,
-			uint32 num_specialq, found_t *found_array)
+			specialq_t * q_batch, uint32 num_specialq, 
+			found_t *found_array, uint32 shift)
 {
-	uint32 i, my_threadid, num_threads, p_1, p_2;
-	int64 root_1, root_2;
+	uint32 i, j;
+	uint32 num_threads = gridDim.x * blockDim.x;
+	uint32 my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
+	uint32 mask = (1 << shift) - 1;
+	uint32 p_array_size = num_entries * num_specialq;
 
-	i = my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
-	num_threads = gridDim.x * blockDim.x;
+	for (i = my_threadid; i < p_array_size - 1; i += num_threads) {
 
-	while (i < num_entries * num_specialq - 1) {
-		p_1 = p_array[i];
-		p_2 = p_array[i + 1];
-		root_1 = roots[i];
-		root_2 = roots[i + 1];
+		int64 root1 = roots[i];
+		uint32 p1 = p_array[i];
 
-		if (p_1 > 0 && p_2 > 0 && root_1 == root_2) {
+		if (root1 == 0)
+			continue;
 
-			if (gcd32(p_1, p_2) == 1) {
-				found_t *f = found_array + my_threadid;
+		for (j = i + 1; j < p_array_size; j++) {
+			int64 root2 = roots[j];
+			uint32 p2 = p_array[j];
 
-				f->p1 = p_1;
-				f->p2 = p_2;
-				f->q = q_batch[i / num_entries].p;
-				f->qroot = q_batch[i / num_entries].root;
-				f->offset = root_1;
+			if (root1 != root2)
+				break;
+
+			if (p1 >= p2 &&
+			    (p1 >> shift) == (p2 >> shift) &&
+			    gcd32( (p1 & mask), (p2 & mask) ) == 1) {
+
+				store_hit(found_array, num_threads,
+						p1 & mask, p2 & mask, root1,
+						q_batch + (p1 >> shift));
 			}
 		}
 
-		i += num_threads;
+		for (j = i - 1; (int32)j >= 0; j--) {
+			int64 root2 = roots[j];
+			uint32 p2 = p_array[j];
+
+			if (root1 != root2)
+				break;
+
+			if (p1 >= p2 &&
+			    (p1 >> shift) == (p2 >> shift) &&
+			    gcd32( (p1 & mask), (p2 & mask) ) == 1) {
+
+				store_hit(found_array, num_threads,
+						p1 & mask, p2 & mask, root1,
+						q_batch + (p1 >> shift));
+			}
+		}
 	}
 }
 

@@ -54,7 +54,7 @@ static const char * gpu_kernel_names[] =
 static const gpu_arg_type_list_t gpu_kernel_args[] = 
 {
 	/* sieve_kernel_trans */
-	{ 8,
+	{ 10,
 		{
 		  GPU_ARG_PTR,
 		  GPU_ARG_UINT32,
@@ -62,18 +62,22 @@ static const gpu_arg_type_list_t gpu_kernel_args[] =
 		  GPU_ARG_UINT32,
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
+		  GPU_ARG_PTR,
+		  GPU_ARG_UINT32,
 		  GPU_ARG_UINT32,
 		  GPU_ARG_UINT32,
 		}
 	},
 	/* sieve_kernel_final */
-	{ 5,
+	{ 7,
 		{
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
 		  GPU_ARG_UINT32,
+		  GPU_ARG_PTR,
 		  GPU_ARG_UINT32,
 		  GPU_ARG_PTR,
+		  GPU_ARG_UINT32,
 		}
 	},
 };
@@ -246,18 +250,19 @@ store_p_soa(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 
 /*------------------------------------------------------------------------*/
 
-#define NUM_SPECIALQ_ALLOC (BATCH_SPECIALQ_MAX * 5)
-
 typedef struct {
 	uint32 num_specialq;
+	uint32 max_specialq;
 	specialq_t *specialq;
 } specialq_array_t;
 
 static void
-specialq_array_init(specialq_array_t *q_array)
+specialq_array_init(specialq_array_t *q_array, uint32 max_specialq)
 {
 	memset(q_array, 0, sizeof(specialq_array_t));
-	q_array->specialq = (specialq_t *)xmalloc(NUM_SPECIALQ_ALLOC *
+
+	q_array->max_specialq = max_specialq;
+	q_array->specialq = (specialq_t *)xmalloc(max_specialq *
 						sizeof(specialq_t));
 }
 
@@ -280,7 +285,7 @@ store_specialq(uint32 q, uint32 num_roots, uint64 *roots, void *extra)
 	specialq_array_t *q_array = (specialq_array_t *)extra;
 
 	for (i = 0; i < num_roots &&
-			q_array->num_specialq < NUM_SPECIALQ_ALLOC; i++) {
+			q_array->num_specialq < q_array->max_specialq; i++) {
 
 		q_array->specialq[q_array->num_specialq].p = q;
 		q_array->specialq[q_array->num_specialq].root = roots[i];
@@ -358,7 +363,7 @@ check_found_array(poly_search_t *poly, device_data_t *d)
 static uint32
 handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 			device_data_t *d, specialq_t *specialq_batch,
-			uint32 num_specialq)
+			uint32 num_specialq, uint32 shift)
 {
 	uint32 i;
 	uint32 quit = 0;
@@ -388,8 +393,10 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 		gpu_args[3].uint32_arg = soa->num_roots;
 		gpu_args[4].ptr_arg = (void *)(size_t)soa->dev_p_entry;
 		gpu_args[5].ptr_arg = (void *)(size_t)soa->dev_root_entry;
-		gpu_args[6].uint32_arg = num_specialq;
-		gpu_args[7].uint32_arg = d->num_entries;
+		gpu_args[6].ptr_arg = (void *)(size_t)d->gpu_q_array;
+		gpu_args[7].uint32_arg = num_specialq;
+		gpu_args[8].uint32_arg = d->num_entries;
+		gpu_args[9].uint32_arg = shift;
 		gpu_launch_set(d->launch + GPU_TRANS, gpu_args);
 
 		num_blocks = 1 + (num - 1) /
@@ -403,8 +410,8 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 	sort_data.keys_in_scratch = d->gpu_root_array_scratch;
 	sort_data.data_in = d->gpu_p_array;
 	sort_data.data_in_scratch = d->gpu_p_array_scratch;
-	sort_data.num_elements = d->num_entries;
-	sort_data.num_arrays = num_specialq;
+	sort_data.num_elements = num_specialq * d->num_entries;
+	sort_data.num_arrays = 1;
 	sort_data.key_bits = 8 * sizeof(uint64);
 	sort_data.sort_keys_only = 0;
 	poly->sort_engine_run(poly->sort_engine, &sort_data);
@@ -412,8 +419,10 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 	gpu_args[0].ptr_arg = (void *)(size_t)(d->gpu_p_array);
 	gpu_args[1].ptr_arg = (void *)(size_t)(d->gpu_root_array);
 	gpu_args[2].uint32_arg = d->num_entries;
-	gpu_args[3].uint32_arg = num_specialq;
-	gpu_args[4].ptr_arg = (void *)(size_t)(d->gpu_found_array);
+	gpu_args[3].ptr_arg = (void *)(size_t)(d->gpu_q_array);
+	gpu_args[4].uint32_arg = num_specialq;
+	gpu_args[5].ptr_arg = (void *)(size_t)(d->gpu_found_array);
+	gpu_args[6].uint32_arg = shift;
 	gpu_launch_set(d->launch + GPU_FINAL, gpu_args);
 
 	num_blocks = 1 + (d->num_entries * num_specialq - 1) /
@@ -441,17 +450,6 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 }
 
 /*------------------------------------------------------------------------*/
-static INLINE uint32
-next_2pow(uint32 n)
-{
-	uint32 i;
-
-	for (i = 1; i > 0 && i < n; i *= 2);
-
-	return i;
-}
-
-/*------------------------------------------------------------------------*/
 static uint32
 sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 		sieve_fb_t *sieve_special_q, sieve_fb_t *sieve_p,
@@ -463,12 +461,12 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 	uint32 all_q_done = 0;
 	uint32 degree = poly->degree;
 	uint32 num_batch_specialq;
-	uint32 pass_cnt = 0;
 	specialq_array_t q_array;
 	p_soa_array_t p_array;
 	device_data_t data;
 	double cpu_start_time = get_cpu_time();
 	CUmodule gpu_module = poly->gpu_module;
+	uint32 unused_bits;
 
 	*elapsed = 0;
 
@@ -476,7 +474,6 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 
 	data.p_array = &p_array;
 	p_soa_array_init(&p_array, degree);
-	specialq_array_init(&q_array);
 
 	/* build all the arithmetic progressions */
 
@@ -492,16 +489,46 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 
 		j += soa->num_p * soa->num_roots;
 	}
-	data.num_entries = next_2pow(j);
+
+	data.num_entries = j;
 
 #if 1
-	printf("aprogs: %u entries, %u roots\n", p_array.num_p, j);
+	printf("aprogs: %u entries, %u roots\n", 
+			p_array.num_p, data.num_entries);
 #endif
 
-	num_batch_specialq = MIN(BATCH_SPECIALQ_MAX,
-				poly->gpu_info->num_compute_units * 3);
-	num_batch_specialq = MAX(1, num_batch_specialq);
+	/* a single transformed array will not have enough
+	   elements for the GPU to sort efficiently; instead,
+	   we batch multiple arrays together and sort the
+	   entire batch. Array elements get their array number
+	   added into unused bits above each p, so the number
+	   of such unused bits is one limit on the batch size.
+	   The other limit is the amount of RAM on the card;
+	   we try to use less than 30% of it. Finally, we top
+	   out at 20 million total elements, which is far into
+	   asymptotically optimal throughput territory for 
+	   all known GPUs */
+
+	unused_bits = 1;
+	while (!(p_max & (1 << (31 - unused_bits))))
+		unused_bits++;
+
+	num_batch_specialq = 1 << unused_bits;
+
+	num_batch_specialq = MIN(num_batch_specialq,
+				20000000 / data.num_entries);
+
+	num_batch_specialq = MIN(num_batch_specialq,
+				(uint32)(0.3 * poly->gpu_info->global_mem_size /
+					 (24 * data.num_entries)));
+
+#if 1
 	printf("batch size %u\n", num_batch_specialq);
+#endif
+
+	/* grab several such batches at a time */
+
+	specialq_array_init(&q_array, MAX(100, 5 * num_batch_specialq));
 
 	CUDA_TRY(cuMemAlloc(&data.gpu_p_array,
 			num_batch_specialq *
@@ -517,8 +544,8 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 			num_batch_specialq *
 			data.num_entries * sizeof(uint64)))
 
-	CUDA_TRY(cuModuleGetGlobal(&data.gpu_q_array, 
-			NULL, gpu_module, "q_batch"))
+	CUDA_TRY(cuMemAlloc(&data.gpu_q_array,
+			num_batch_specialq * sizeof(specialq_t)))
 
 	for (i = j = 0; i < p_array.num_arrays; i++) {
 		p_soa_var_t *soa = p_array.soa + i;
@@ -594,7 +621,7 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 		all_q_done = sieve_fb_next(sieve_special_q, poly,
 				store_specialq, &q_array) == P_SEARCH_DONE;
 
-		if (all_q_done || q_array.num_specialq == NUM_SPECIALQ_ALLOC) {
+		if (all_q_done || q_array.num_specialq == q_array.max_specialq) {
 
 			i = 0;
 			while (i < q_array.num_specialq) {
@@ -605,13 +632,13 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 
 				quit = handle_special_q_batch(obj, poly, &data,
 						q_array.specialq + i,
-						curr_num_specialq);
+						curr_num_specialq,
+						32 - unused_bits);
 
 				if (quit)
 					break;
 
-				if (++pass_cnt % 16 == 0)
-					check_found_array(poly, &data);
+				check_found_array(poly, &data);
 
 				i += curr_num_specialq;
 			}
@@ -632,6 +659,7 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 	CUDA_TRY(cuMemFree(data.gpu_root_array))
 	CUDA_TRY(cuMemFree(data.gpu_root_array_scratch))
 	CUDA_TRY(cuMemFree(data.gpu_found_array))
+	CUDA_TRY(cuMemFree(data.gpu_q_array))
 	for (i = 0; i < p_array.num_arrays; i++) {
 		p_soa_var_t *soa = p_array.soa + i;
 
