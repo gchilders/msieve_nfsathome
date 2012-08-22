@@ -75,22 +75,26 @@ sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 }
 
 /*------------------------------------------------------------------------*/
-#define HASH1(word) ((uint32)(word) * (uint32)(2654435761UL))
-#define HASH2(word) ((uint32)(word) * ((uint32)40499 * 65543))
-
 __device__ void
 store_hit(found_t *found_array, uint32 found_array_size,
 		uint32 p1, uint32 p2,
 		int64 root, specialq_t *q)
 {
-	found_t *f = found_array + 
-		(((HASH1(p1) ^ HASH2(p2)) >> 8) % found_array_size);
+	/* don't use atomicInc because we don't want
+	   wraparound to occur */
 
-	f->p1 = p1;
-	f->p2 = p2;
-	f->q = q->p;
-	f->qroot = q->root;
-	f->offset = root;
+	uint32 index = atomicAdd(&found_array[0].p1, 1);
+
+	if (index < found_array_size - 1) {
+
+		found_t *f = found_array + index + 1;
+
+		f->p1 = p1;
+		f->p2 = p2;
+		f->q = q->p;
+		f->qroot = q->root;
+		f->offset = root;
+	}
 }
 
 __global__ void
@@ -123,7 +127,7 @@ sieve_kernel_final(uint32 *p_array, int64 *roots, uint32 num_entries,
 			    (p1 >> shift) == (p2 >> shift) &&
 			    gcd32( (p1 & mask), (p2 & mask) ) == 1) {
 
-				store_hit(found_array, num_threads,
+				store_hit(found_array, FOUND_ARRAY_SIZE,
 						p1 & mask, p2 & mask, root1,
 						q_batch + (p1 >> shift));
 			}
@@ -140,7 +144,7 @@ sieve_kernel_final(uint32 *p_array, int64 *roots, uint32 num_entries,
 			    (p1 >> shift) == (p2 >> shift) &&
 			    gcd32( (p1 & mask), (p2 & mask) ) == 1) {
 
-				store_hit(found_array, num_threads,
+				store_hit(found_array, FOUND_ARRAY_SIZE,
 						p1 & mask, p2 & mask, root1,
 						q_batch + (p1 >> shift));
 			}

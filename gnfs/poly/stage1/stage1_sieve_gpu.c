@@ -325,33 +325,32 @@ static void
 check_found_array(poly_search_t *poly, device_data_t *d)
 {
 	uint32 i;
-	uint32 found_array_size = d->found_array_size;
+	uint32 found_array_size;
 	found_t *found_array = d->found_array;
 
 	CUDA_TRY(cuMemcpyDtoH(found_array, d->gpu_found_array,
 			d->found_array_size * sizeof(found_t)))
-	CUDA_TRY(cuMemsetD8(d->gpu_found_array, 0,
-			d->found_array_size * sizeof(found_t)))
+	/* clear only the first element */
+	CUDA_TRY(cuMemsetD8(d->gpu_found_array, 0, sizeof(found_t)))
 
-	for (i = 0; i < found_array_size; i++) {
+	found_array_size = MIN(FOUND_ARRAY_SIZE - 1,
+				found_array[0].p1);
+
+	for (i = 1; i <= found_array_size; i++) {
 		found_t *found = found_array + i;
 		uint32 p1 = found->p1;
 		uint32 p2 = found->p2;
 		uint32 q = found->q;
 		uint64 qroot = found->qroot;
 		int64 offset = found->offset;
+		double check = (double)p1 * p2;
 
-		if (p1 != 0) {
-			double check = (double)p1 * p2;
+		check = check * check * poly->coeff_max
+				/ poly->m0 / poly->degree;
 
-			check = check * check * poly->coeff_max
-					/ poly->m0 / poly->degree;
-
-			if (fabs((double)offset) < check) {
-
-				handle_collision(poly, (uint64)p1 * p2, q,
-						qroot, offset);
-			}
+		if (fabs((double)offset) < check) {
+			handle_collision(poly, (uint64)p1 * p2, q,
+					qroot, offset);
 		}
 	}
 }
@@ -526,9 +525,12 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 	printf("batch size %u\n", num_batch_specialq);
 #endif
 
-	/* grab several such batches at a time */
+	/* grab several such batches at a time if the batch size
+	   is not large */
 
-	specialq_array_init(&q_array, MAX(100, 5 * num_batch_specialq));
+	specialq_array_init(&q_array, num_batch_specialq < 100 ?
+				5 * num_batch_specialq :
+				num_batch_specialq);
 
 	CUDA_TRY(cuMemAlloc(&data.gpu_p_array,
 			num_batch_specialq *
@@ -596,8 +598,7 @@ sieve_specialq_64(msieve_obj *obj, poly_search_t *poly,
 	CUDA_TRY(cuFuncSetBlockShape(data.launch[GPU_FINAL].kernel_func,
 				i, 1, 1))
 
-	data.found_array_size = data.launch[GPU_FINAL].threads_per_block *
-			poly->gpu_info->num_compute_units;
+	data.found_array_size = FOUND_ARRAY_SIZE;
 	CUDA_TRY(cuMemAlloc(&data.gpu_found_array, sizeof(found_t) *
 			data.found_array_size))
 	data.found_array = (found_t *)xmalloc(sizeof(found_t) *
