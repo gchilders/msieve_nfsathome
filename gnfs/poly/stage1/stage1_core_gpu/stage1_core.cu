@@ -20,62 +20,14 @@ extern "C" {
 
 /*------------------------------------------------------------------------*/
 __global__ void
-sieve_kernel_trans_32(uint32 *p_array, uint32 num_p, uint32 *start_roots,
-			uint32 num_roots, uint32 *p_out, int32 *roots_out,
-			specialq_t *q_batch, uint32 num_specialq, 
-			uint32 num_entries, uint32 shift)
-{
-	uint32 offset, i, j, p, pp_w, q, end, gcd;
-	uint32 pp, pp_r, inv, newroot;
-
-	offset = blockIdx.x * blockDim.x + threadIdx.x;
-	if (offset >= num_p)
-		return;
-
-	p = p_array[offset];
-	pp = p * p;
-	pp_w = montmul32_w(pp);
-	pp_r = montmul32_r(pp);
-	end = num_p * num_roots;
-
-	q = 0;
-	for (i = 0; i < num_specialq; i++) {
-		if (q != q_batch[i].p) {
-			q = q_batch[i].p;
-			gcd = gcd32(p, q);
-
-			if (gcd == 1) {
-				inv = modinv32(wide_sqr32(q) % pp, pp);
-				inv = montmul32(inv, pp_r, pp, pp_w);
-			}
-		}
-
-		for (j = offset; j < end; j += num_p) {
-
-			if (gcd == 1) {
-				newroot = modsub32(start_roots[j],
-						q_batch[i].root % pp, pp);
-				newroot = montmul32(newroot, inv, pp, pp_w);
-
-				if (newroot > pp / 2)
-					newroot -= pp;
-
-				p_out[j + num_entries * i] = (i << shift) | p;
-				roots_out[j + num_entries * i] = newroot;
-			}
-		}
-	}
-}
-
-/*------------------------------------------------------------------------*/
-__global__ void
-sieve_kernel_trans_64(uint32 *p_array, uint32 num_p, uint64 *start_roots,
+sieve_kernel_trans(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 			uint32 num_roots, uint32 *p_out, int64 *roots_out,
 			specialq_t *q_batch, uint32 num_specialq, 
 			uint32 num_entries, uint32 shift)
 {
 	uint32 offset, i, j, p, pp_w, q, end, gcd;
-	uint64 pp, pp_r, qq, tmp, inv, newroot;
+	uint64 pp, pp_r, qq, tmp, inv;
+	int64 newroot;
 
 	offset = blockIdx.x * blockDim.x + threadIdx.x;
 	if (offset >= num_p)
@@ -145,67 +97,8 @@ store_hit(found_t *found_array, uint32 found_array_size,
 	}
 }
 
-/*------------------------------------------------------------------------*/
 __global__ void
-sieve_kernel_final_32(uint32 *p_array, int32 *roots, uint32 num_entries,
-			specialq_t * q_batch, uint32 num_specialq, 
-			found_t *found_array, uint32 shift)
-{
-	uint32 i, j;
-	uint32 num_threads = gridDim.x * blockDim.x;
-	uint32 my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
-	uint32 mask = (1 << shift) - 1;
-	uint32 p_array_size = num_entries * num_specialq;
-
-	for (i = my_threadid; i < p_array_size - 1; i += num_threads) {
-
-		int32 root1 = roots[i];
-		uint32 p1 = p_array[i];
-
-		if (root1 == 0)
-			continue;
-
-		for (j = i + 1; j < p_array_size; j++) {
-			int32 root2 = roots[j];
-			uint32 p2 = p_array[j];
-
-			if (root1 != root2)
-				break;
-
-			if (p1 >= p2 &&
-			    (p1 >> shift) == (p2 >> shift) &&
-			    gcd32( (p1 & mask), (p2 & mask) ) == 1) {
-
-				store_hit(found_array, FOUND_ARRAY_SIZE,
-						p1 & mask, p2 & mask, 
-						(int64)root1,
-						q_batch + (p1 >> shift));
-			}
-		}
-
-		for (j = i - 1; (int32)j >= 0; j--) {
-			int64 root2 = roots[j];
-			uint32 p2 = p_array[j];
-
-			if (root1 != root2)
-				break;
-
-			if (p1 >= p2 &&
-			    (p1 >> shift) == (p2 >> shift) &&
-			    gcd32( (p1 & mask), (p2 & mask) ) == 1) {
-
-				store_hit(found_array, FOUND_ARRAY_SIZE,
-						p1 & mask, p2 & mask, 
-						(int64)root1,
-						q_batch + (p1 >> shift));
-			}
-		}
-	}
-}
-
-/*------------------------------------------------------------------------*/
-__global__ void
-sieve_kernel_final_64(uint32 *p_array, int64 *roots, uint32 num_entries,
+sieve_kernel_final(uint32 *p_array, int64 *roots, uint32 num_entries,
 			specialq_t * q_batch, uint32 num_specialq, 
 			found_t *found_array, uint32 shift)
 {
