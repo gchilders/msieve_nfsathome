@@ -546,6 +546,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 				(uint32)(0.3 * poly->gpu_info->global_mem_size /
 					 (2 * (sizeof(uint32) + root_bytes) * 
 					  data.num_entries)));
+	num_batch_specialq = MAX(1, num_batch_specialq);
 
 #if 1
 	printf("batch size %u\n", num_batch_specialq);
