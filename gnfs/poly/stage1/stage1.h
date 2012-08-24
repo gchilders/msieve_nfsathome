@@ -22,7 +22,10 @@ $Id$
 
 #include <poly_skew.h>
 #include <cuda_xface.h>
+
+#ifdef HAVE_CUDA
 #include <sort_engine.h> /* interface to GPU sorting library */
+#endif
 
 #ifdef __cplusplus
 extern "C" {
