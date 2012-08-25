@@ -207,20 +207,19 @@ static void
 p_soa_array_compact(p_soa_array_t *s)
 {
 	uint32 i, j;
+	uint32 num_p;
 
-	i = 0;
-	while (i < s->num_arrays) {
-		if (s->soa[i].num_p == 0) {
-
-			s->num_arrays--;
+	for (i = j = num_p = 0; i < s->num_arrays; i++) {
+		if (s->soa[i].num_p < 50) {
 			p_soa_var_free(s->soa + i);
-			for (j = i; j < s->num_arrays; j++)
-				s->soa[j] = s->soa[j + 1];
 		}
 		else {
-			i++;
+			num_p = s->soa[i].num_p;
+			s->soa[j++] = s->soa[i];
 		}
 	}
+	s->num_arrays = j;
+	s->num_p = num_p;
 }
 
 static void
@@ -550,7 +549,12 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 			&p_array) != P_SEARCH_DONE) {
 		;
 	}
+
 	p_soa_array_compact(&p_array);
+	if (p_array.num_p == 0) {
+		p_soa_array_free(&p_array);
+		return 0;
+	}
 
 	for (i = j = 0; i < p_array.num_arrays; i++) {
 		p_soa_var_t *soa = p_array.soa + i;
