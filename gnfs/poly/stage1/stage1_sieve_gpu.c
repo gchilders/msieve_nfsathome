@@ -431,6 +431,7 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 			        num_p * soa->num_roots * num_specialq) /
 				20000;
 		total_blocks = MIN(total_blocks, 1000);
+		total_blocks = MAX(total_blocks, 1);
 
 		/* choose the number of threads per block to be
 		   - a multiple of the warp size between 128 and 256
@@ -664,9 +665,11 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	   to the block shape; set it once up front */
 
 	CUDA_TRY(cuFuncSetBlockShape(data.launch[GPU_FINAL_32].kernel_func,
-			MIN(256, data.launch[i].threads_per_block), 1, 1))
+			MIN(256, data.launch[GPU_FINAL_32].threads_per_block), 
+			1, 1))
 	CUDA_TRY(cuFuncSetBlockShape(data.launch[GPU_FINAL_64].kernel_func,
-			MIN(256, data.launch[i].threads_per_block), 1, 1))
+			MIN(256, data.launch[GPU_FINAL_64].threads_per_block), 
+			1, 1))
 
 	data.found_array_size = FOUND_ARRAY_SIZE;
 	CUDA_TRY(cuMemAlloc(&data.gpu_found_array, sizeof(found_t) *
@@ -816,6 +819,7 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, double deadline)
 				/ num_pieces;
 		uint32 piece = get_rand(&obj->seed1, &obj->seed2)
 				% num_pieces;
+		piece = 1;
 
 		printf("randomizing rational coefficient: "
 			"using piece #%u of %u\n",
