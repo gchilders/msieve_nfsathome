@@ -819,7 +819,6 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, double deadline)
 				/ num_pieces;
 		uint32 piece = get_rand(&obj->seed1, &obj->seed2)
 				% num_pieces;
-		piece = 1;
 
 		printf("randomizing rational coefficient: "
 			"using piece #%u of %u\n",
