@@ -660,20 +660,22 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 				sizeof(gpu_launch_t));
 
 	for (i = 0; i < NUM_GPU_FUNCTIONS; i++) {
+		gpu_launch_t *launch = data.launch + i;
+
 		gpu_launch_init(gpu_module, gpu_kernel_names[i],
-				gpu_kernel_args + (i / 2),
-				data.launch + i);
+				gpu_kernel_args + (i / 2), launch);
+
+		if (i == 2 || i == 3) {
+			/* performance of the cleanup functions is not 
+			   that sensitive to the block shape; set it 
+			   once up front */
+
+			launch->threads_per_block = 
+					MIN(256, launch->threads_per_block);
+			CUDA_TRY(cuFuncSetBlockShape(launch->kernel_func,
+					launch->threads_per_block, 1, 1))
+		}
 	}
-
-	/* performance of the cleanup functions is not that sensitive
-	   to the block shape; set it once up front */
-
-	CUDA_TRY(cuFuncSetBlockShape(data.launch[GPU_FINAL_32].kernel_func,
-			MIN(256, data.launch[GPU_FINAL_32].threads_per_block), 
-			1, 1))
-	CUDA_TRY(cuFuncSetBlockShape(data.launch[GPU_FINAL_64].kernel_func,
-			MIN(256, data.launch[GPU_FINAL_64].threads_per_block), 
-			1, 1))
 
 	data.found_array_size = FOUND_ARRAY_SIZE;
 	CUDA_TRY(cuMemAlloc(&data.gpu_found_array, sizeof(found_t) *
