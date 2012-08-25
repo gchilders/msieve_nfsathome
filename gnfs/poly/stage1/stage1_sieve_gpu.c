@@ -58,7 +58,7 @@ static const char * gpu_kernel_names[] =
 static const gpu_arg_type_list_t gpu_kernel_args[] = 
 {
 	/* sieve_kernel_trans_{32|64} */
-	{ 10,
+	{ 11,
 		{
 		  GPU_ARG_PTR,
 		  GPU_ARG_UINT32,
@@ -67,6 +67,7 @@ static const gpu_arg_type_list_t gpu_kernel_args[] =
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
+		  GPU_ARG_UINT32,
 		  GPU_ARG_UINT32,
 		  GPU_ARG_UINT32,
 		  GPU_ARG_UINT32,
@@ -394,9 +395,17 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 	sort_data_t sort_data;
 	uint32 root_bytes = root64 ? sizeof(uint64) : sizeof(uint32);
 	gpu_launch_t *launch;
+	uint32 num_q, curr_q;
 
 	CUDA_TRY(cuEventRecord(d->start, 0))
 
+	for (i = num_q = curr_q = 0; i < num_specialq; i++) {
+		if (specialq_batch[i].p != curr_q) {
+			num_q++;
+			curr_q = specialq_batch[i].p;
+		}
+	}
+	
 	CUDA_TRY(cuMemcpyHtoD(d->gpu_q_array, specialq_batch,
 			sizeof(specialq_t) * num_specialq))
 
@@ -405,24 +414,62 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 
 	for (i = 0; i < p_array->num_arrays; i++) {
 		p_soa_var_t *soa = p_array->soa + i;
-		uint32 num = soa->num_p;
+		uint32 num_p = soa->num_p;
+		uint32 blocks_x, blocks_y;
+		uint32 size_x, size_y;
+		uint32 total_blocks;
 
 		launch = d->launch + (root64 ?  GPU_TRANS_64 : GPU_TRANS_32);
+
+		/* perform a block decomposition so that all the
+		   soa's generate blocks with about the same amount
+		   of arithmetic. There is a modular multiply for
+		   each root and a modular inverse for each (p,q) pair, 
+		   which we count as 20 multiplies */
+
+		total_blocks = (20 * num_p * num_q +
+			        num_p * soa->num_roots * num_specialq) /
+				20000;
+		total_blocks = MIN(total_blocks, 1000);
+
+		/* choose the number of threads per block to be
+		   - a multiple of the warp size between 128 and 256
+		   - that can generate the desired number of blocks
+		     so the whole dataset is covered, while maximizing
+		     the size of the blocks on the borders */
+
+		size_x = MIN(256, launch->threads_per_block);
+		while (1) {
+
+			blocks_x = (num_p + size_x - 1) / size_x;
+			blocks_y = (total_blocks + blocks_x - 1) / blocks_x;
+			size_y = (num_specialq + blocks_y - 1) / blocks_y;
+
+			if (size_x == 128 ||
+			    blocks_x * size_x - num_p <= size_x / 3)
+				break;
+
+			size_x -= poly->gpu_info->warp_size;
+		}
+
 		gpu_args[0].ptr_arg = (void *)(size_t)soa->dev_p;
-		gpu_args[1].uint32_arg = num;
+		gpu_args[1].uint32_arg = num_p;
 		gpu_args[2].ptr_arg = (void *)(size_t)soa->dev_start_roots;
 		gpu_args[3].uint32_arg = soa->num_roots;
 		gpu_args[4].ptr_arg = (void *)(size_t)soa->dev_p_entry;
 		gpu_args[5].ptr_arg = (void *)(size_t)soa->dev_root_entry;
 		gpu_args[6].ptr_arg = (void *)(size_t)d->gpu_q_array;
 		gpu_args[7].uint32_arg = num_specialq;
-		gpu_args[8].uint32_arg = d->num_entries;
-		gpu_args[9].uint32_arg = shift;
+		gpu_args[8].uint32_arg = size_y;
+		gpu_args[9].uint32_arg = d->num_entries;
+		gpu_args[10].uint32_arg = shift;
 		gpu_launch_set(launch, gpu_args);
 
-		num_blocks = 1 + (num - 1) / launch->threads_per_block;
+		CUDA_TRY(cuFuncSetBlockShape(launch->kernel_func, 
+				size_x, 1, 1))
+
 		CUDA_TRY(cuLaunchGridAsync(launch->kernel_func,
-				num_blocks, 1, soa->stream))
+				blocks_x, blocks_y, soa->stream))
 	}
 
 	sort_data.keys_in = d->gpu_root_array;
@@ -611,10 +658,15 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 		gpu_launch_init(gpu_module, gpu_kernel_names[i],
 				gpu_kernel_args + (i / 2),
 				data.launch + i);
-
-		CUDA_TRY(cuFuncSetBlockShape(data.launch[i].kernel_func,
-			MIN(256, data.launch[i].threads_per_block), 1, 1))
 	}
+
+	/* performance of the cleanup functions is not that sensitive
+	   to the block shape; set it once up front */
+
+	CUDA_TRY(cuFuncSetBlockShape(data.launch[GPU_FINAL_32].kernel_func,
+			MIN(256, data.launch[i].threads_per_block), 1, 1))
+	CUDA_TRY(cuFuncSetBlockShape(data.launch[GPU_FINAL_64].kernel_func,
+			MIN(256, data.launch[i].threads_per_block), 1, 1))
 
 	data.found_array_size = FOUND_ARRAY_SIZE;
 	CUDA_TRY(cuMemAlloc(&data.gpu_found_array, sizeof(found_t) *

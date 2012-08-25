@@ -23,10 +23,11 @@ __global__ void
 sieve_kernel_trans_32(uint32 *p_array, uint32 num_p, uint32 *start_roots,
 			uint32 num_roots, uint32 *p_out, int32 *roots_out,
 			specialq_t *q_batch, uint32 num_specialq, 
-			uint32 num_entries, uint32 shift)
+			uint32 specialq_block, uint32 num_entries, uint32 shift)
 {
 	uint32 offset, i, j, p, pp_w, q, end, gcd;
 	uint32 pp, pp_r, inv, newroot;
+	uint32 specialq_start, specialq_end;
 
 	offset = blockIdx.x * blockDim.x + threadIdx.x;
 	if (offset >= num_p)
@@ -38,8 +39,11 @@ sieve_kernel_trans_32(uint32 *p_array, uint32 num_p, uint32 *start_roots,
 	pp_r = montmul32_r(pp);
 	end = num_p * num_roots;
 
+	specialq_start = blockIdx.y * specialq_block;
+	specialq_end = MIN(specialq_start + specialq_block, num_specialq);
+
 	q = 0;
-	for (i = 0; i < num_specialq; i++) {
+	for (i = specialq_start; i < specialq_end; i++) {
 		if (q != q_batch[i].p) {
 			q = q_batch[i].p;
 			gcd = gcd32(p, q);
@@ -72,10 +76,11 @@ __global__ void
 sieve_kernel_trans_64(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 			uint32 num_roots, uint32 *p_out, int64 *roots_out,
 			specialq_t *q_batch, uint32 num_specialq, 
-			uint32 num_entries, uint32 shift)
+			uint32 specialq_block, uint32 num_entries, uint32 shift)
 {
 	uint32 offset, i, j, p, pp_w, q, end, gcd;
 	uint64 pp, pp_r, qq, tmp, inv, newroot;
+	uint32 specialq_start, specialq_end;
 
 	offset = blockIdx.x * blockDim.x + threadIdx.x;
 	if (offset >= num_p)
@@ -87,8 +92,11 @@ sieve_kernel_trans_64(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 	pp_r = montmul64_r(pp, pp_w);
 	end = num_p * num_roots;
 
+	specialq_start = blockIdx.y * specialq_block;
+	specialq_end = MIN(specialq_start + specialq_block, num_specialq);
+
 	q = 0;
-	for (i = 0; i < num_specialq; i++) {
+	for (i = specialq_start; i < specialq_end; i++) {
 		if (q != q_batch[i].p) {
 			q = q_batch[i].p;
 			gcd = gcd32(p, q);
