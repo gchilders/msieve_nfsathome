@@ -108,9 +108,8 @@ handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
 	mpz_sub(poly->tmp1, poly->trans_N, poly->tmp1);
 	mpz_tdiv_r(poly->tmp3, poly->tmp1, poly->tmp2);
 	if (mpz_cmp_ui(poly->tmp3, (mp_limb_t)0)) {
-		gmp_printf("poly %Zd %Zd %Zd\n",
+		gmp_printf("crap %Zd %Zd %Zd\n",
 				poly->high_coeff, poly->p, poly->m);
-		printf("crap\n");
 		return;
 	}
 

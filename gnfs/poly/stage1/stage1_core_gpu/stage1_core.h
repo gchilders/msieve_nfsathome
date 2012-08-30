@@ -37,6 +37,7 @@ typedef struct {
 typedef struct {
 	uint32 p;
 	uint32 pad;
+	uint64 pp;
 	uint64 root;
 } specialq_t;
 

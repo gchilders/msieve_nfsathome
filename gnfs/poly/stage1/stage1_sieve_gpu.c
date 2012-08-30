@@ -308,6 +308,7 @@ store_specialq(uint32 q, uint32 num_roots, uint64 *roots, void *extra)
 			q_array->num_specialq < q_array->max_specialq; i++) {
 
 		q_array->specialq[q_array->num_specialq].p = q;
+		q_array->specialq[q_array->num_specialq].pp = (uint64)q * q;
 		q_array->specialq[q_array->num_specialq].root = roots[i];
 
 		q_array->num_specialq++;
@@ -424,9 +425,9 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 		   soa's generate blocks with about the same amount
 		   of arithmetic. There is a modular multiply for
 		   each root and a modular inverse for each (p,q) pair, 
-		   which we count as 20 multiplies */
+		   which we count as 5 multiplies */
 
-		total_blocks = (20 * num_p * num_q +
+		total_blocks = (5 * num_p * num_q +
 			        num_p * soa->num_roots * num_specialq) /
 				20000;
 		total_blocks = MIN(total_blocks, 1000);
