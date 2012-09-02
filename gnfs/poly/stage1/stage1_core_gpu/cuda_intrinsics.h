@@ -15,10 +15,6 @@ $Id$
 #if defined(__CUDACC__) && !defined(CUDA_INTRINSICS_H)
 #define CUDA_INTRINSICS_H
 
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 200
-#define HAVE_FERMI
-#endif
-
 #ifdef __cplusplus
 extern "C"
 {
@@ -29,32 +25,28 @@ typedef unsigned int uint32;
 typedef unsigned long long uint64;
 typedef long long int64;
 
-#define MIN(x, y) ((x) < (y) ? (x) : (y))
-
 /*------------------- Low-level functions ------------------------------*/
 
-__device__ uint32
-__uaddo(uint32 a, uint32 b) {
-	uint32 res;
-	asm("add.cc.u32 %0, %1, %2; /* inline */ \n\t" 
-	    : "=r" (res) : "r" (a) , "r" (b));
-	return res;
+__device__ void
+accum3(uint32 &a0, uint32 &a1, uint32 &a2,
+	uint32 b0, uint32 b1) {
+
+	asm("add.cc.u32 %0, %0, %3;   /* inline */   \n\t"
+	    "addc.cc.u32 %1, %1, %4;   /* inline */   \n\t"
+	    "addc.u32 %2, %2, %5;   /* inline */   \n\t"
+		: "+r"(a0), "+r"(a1), "+r"(a2)
+		: "r"(b0), "r"(b1), "r"(0) );
 }
 
-__device__ uint32
-__uaddc(uint32 a, uint32 b) {
-	uint32 res;
-	asm("addc.cc.u32 %0, %1, %2; /* inline */ \n\t" 
-	    : "=r" (res) : "r" (a) , "r" (b));
-	return res;
-}
+__device__ void
+accum3_shift(uint32 &a0, uint32 &a1, uint32 &a2,
+	uint32 b0, uint32 b1) {
 
-__device__ uint32
-__umul24hi(uint32 a, uint32 b) {
-	uint32 res;
-	asm("mul24.hi.u32 %0, %1, %2; /* inline */ \n\t" 
-	    : "=r" (res) : "r" (a) , "r" (b));
-	return res;
+	asm("add.cc.u32 %0, %1, %3;   /* inline */   \n\t"
+	    "addc.cc.u32 %1, %2, %4;   /* inline */   \n\t"
+	    "addc.u32 %2, %5, %5;   /* inline */   \n\t"
+		: "=r"(a0), "+r"(a1), "+r"(a2)
+		: "r"(b0), "r"(b1), "r"(0) );
 }
 
 /*----------------- Squaring ----------------------------------------*/
@@ -128,20 +120,25 @@ modsub64(uint64 a, uint64 b, uint64 p)
 }
 
 /*------------------------------- GCD --------------------------------*/
-
 __device__  uint32
 gcd32(uint32 x, uint32 y) {
-	uint32 tmp;
 
-	if (y < x) {
-		tmp = x; x = y; y = tmp;
-	}
+	/* assumes x and y are odd and nonzero */
 
-	while (y > 0) {
-		x = x % y;
-		tmp = x; x = y; y = tmp;
-	}
-	return x;
+	uint32 u = x; 
+	uint32 v = y;
+
+	do {
+		uint32 shift = 31 - __clz(v & -v);
+		v = v >> shift;
+
+		x = __min(u, v);
+		y = __max(u, v);
+		u = x;
+		v = y - x;
+	} while (v != 0);
+
+	return u;
 }
 
 /*-------------------------- Modular inverse -------------------------*/
@@ -191,8 +188,8 @@ __device__ uint32
 montmul32(uint32 a, uint32 b,
 		uint32 n, uint32 w) {
 
-	uint32 acc0, acc1, acc2;
-	uint32 q, r;
+	uint32 acc0, acc1, acc2 = 0;
+	uint32 q;
 	uint32 prod_lo, prod_hi;
 
 	acc0 = a * b;
@@ -203,14 +200,12 @@ montmul32(uint32 a, uint32 b,
 	prod_lo = q * n;
 	prod_hi = __umulhi(q, n);
 
-	acc0 = __uaddo(acc0, prod_lo);
-	r = __uaddc(acc1, prod_hi);
-	acc2 = __uaddc(0, 0);
+	accum3(acc0, acc1, acc2, prod_lo, prod_hi);
 
-	if (acc2 || r >= n)
-		return r - n;
+	if (acc2 || acc1 >= n)
+		return acc1 - n;
 	else
-		return r;
+		return acc1;
 }
 
 __device__ uint64 
@@ -223,7 +218,7 @@ montmul64(uint64 a, uint64 b,
 	uint32 b1 = (uint32)(b >> 32);
 	uint32 n0 = (uint32)n;
 	uint32 n1 = (uint32)(n >> 32);
-	uint32 acc0, acc1, acc2;
+	uint32 acc0, acc1, acc2 = 0;
 	uint32 q0, q1;
 	uint32 prod_lo, prod_hi;
 	uint64 r;
@@ -233,42 +228,28 @@ montmul64(uint64 a, uint64 b,
 	q0 = acc0 * w;
 	prod_lo = q0 * n0;
 	prod_hi = __umulhi(q0, n0);
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(acc1, prod_hi);
-	acc2 = __uaddc(0, 0);
+	accum3(acc0, acc1, acc2, prod_lo, prod_hi);
 
 	prod_lo = a0 * b1;
 	prod_hi = __umulhi(a0, b1);
-	acc0 = __uaddo(acc1, prod_lo);
-	acc1 = __uaddc(acc2, prod_hi);
-	acc2 = __uaddc(0, 0);
+	accum3_shift(acc0, acc1, acc2, prod_lo, prod_hi);
 	prod_lo = a1 * b0;
 	prod_hi = __umulhi(a1, b0);
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(acc1, prod_hi);
-	acc2 = __uaddc(acc2, 0);
+	accum3(acc0, acc1, acc2, prod_lo, prod_hi);
 	prod_lo = q0 * n1;
 	prod_hi = __umulhi(q0, n1);
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(acc1, prod_hi);
-	acc2 = __uaddc(acc2, 0);
+	accum3(acc0, acc1, acc2, prod_lo, prod_hi);
 	q1 = acc0 * w;
 	prod_lo = q1 * n0;
 	prod_hi = __umulhi(q1, n0);
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(acc1, prod_hi);
-	acc2 = __uaddc(acc2, 0);
+	accum3(acc0, acc1, acc2, prod_lo, prod_hi);
 
 	prod_lo = a1 * b1;
 	prod_hi = __umulhi(a1, b1);
-	acc0 = __uaddo(acc1, prod_lo);
-	acc1 = __uaddc(acc2, prod_hi);
-	acc2 = __uaddc(0, 0);
+	accum3_shift(acc0, acc1, acc2, prod_lo, prod_hi);
 	prod_lo = q1 * n1;
 	prod_hi = __umulhi(q1, n1);
-	acc0 = __uaddo(acc0, prod_lo);
-	acc1 = __uaddc(acc1, prod_hi);
-	acc2 = __uaddc(acc2, 0);
+	accum3(acc0, acc1, acc2, prod_lo, prod_hi);
 
 	r = (uint64)acc1 << 32 | acc0;
 	if (acc2 || r >= n)
@@ -294,13 +275,12 @@ montmul32_r(uint32 n) {
 	uint32 r0 = ((uint64)1 << 63) % n;
 	uint32 r1;
 
-	r0 = __uaddo(r0, r0);
-	r1 = __uaddc(0, 0);
+	r1 = r0 + r0;
 
-	if (r1)
-		r0 -= n;
+	if (r1 < r0)
+		r1 -= n;
 
-	return modsub32(r0, n, n);
+	return modsub32(r1, n, n);
 }
 
 __device__ uint64 

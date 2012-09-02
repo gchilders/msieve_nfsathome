@@ -41,7 +41,7 @@ sieve_kernel_trans_32(uint32 *p_array, uint32 num_p, uint32 *start_roots,
 	pp_w = montmul32_w(pp);
 
 	specialq_start = blockIdx.y * specialq_block;
-	specialq_end = MIN(specialq_start + specialq_block, num_specialq);
+	specialq_end = __min(specialq_start + specialq_block, num_specialq);
 
 	qq_prod_offset = specialq_start * num_entries + p_offset;
 	curr_q = q_batch + specialq_start;
@@ -191,7 +191,7 @@ sieve_kernel_trans_64(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 	end = num_p * num_roots;
 
 	specialq_start = blockIdx.y * specialq_block;
-	specialq_end = MIN(specialq_start + specialq_block, num_specialq);
+	specialq_end = __min(specialq_start + specialq_block, num_specialq);
 
 	q = 0;
 	for (i = specialq_start; i < specialq_end; i++) {
