@@ -183,6 +183,46 @@ modinv32(uint32 a, uint32 p) {
 		return p - ps1;
 }
 
+__device__ uint64 
+modinv64(uint64 a, uint64 p) {
+
+	uint64 ps1, ps2, dividend, divisor, rem, q, t;
+	uint32 parity;
+
+	q = 1; rem = a; dividend = p; divisor = a;
+	ps1 = 1; ps2 = 0; parity = 0;
+
+	while (divisor > 1) {
+		rem = dividend - divisor;
+		t = rem - divisor;
+		if (rem >= divisor) { q += ps1; rem = t; t -= divisor;
+		if (rem >= divisor) { q += ps1; rem = t; t -= divisor;
+		if (rem >= divisor) { q += ps1; rem = t; t -= divisor;
+		if (rem >= divisor) { q += ps1; rem = t; t -= divisor;
+		if (rem >= divisor) { q += ps1; rem = t; t -= divisor;
+		if (rem >= divisor) { q += ps1; rem = t; t -= divisor;
+		if (rem >= divisor) { q += ps1; rem = t; t -= divisor;
+		if (rem >= divisor) { q += ps1; rem = t;
+		if (rem >= divisor) {
+			q = dividend / divisor;
+			rem = dividend - q * divisor;
+			q *= ps1;
+		} } } } } } } } }
+
+		q += ps2;
+		parity = ~parity;
+		dividend = divisor;
+		divisor = rem;
+		ps2 = ps1;
+		ps1 = q;
+	}
+	
+	if (parity == 0)
+		return ps1;
+	else
+		return p - ps1;
+}
+
 /*------------------- Montgomery arithmetic --------------------------*/
 __device__ uint32 
 montmul32(uint32 a, uint32 b,

@@ -176,55 +176,149 @@ sieve_kernel_trans_64(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 			specialq_t *q_batch, uint32 num_specialq, 
 			uint32 specialq_block, uint32 num_entries, uint32 shift)
 {
-	uint32 offset, i, j, p, pp_w, q, end, gcd;
-	uint64 pp, pp_r, qq, tmp, inv, newroot;
+	uint32 p, pp_w, p_offset;
+	uint64 pp, qq_prod, qroot, newroot, write_val;
 	uint32 specialq_start, specialq_end;
+	uint32 q, qq_prod_offset, curr_offset, q_count;
+	uint32 i, j, k, m, start_i, gcd; 
+	uint64 inv, curr_inv;
+	specialq_t *curr_q;
 
-	offset = blockIdx.x * blockDim.x + threadIdx.x;
-	if (offset >= num_p)
+	p_offset = blockIdx.x * blockDim.x + threadIdx.x;
+	if (p_offset >= num_p)
 		return;
 
-	p = p_array[offset];
-	pp = wide_sqr32(p);
-	pp_w = montmul32_w((uint32)pp);
-	pp_r = montmul64_r(pp, pp_w);
-	end = num_p * num_roots;
+	p = p_array[p_offset];
+	pp = (uint64)p * p;
+	pp_w = montmul32_w(pp);
 
 	specialq_start = blockIdx.y * specialq_block;
 	specialq_end = __min(specialq_start + specialq_block, num_specialq);
 
-	q = 0;
-	for (i = specialq_start; i < specialq_end; i++) {
-		if (q != q_batch[i].p) {
-			q = q_batch[i].p;
-			gcd = gcd32(p, q);
+	qq_prod_offset = specialq_start * num_entries + p_offset;
+	curr_q = q_batch + specialq_start;
 
-			if (gcd == 1) {
-				qq = wide_sqr32(q) % pp;
-				tmp = modinv32(q % p, p);
-				tmp = wide_sqr32(tmp);
-				tmp = montmul64(tmp, pp_r, pp, pp_w);
-				inv = montmul64(qq, tmp, pp, pp_w);
-				inv = modsub64((uint64)2, inv, pp);
-				inv = montmul64(inv, tmp, pp, pp_w);
-				inv = montmul64(inv, pp_r, pp, pp_w);
-			}
+	q = 0;
+	write_val = 0;
+	for (i = specialq_start; write_val == 0 && i < specialq_end; i++) {
+
+		if (q != curr_q->p) {
+			q = curr_q->p;
+			gcd = gcd32(p, q);
+			if (gcd == 1)
+				write_val = qq_prod = curr_q->pp % pp;
 		}
 
-		for (j = offset; j < end; j += num_p) {
+		roots_out[qq_prod_offset] = write_val;
+		qq_prod_offset += num_entries;
+		curr_q++;
+	}
+	if (write_val == 0)
+		return;
 
-			if (gcd == 1) {
-				newroot = modsub64(start_roots[j],
-						q_batch[i].root % pp, pp);
-				newroot = montmul64(newroot, inv, pp, pp_w);
+	for (start_i = i - 1; i < specialq_end; i++) {
 
+		if (q != curr_q->p) {
+			q = curr_q->p;
+			gcd = gcd32(p, q);
+
+			if (gcd == 1)
+				write_val = qq_prod = montmul64(qq_prod, 
+						curr_q->pp % pp, 
+						pp, pp_w);
+			else
+				write_val = 0;
+		}
+
+		roots_out[qq_prod_offset] = write_val;
+		qq_prod_offset += num_entries;
+		curr_q++;
+	}
+
+	inv = modinv64(qq_prod, pp);
+	inv = montmul64(inv, montmul64_r(pp, pp_w), pp, pp_w);
+	qq_prod_offset -= num_entries;
+
+	for (i--; i > start_i; i--) {
+
+		uint32 curr_qq_prod = roots_out[qq_prod_offset];
+
+		if (curr_qq_prod > 0)
+			break;
+
+		qq_prod_offset -= num_entries;
+	}
+
+	curr_offset = qq_prod_offset - num_entries;
+	q = i;
+	q_count = 1;
+
+	for (i--; (int32)i >= (int32)start_i; 
+			i--, curr_offset -= num_entries) {
+
+		uint64 curr_qq_prod = roots_out[curr_offset];
+
+		if (curr_qq_prod == 0) {
+			continue;
+		}
+		else if (curr_qq_prod == qq_prod) {
+			q_count++;
+			continue;
+		}
+
+		curr_inv = montmul64(curr_qq_prod, inv, pp, pp_w);
+		inv = montmul64(inv, q_batch[q].pp % pp, pp, pp_w);
+
+		do {
+			qroot = q_batch[q].root % pp;
+
+			for (j = qq_prod_offset, k = p_offset, m = 0; 
+						m < num_roots; 
+						j += num_p, k += num_p, m++) {
+
+				newroot = modsub64(start_roots[k], 
+							qroot, pp);
+				newroot = montmul64(newroot, curr_inv, 
+							pp, pp_w);
 				if (newroot > pp / 2)
 					newroot -= pp;
 
-				p_out[j + num_entries * i] = (i << shift) | p;
-				roots_out[j + num_entries * i] = newroot;
+				p_out[j] = (q << shift) | p;
+				roots_out[j] = newroot;
 			}
+
+			q--;
+			qq_prod_offset -= num_entries;
+		} while (--q_count);
+
+		q = i;
+		q_count = 1;
+		qq_prod = curr_qq_prod;
+		qq_prod_offset = curr_offset;
+	}
+
+	curr_inv = inv;
+	while ((int32)q >= (int32)start_i) {
+
+		qroot = q_batch[q].root % pp;
+
+		for (j = qq_prod_offset, k = p_offset, m = 0; 
+					m < num_roots; 
+					j += num_p, k += num_p, m++) {
+
+			newroot = modsub64(start_roots[k], 
+						qroot, pp);
+			newroot = montmul64(newroot, curr_inv, 
+						pp, pp_w);
+			if (newroot > pp / 2)
+				newroot -= pp;
+
+			p_out[j] = (q << shift) | p;
+			roots_out[j] = newroot;
 		}
+
+		q--;
+		qq_prod_offset -= num_entries;
 	}
 }
 
