@@ -384,7 +384,7 @@ static uint32
 handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 			device_data_t *d, specialq_t *specialq_batch,
 			uint32 num_specialq, uint32 shift,
-			uint32 root64)
+			uint32 root64, uint32 key_bits)
 {
 	uint32 i;
 	uint32 quit = 0;
@@ -479,7 +479,7 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 	sort_data.data_in_scratch = d->gpu_p_array_scratch;
 	sort_data.num_elements = num_specialq * d->num_entries;
 	sort_data.num_arrays = 1;
-	sort_data.key_bits = 8 * root_bytes;
+	sort_data.key_bits = key_bits;
 	poly->sort_engine_run(poly->sort_engine, &sort_data);
 
 	launch = d->launch + (root64 ?  GPU_FINAL_64 : GPU_FINAL_32);
@@ -535,6 +535,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	uint32 unused_bits;
 	uint32 root64 = (p_max >= 65536);
 	uint32 root_bytes = root64 ? sizeof(uint64) : sizeof(uint32);
+	uint32 key_bits;
 
 	*elapsed = 0;
 
@@ -544,6 +545,8 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	p_soa_array_init(&p_array, degree, root64);
 
 	/* build all the arithmetic progressions */
+
+	key_bits = ceil(2.0 * log(p_max) / M_LN2);
 
 	sieve_fb_reset(sieve_p, p_min, p_max, 1, p_array.max_p_roots);
 	while (sieve_fb_next(sieve_p, poly, store_p_soa,
@@ -714,7 +717,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 						q_array.specialq + i,
 						curr_num_specialq,
 						32 - unused_bits,
-						root64);
+						root64, key_bits);
 
 				if (quit)
 					break;
