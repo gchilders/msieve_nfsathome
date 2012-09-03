@@ -801,7 +801,7 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, double deadline)
 
 	special_q_fb_max = MIN(200000, special_q_max);
 	sieve_fb_init(&sieve_special_q, poly,
-			5, special_q_fb_max,
+			2, special_q_fb_max,
 			1, degree,
 			1);
 
