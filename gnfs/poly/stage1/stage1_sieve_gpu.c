@@ -756,6 +756,8 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 		}
 
 		batch_size = MIN(max_batch_size, q_array.num_specialq);
+		if (batch_size == 0)
+			continue;
 
 		if (batch_size < max_batch_size / 3) {
 
