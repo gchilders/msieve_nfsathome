@@ -114,7 +114,6 @@ typedef struct {
 
 typedef struct {
 	uint32 num_arrays;
-	uint32 num_p;
 	uint32 pp_is_64;
 
 	uint32 max_p_roots;
@@ -207,19 +206,16 @@ static void
 p_soa_array_compact(p_soa_array_t *s)
 {
 	uint32 i, j;
-	uint32 num_p;
 
-	for (i = j = num_p = 0; i < s->num_arrays; i++) {
+	for (i = j = 0; i < s->num_arrays; i++) {
 		if (s->soa[i].num_p < 50) {
 			p_soa_var_free(s->soa + i);
 		}
 		else {
-			num_p = s->soa[i].num_p;
 			s->soa[j++] = s->soa[i];
 		}
 	}
 	s->num_arrays = j;
-	s->num_p = num_p;
 }
 
 static void
@@ -264,7 +260,6 @@ store_p_soa(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 		}
 
 		soa->num_p++;
-		s->num_p++;
 	}
 }
 
@@ -293,9 +288,21 @@ specialq_array_free(specialq_array_t *q_array)
 }
 
 static void
-specialq_array_reset(specialq_array_t *q_array)
+specialq_array_reset(specialq_array_t *q_array, 
+			uint32 num_removed)
 {
-	q_array->num_specialq = 0;
+	uint32 new_size;
+
+	if (num_removed >= q_array->num_specialq) {
+		q_array->num_specialq = 0;
+		return;
+	}
+
+	new_size = q_array->num_specialq - num_removed;
+	memmove(q_array->specialq, 
+		q_array->specialq + num_removed,
+		new_size * sizeof(specialq_t));
+	q_array->num_specialq = new_size;
 }
 
 static void
@@ -535,7 +542,6 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	uint32 quit = 0;
 	uint32 all_q_done = 0;
 	uint32 degree = poly->degree;
-	uint32 num_batch_specialq;
 	specialq_array_t q_array;
 	p_soa_array_t p_array;
 	device_data_t data;
@@ -563,7 +569,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	}
 
 	p_soa_array_compact(&p_array);
-	if (p_array.num_p == 0) {
+	if (p_array.num_arrays == 0) {
 		p_soa_array_free(&p_array);
 		return 0;
 	}
@@ -577,8 +583,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	data.num_entries = j;
 
 #if 1
-	printf("aprogs: %u entries, %u roots\n", 
-			p_array.num_p, data.num_entries);
+	printf("aprogs: %u roots\n", data.num_entries);
 #endif
 
 	/* a single transformed array will not have enough
@@ -587,7 +592,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	   entire batch. Array elements get their array number
 	   added into unused bits above each p, so the number
 	   of such unused bits is one limit on the batch size.
-	   The other limit is the amount of RAM on the card;
+	   Another limit is the amount of RAM on the card;
 	   we try to use less than 30% of it. Finally, we top
 	   out at a few ten millions of elements, which is far 
 	   into asymptotically optimal throughput territory 
@@ -599,6 +604,10 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	   use the card. In that case, we will compensate later by 
 	   making each arithmetic progression contribute multiple 
 	   offsets */
+
+	unused_bits = 1;
+	while (!(p_max & (1 << (31 - unused_bits))))
+		unused_bits++;
 
 	max_batch_specialq32 = 30000000 / data.num_entries;
 
@@ -614,49 +623,44 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 				 (2 * (sizeof(uint32) + sizeof(uint64)) * 
 				  data.num_entries)));
 
-	unused_bits = 1;
-	while (!(p_max & (1 << (31 - unused_bits))))
-		unused_bits++;
+	if (pp_is_64) {
 
-	num_batch_specialq = 1 << unused_bits;
+		/* roots to be sorted are always 64-bit integers */
 
-	if (pp_is_64)
-		num_batch_specialq = MIN(num_batch_specialq,
-				max_batch_specialq64);
-	else
-		num_batch_specialq = MIN(num_batch_specialq,
-				max_batch_specialq32);
-#if 1
-	printf("batch size %u\n", num_batch_specialq);
-#endif
+		i = max_batch_specialq64 * sizeof(uint32);
+		j = max_batch_specialq64 * sizeof(uint64);
+	}
+	else {
+		/* roots to be sorted are 32-bit integers except
+		   for small degree-5 problems, where they may
+		   be 64-bit integers if that's more efficient.
+		   Allocate the worst-case memory */
 
-	/* grab several such batches at a time if the batch size
-	   is not large */
-
-	specialq_array_init(&q_array, num_batch_specialq < 100 ?
-				5 * num_batch_specialq :
-				num_batch_specialq);
+		i = max_batch_specialq32 * sizeof(uint32);
+		j = MAX(max_batch_specialq64 * sizeof(uint64),
+			max_batch_specialq32 * sizeof(uint32));
+	}
 
 	CUDA_TRY(cuMemAlloc(&data.gpu_p_array,
-			num_batch_specialq *
-			data.num_entries * sizeof(uint32)))
+			data.num_entries * i))
 	CUDA_TRY(cuMemAlloc(&data.gpu_p_array_scratch,
-			num_batch_specialq *
-			data.num_entries * sizeof(uint32)))
-
-	if (pp_is_64)
-		i = max_batch_specialq64 * sizeof(uint64);
-	else
-		i = MAX(max_batch_specialq64 * sizeof(uint64),
-			max_batch_specialq32 * sizeof(uint32));
-
+			data.num_entries * i))
 	CUDA_TRY(cuMemAlloc(&data.gpu_root_array,
-			data.num_entries * i))
+			data.num_entries * j))
 	CUDA_TRY(cuMemAlloc(&data.gpu_root_array_scratch,
-			data.num_entries * i))
+			data.num_entries * j))
 
-	CUDA_TRY(cuMemAlloc(&data.gpu_q_array,
-			num_batch_specialq * sizeof(specialq_t)))
+	/* allocate the q's one batch at a time */
+
+	specialq_array_init(&q_array, MAX_ROOTS + (pp_is_64 ? 
+					max_batch_specialq64 :
+					max_batch_specialq32));
+
+	CUDA_TRY(cuMemAlloc(&data.gpu_q_array, sizeof(specialq_t) *
+				(pp_is_64 ? max_batch_specialq64 :
+				 	max_batch_specialq32)))
+
+	/* set up the root generator */
 
 	for (i = 0; i < p_array.num_arrays; i++) {
 		p_soa_var_t *soa = p_array.soa + i;
@@ -679,8 +683,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 		}
 	}
 
-	CUDA_TRY(cuEventCreate(&data.start, CU_EVENT_BLOCKING_SYNC))
-	CUDA_TRY(cuEventCreate(&data.end, CU_EVENT_BLOCKING_SYNC))
+	/* load GPU kernels */
 
 	data.launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
 				sizeof(gpu_launch_t));
@@ -703,6 +706,11 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 		}
 	}
 
+	CUDA_TRY(cuEventCreate(&data.start, CU_EVENT_BLOCKING_SYNC))
+	CUDA_TRY(cuEventCreate(&data.end, CU_EVENT_BLOCKING_SYNC))
+
+	/* set up found array */
+
 	data.found_array_size = FOUND_ARRAY_SIZE;
 	CUDA_TRY(cuMemAlloc(&data.gpu_found_array, sizeof(found_t) *
 			data.found_array_size))
@@ -711,7 +719,8 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 
 	CUDA_TRY(cuMemsetD8(data.gpu_found_array, 0, sizeof(found_t)))
 
-	specialq_array_reset(&q_array);
+	/* account for 'trivial' special-q */
+
 	if (special_q_min == 1) {
 
 		q_array.specialq[0].p = 1;
@@ -719,86 +728,75 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 		q_array.num_specialq++;
 	}
 
-	sieve_fb_reset(sieve_special_q, special_q_min, special_q_max, 
-			degree, MAX_ROOTS);
+	/* handle special-q in batches */
+
+	sieve_fb_reset(sieve_special_q, special_q_min, 
+			special_q_max, degree, MAX_ROOTS);
+
 	while (!quit && !all_q_done) {
 
-		all_q_done = sieve_fb_next(sieve_special_q, poly,
-				store_specialq, &q_array) == P_SEARCH_DONE;
+		uint32 batch_size;
+		uint32 max_batch_size;
+		uint32 key_bits;
+		uint32 num_aprog_vals = 1;
 
-		if (all_q_done || q_array.num_specialq == q_array.max_specialq) {
+		max_batch_size = pp_is_64 ? 
+				max_batch_specialq64 :
+				max_batch_specialq32;
+		max_batch_size = MIN(max_batch_size, 
+				(uint32)1 << unused_bits);
 
-			i = 0;
-			while (i < q_array.num_specialq) {
+		while (q_array.num_specialq < max_batch_size) {
+			if (sieve_fb_next(sieve_special_q, poly,
+				store_specialq, &q_array) == P_SEARCH_DONE) {
 
-				uint32 key_bits;
-				uint32 num_aprog_vals = 1;
-				uint32 curr_num_specialq =
-						MIN(q_array.num_specialq - i,
-							num_batch_specialq);
-
-				if (curr_num_specialq < num_batch_specialq / 5) {
-
-					/* current batch of q is too small to 
-					   utilize the card efficiently. Have 
-					   each p generate multiple offsets,
-					   centered about 0 */
-
-					num_aprog_vals = (num_batch_specialq /
-							curr_num_specialq);
-
-					/* if we were set up for 32-bit
-					   sort keys but now require 64-bit
-					   sort keys, make sure to respect
-					   the 64-bit special-q limit */
-
-					key_bits = 1 + ceil(log((double)p_max * 
-							p_max *
-							((num_aprog_vals + 1) /
-							2)) / M_LN2);
-
-					if (key_bits > 32) {
-						num_aprog_vals = MIN(
-							num_batch_specialq,
-						        max_batch_specialq64) /
-							curr_num_specialq;
-					}
-				}
-
-				key_bits = ceil(log((double)p_max * p_max *
-						((num_aprog_vals + 1) / 2)) / 
-						M_LN2);
-				if (num_aprog_vals > 1)
-					key_bits++;
-
-				printf("batch %u aprog_vals %u bits %u\n", 
-						curr_num_specialq,
-						num_aprog_vals, key_bits);
-				quit = handle_special_q_batch(obj, poly, &data,
-						q_array.specialq + i,
-						curr_num_specialq,
-						32 - unused_bits, key_bits, 
-						num_aprog_vals);
-
-				if (quit)
-					break;
-
-				check_found_array(poly, &data);
-
-				i += curr_num_specialq;
+				all_q_done = 1;
+				break;
 			}
-
-			specialq_array_reset(&q_array);
-
-			*elapsed = get_cpu_time() - cpu_start_time +
-					data.gpu_elapsed;
-
-			if (*elapsed > deadline)
-				quit = 1;
 		}
+
+		batch_size = MIN(max_batch_size, q_array.num_specialq);
+
+		if (batch_size < max_batch_size / 3) {
+
+			/* current batch of q is too small to utilize 
+			   the card efficiently. Have each (p,q) pair
+			   generate multiple offsets, centered about 0 */
+
+			num_aprog_vals = max_batch_size / batch_size;
+
+			/* if we were set up for 32-bit sort keys but
+			   now require 64-bit sort keys, make sure to 
+			   respect the 64-bit special-q limit */
+
+			key_bits = 1 + ceil(log((double)p_max * p_max *
+					((num_aprog_vals + 1) / 2)) / M_LN2);
+
+			if (key_bits > 32)
+				num_aprog_vals = MIN(max_batch_size,
+				        max_batch_specialq64) / batch_size;
+		}
+
+		key_bits = ceil(log((double)p_max * p_max *
+				((num_aprog_vals + 1) / 2)) / M_LN2);
+		if (num_aprog_vals > 1)
+			key_bits++;
+
+		quit = handle_special_q_batch(obj, poly, &data,
+				q_array.specialq, batch_size,
+				32 - unused_bits, key_bits, 
+				num_aprog_vals);
+
+		check_found_array(poly, &data);
+
+		specialq_array_reset(&q_array, batch_size);
+
+		*elapsed = get_cpu_time() - cpu_start_time +
+				data.gpu_elapsed;
+		if (*elapsed > deadline)
+			quit = 1;
 	}
 
-	check_found_array(poly, &data);
 	CUDA_TRY(cuMemFree(data.gpu_p_array))
 	CUDA_TRY(cuMemFree(data.gpu_p_array_scratch))
 	CUDA_TRY(cuMemFree(data.gpu_root_array))
