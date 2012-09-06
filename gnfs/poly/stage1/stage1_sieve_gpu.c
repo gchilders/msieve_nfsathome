@@ -40,8 +40,9 @@ $Id$
    original, impractically large range. */
 
 enum {
-	GPU_TRANS_32 = 0,
-	GPU_TRANS_64,
+	GPU_TRANS_PP32_R32 = 0,
+	GPU_TRANS_PP32_R64,
+	GPU_TRANS_PP64_R64,
 	GPU_FINAL_32,
 	GPU_FINAL_64,
 	NUM_GPU_FUNCTIONS /* must be last */
@@ -49,16 +50,17 @@ enum {
 
 static const char * gpu_kernel_names[] = 
 {
-	"sieve_kernel_trans_32",
-	"sieve_kernel_trans_64",
+	"sieve_kernel_trans_pp32_r32",
+	"sieve_kernel_trans_pp32_r64",
+	"sieve_kernel_trans_pp64_r64",
 	"sieve_kernel_final_32",
 	"sieve_kernel_final_64",
 };
 
 static const gpu_arg_type_list_t gpu_kernel_args[] = 
 {
-	/* sieve_kernel_trans_{32|64} */
-	{ 11,
+	/* sieve_kernel_trans_pp{32|64}_r{32|64} */
+	{ 12,
 		{
 		  GPU_ARG_PTR,
 		  GPU_ARG_UINT32,
@@ -67,6 +69,7 @@ static const gpu_arg_type_list_t gpu_kernel_args[] =
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
+		  GPU_ARG_UINT32,
 		  GPU_ARG_UINT32,
 		  GPU_ARG_UINT32,
 		  GPU_ARG_UINT32,
@@ -74,13 +77,12 @@ static const gpu_arg_type_list_t gpu_kernel_args[] =
 		}
 	},
 	/* sieve_kernel_final_{32|64} */
-	{ 7,
+	{ 6,
 		{
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
 		  GPU_ARG_UINT32,
 		  GPU_ARG_PTR,
-		  GPU_ARG_UINT32,
 		  GPU_ARG_PTR,
 		  GPU_ARG_UINT32,
 		}
@@ -96,8 +98,6 @@ typedef struct {
 
 	CUdeviceptr dev_p;
 	CUdeviceptr dev_start_roots;
-	CUdeviceptr dev_p_entry;
-	CUdeviceptr dev_root_entry;
 	CUstream stream;
 
 	uint32 *p;
@@ -115,7 +115,7 @@ typedef struct {
 typedef struct {
 	uint32 num_arrays;
 	uint32 num_p;
-	uint32 root64;
+	uint32 pp_is_64;
 
 	uint32 max_p_roots;
 	p_soa_var_t *soa;
@@ -123,12 +123,12 @@ typedef struct {
 } p_soa_array_t;
 
 static void
-p_soa_array_init(p_soa_array_t *s, uint32 degree, uint32 root64)
+p_soa_array_init(p_soa_array_t *s, uint32 degree, uint32 pp_is_64)
 {
 	uint32 i, j;
 	memset(s, 0, sizeof(p_soa_array_t));
 
-	s->root64 = root64;
+	s->pp_is_64 = pp_is_64;
 	s->soa = (p_soa_var_t *)xmalloc(MAX_P_SOA_ARRAYS *
 					sizeof(p_soa_var_t));
 
@@ -176,7 +176,7 @@ p_soa_array_init(p_soa_array_t *s, uint32 degree, uint32 root64)
 		soa->p = (uint32 *)xmalloc(soa->num_p_alloc * sizeof(uint32));
 		for (j = 0; j < soa->num_roots; j++) {
 			soa->r.roots[j] = xmalloc(soa->num_p_alloc *
-					((root64) ? sizeof(uint64) : 
+					((pp_is_64) ? sizeof(uint64) : 
 					sizeof(uint32)));
 		}
 	}
@@ -248,13 +248,13 @@ store_p_soa(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 			for (j = 0; j < soa->num_roots; j++) {
 				soa->r.roots[j] = xrealloc(soa->r.roots[j],
 					soa->num_p_alloc * 
-					((s->root64) ? sizeof(uint64) :
+					((s->pp_is_64) ? sizeof(uint64) :
 					 sizeof(uint32)));
 			}
 		}
 
 		soa->p[soa->num_p] = p;
-		if (s->root64) {
+		if (s->pp_is_64) {
 			for (j = 0; j < soa->num_roots; j++)
 				soa->r.roots64[j][soa->num_p] = roots[j];
 		}
@@ -364,15 +364,9 @@ check_found_array(poly_search_t *poly, device_data_t *d)
 		uint32 q = found->q;
 		uint64 qroot = found->qroot;
 		int64 offset = found->offset;
-		double check = (double)p1 * p2;
 
-		check = check * check * poly->coeff_max
-				/ poly->m0 / poly->degree;
-
-		if (fabs((double)offset) < check) {
-			handle_collision(poly, (uint64)p1 * p2, q,
+		handle_collision(poly, (uint64)p1 * p2, q,
 					qroot, offset);
-		}
 	}
 }
 
@@ -384,18 +378,18 @@ static uint32
 handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 			device_data_t *d, specialq_t *specialq_batch,
 			uint32 num_specialq, uint32 shift,
-			uint32 root64, uint32 key_bits)
+			uint32 key_bits, uint32 num_aprog_vals)
 {
-	uint32 i;
+	uint32 i, j;
 	uint32 quit = 0;
 	p_soa_array_t *p_array = d->p_array;
 	uint32 num_blocks;
 	float elapsed_ms;
 	gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
 	sort_data_t sort_data;
-	uint32 root_bytes = root64 ? sizeof(uint64) : sizeof(uint32);
 	gpu_launch_t *launch;
 	uint32 num_q, curr_q;
+	uint32 root_bytes = (key_bits > 32) ? sizeof(uint64) : sizeof(uint32);
 
 	CUDA_TRY(cuEventRecord(d->start, 0))
 
@@ -410,16 +404,22 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 			sizeof(specialq_t) * num_specialq))
 
 	CUDA_TRY(cuMemsetD8(d->gpu_root_array, 0,
-			num_specialq * d->num_entries * root_bytes))
+			num_specialq * d->num_entries * 
+			num_aprog_vals * root_bytes))
 
-	for (i = 0; i < p_array->num_arrays; i++) {
+	for (i = j = 0; i < p_array->num_arrays; i++) {
 		p_soa_var_t *soa = p_array->soa + i;
 		uint32 num_p = soa->num_p;
 		uint32 blocks_x, blocks_y;
 		uint32 size_x, size_y;
 		uint32 total_blocks;
 
-		launch = d->launch + (root64 ?  GPU_TRANS_64 : GPU_TRANS_32);
+		if (p_array->pp_is_64)
+			launch = d->launch + GPU_TRANS_PP64_R64;
+		else if (root_bytes == sizeof(uint64))
+			launch = d->launch + GPU_TRANS_PP32_R64;
+		else
+			launch = d->launch + GPU_TRANS_PP32_R32;
 
 		/* perform a block decomposition so that all the
 		   soa's generate blocks with about the same amount
@@ -457,13 +457,16 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 		gpu_args[1].uint32_arg = num_p;
 		gpu_args[2].ptr_arg = (void *)(size_t)soa->dev_start_roots;
 		gpu_args[3].uint32_arg = soa->num_roots;
-		gpu_args[4].ptr_arg = (void *)(size_t)soa->dev_p_entry;
-		gpu_args[5].ptr_arg = (void *)(size_t)soa->dev_root_entry;
+		gpu_args[4].ptr_arg = (void *)(size_t)(
+				d->gpu_p_array + j * sizeof(uint32));
+		gpu_args[5].ptr_arg = (void *)(size_t)(
+				d->gpu_root_array + j * root_bytes);
 		gpu_args[6].ptr_arg = (void *)(size_t)d->gpu_q_array;
 		gpu_args[7].uint32_arg = num_specialq;
 		gpu_args[8].uint32_arg = size_y;
 		gpu_args[9].uint32_arg = d->num_entries;
 		gpu_args[10].uint32_arg = shift;
+		gpu_args[11].uint32_arg = num_aprog_vals;
 		gpu_launch_set(launch, gpu_args);
 
 		CUDA_TRY(cuFuncSetBlockShape(launch->kernel_func, 
@@ -471,28 +474,34 @@ handle_special_q_batch(msieve_obj *obj, poly_search_t *poly,
 
 		CUDA_TRY(cuLaunchGridAsync(launch->kernel_func,
 				blocks_x, blocks_y, soa->stream))
+
+		j += num_p * soa->num_roots;
 	}
 
 	sort_data.keys_in = d->gpu_root_array;
 	sort_data.keys_in_scratch = d->gpu_root_array_scratch;
 	sort_data.data_in = d->gpu_p_array;
 	sort_data.data_in_scratch = d->gpu_p_array_scratch;
-	sort_data.num_elements = num_specialq * d->num_entries;
+	sort_data.num_elements = num_specialq * d->num_entries * num_aprog_vals;
 	sort_data.num_arrays = 1;
 	sort_data.key_bits = key_bits;
 	poly->sort_engine_run(poly->sort_engine, &sort_data);
 
-	launch = d->launch + (root64 ?  GPU_FINAL_64 : GPU_FINAL_32);
+	if (root_bytes == sizeof(uint64))
+		launch = d->launch + GPU_FINAL_64;
+	else
+		launch = d->launch + GPU_FINAL_32;
+
 	gpu_args[0].ptr_arg = (void *)(size_t)(d->gpu_p_array);
 	gpu_args[1].ptr_arg = (void *)(size_t)(d->gpu_root_array);
-	gpu_args[2].uint32_arg = d->num_entries;
+	gpu_args[2].uint32_arg = num_specialq * d->num_entries * num_aprog_vals;
 	gpu_args[3].ptr_arg = (void *)(size_t)(d->gpu_q_array);
-	gpu_args[4].uint32_arg = num_specialq;
-	gpu_args[5].ptr_arg = (void *)(size_t)(d->gpu_found_array);
-	gpu_args[6].uint32_arg = shift;
+	gpu_args[4].ptr_arg = (void *)(size_t)(d->gpu_found_array);
+	gpu_args[5].uint32_arg = shift;
 	gpu_launch_set(launch, gpu_args);
 
-	num_blocks = 1 + (d->num_entries * num_specialq - 1) /
+	num_blocks = 1 + (num_specialq * d->num_entries * 
+			num_aprog_vals - 1) /
 			launch->threads_per_block;
 	num_blocks = MIN(num_blocks, 1000);
 
@@ -522,7 +531,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 		uint32 p_min, uint32 p_max, double deadline, 
 		double *elapsed)
 {
-	uint32 i, j, k;
+	uint32 i, j;
 	uint32 quit = 0;
 	uint32 all_q_done = 0;
 	uint32 degree = poly->degree;
@@ -533,20 +542,19 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	double cpu_start_time = get_cpu_time();
 	CUmodule gpu_module = poly->gpu_module;
 	uint32 unused_bits;
-	uint32 root64 = (p_max >= 65536);
-	uint32 root_bytes = root64 ? sizeof(uint64) : sizeof(uint32);
-	uint32 key_bits;
+	uint32 pp_is_64 = (p_max >= 65536);
+	uint32 start_root_bytes = pp_is_64 ? sizeof(uint64) : sizeof(uint32);
+	uint32 max_batch_specialq32;
+	uint32 max_batch_specialq64;
 
 	*elapsed = 0;
 
 	memset(&data, 0, sizeof(device_data_t));
 
 	data.p_array = &p_array;
-	p_soa_array_init(&p_array, degree, root64);
+	p_soa_array_init(&p_array, degree, pp_is_64);
 
 	/* build all the arithmetic progressions */
-
-	key_bits = ceil(2.0 * log(p_max) / M_LN2);
 
 	sieve_fb_reset(sieve_p, p_min, p_max, 1, p_array.max_p_roots);
 	while (sieve_fb_next(sieve_p, poly, store_p_soa,
@@ -583,7 +591,28 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	   we try to use less than 30% of it. Finally, we top
 	   out at a few ten millions of elements, which is far 
 	   into asymptotically optimal throughput territory 
-	   for all current GPUs */
+	   for all current GPUs
+	
+	   The sizing below assumes we can batch as many special-Q
+	   as we want. However, for small degree-5 problems the 
+	   number of special-Q available is too small to efficiently 
+	   use the card. In that case, we will compensate later by 
+	   making each arithmetic progression contribute multiple 
+	   offsets */
+
+	max_batch_specialq32 = 30000000 / data.num_entries;
+
+	max_batch_specialq32 = MIN(max_batch_specialq32,
+				(uint32)(0.3 * poly->gpu_info->global_mem_size /
+				 (2 * (sizeof(uint32) + sizeof(uint32)) * 
+				  data.num_entries)));
+
+	max_batch_specialq64 = 20000000 / data.num_entries;
+
+	max_batch_specialq64 = MIN(max_batch_specialq64,
+				(uint32)(0.3 * poly->gpu_info->global_mem_size /
+				 (2 * (sizeof(uint32) + sizeof(uint64)) * 
+				  data.num_entries)));
 
 	unused_bits = 1;
 	while (!(p_max & (1 << (31 - unused_bits))))
@@ -591,19 +620,12 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 
 	num_batch_specialq = 1 << unused_bits;
 
-	if (root64)
+	if (pp_is_64)
 		num_batch_specialq = MIN(num_batch_specialq,
-				20000000 / data.num_entries);
+				max_batch_specialq64);
 	else
 		num_batch_specialq = MIN(num_batch_specialq,
-				30000000 / data.num_entries);
-
-	num_batch_specialq = MIN(num_batch_specialq,
-				(uint32)(0.3 * poly->gpu_info->global_mem_size /
-					 (2 * (sizeof(uint32) + root_bytes) * 
-					  data.num_entries)));
-	num_batch_specialq = MAX(1, num_batch_specialq);
-
+				max_batch_specialq32);
 #if 1
 	printf("batch size %u\n", num_batch_specialq);
 #endif
@@ -622,38 +644,38 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 			num_batch_specialq *
 			data.num_entries * sizeof(uint32)))
 
+	if (pp_is_64)
+		i = max_batch_specialq64 * sizeof(uint64);
+	else
+		i = MAX(max_batch_specialq64 * sizeof(uint64),
+			max_batch_specialq32 * sizeof(uint32));
+
 	CUDA_TRY(cuMemAlloc(&data.gpu_root_array,
-			num_batch_specialq * 
-			data.num_entries * root_bytes))
+			data.num_entries * i))
 	CUDA_TRY(cuMemAlloc(&data.gpu_root_array_scratch,
-			num_batch_specialq *
-			data.num_entries * root_bytes))
+			data.num_entries * i))
 
 	CUDA_TRY(cuMemAlloc(&data.gpu_q_array,
 			num_batch_specialq * sizeof(specialq_t)))
 
-	for (i = j = 0; i < p_array.num_arrays; i++) {
+	for (i = 0; i < p_array.num_arrays; i++) {
 		p_soa_var_t *soa = p_array.soa + i;
 		uint32 num = soa->num_p;
-
-		soa->dev_p_entry = data.gpu_p_array + j * sizeof(uint32);
-		soa->dev_root_entry = data.gpu_root_array + j * root_bytes;
-
-		j += num * soa->num_roots;
 
 		CUDA_TRY(cuStreamCreate(&soa->stream, 0))
 
 		CUDA_TRY(cuMemAlloc(&soa->dev_p, num * sizeof(uint32)))
 		CUDA_TRY(cuMemAlloc(&soa->dev_start_roots,
-				soa->num_roots * num * root_bytes))
+				soa->num_roots * num * start_root_bytes))
 
 		CUDA_TRY(cuMemcpyHtoD(soa->dev_p, soa->p,
 				num * sizeof(uint32)))
 
-		for (k = 0; k < soa->num_roots; k++) {
+		for (j = 0; j < soa->num_roots; j++) {
 			CUDA_TRY(cuMemcpyHtoD(soa->dev_start_roots +
-					k * num * root_bytes,
-					soa->r.roots[k], num * root_bytes))
+					j * num * start_root_bytes,
+					soa->r.roots[j], 
+					num * start_root_bytes))
 		}
 	}
 
@@ -667,9 +689,9 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 		gpu_launch_t *launch = data.launch + i;
 
 		gpu_launch_init(gpu_module, gpu_kernel_names[i],
-				gpu_kernel_args + (i / 2), launch);
+				gpu_kernel_args + (i / 3), launch);
 
-		if (i == 2 || i == 3) {
+		if (i == GPU_FINAL_32 || i == GPU_FINAL_64) {
 			/* performance of the cleanup functions is not 
 			   that sensitive to the block shape; set it 
 			   once up front */
@@ -709,15 +731,54 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 			i = 0;
 			while (i < q_array.num_specialq) {
 
+				uint32 key_bits;
+				uint32 num_aprog_vals = 1;
 				uint32 curr_num_specialq =
 						MIN(q_array.num_specialq - i,
 							num_batch_specialq);
 
+				if (curr_num_specialq < num_batch_specialq / 5) {
+
+					/* current batch of q is too small to 
+					   utilize the card efficiently. Have 
+					   each p generate multiple offsets,
+					   centered about 0 */
+
+					num_aprog_vals = (num_batch_specialq /
+							curr_num_specialq);
+
+					/* if we were set up for 32-bit
+					   sort keys but now require 64-bit
+					   sort keys, make sure to respect
+					   the 64-bit special-q limit */
+
+					key_bits = 1 + ceil(log((double)p_max * 
+							p_max *
+							((num_aprog_vals + 1) /
+							2)) / M_LN2);
+
+					if (key_bits > 32) {
+						num_aprog_vals = MIN(
+							num_batch_specialq,
+						        max_batch_specialq64) /
+							curr_num_specialq;
+					}
+				}
+
+				key_bits = ceil(log((double)p_max * p_max *
+						((num_aprog_vals + 1) / 2)) / 
+						M_LN2);
+				if (num_aprog_vals > 1)
+					key_bits++;
+
+				printf("batch %u aprog_vals %u bits %u\n", 
+						curr_num_specialq,
+						num_aprog_vals, key_bits);
 				quit = handle_special_q_batch(obj, poly, &data,
 						q_array.specialq + i,
 						curr_num_specialq,
-						32 - unused_bits,
-						root64, key_bits);
+						32 - unused_bits, key_bits, 
+						num_aprog_vals);
 
 				if (quit)
 					break;
