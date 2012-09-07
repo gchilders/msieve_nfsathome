@@ -358,11 +358,15 @@ check_found_array(poly_search_t *poly, device_data_t *d)
 
 	CUDA_TRY(cuMemcpyDtoH(found_array, d->gpu_found_array,
 			d->found_array_size * sizeof(found_t)))
-	/* clear only the first element */
-	CUDA_TRY(cuMemsetD8(d->gpu_found_array, 0, sizeof(found_t)))
 
 	found_array_size = MIN(FOUND_ARRAY_SIZE - 1,
 				found_array[0].p1);
+
+	if (found_array_size == 0)
+		return;
+
+	/* clear only the first element */
+	CUDA_TRY(cuMemsetD8(d->gpu_found_array, 0, sizeof(found_t)))
 
 	for (i = 1; i <= found_array_size; i++) {
 		found_t *found = found_array + i;
@@ -377,10 +381,9 @@ check_found_array(poly_search_t *poly, device_data_t *d)
 					(double)offset * q * q) /
 					(dp * dp);
 
-		if (coeff <= poly->coeff_max) {
+		if (coeff <= poly->coeff_max)
 			handle_collision(poly, (uint64)p1 * p2, q,
 					qroot, offset);
-		}
 	}
 }
 
@@ -839,7 +842,7 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, double deadline)
 	uint32 special_q_min2, special_q_max2;
 	uint32 special_q_fb_max;
 	double p_size_max = poly->p_size_max;
-	double sieve_bound = poly->coeff_max / poly->m0 / degree;
+	double sieve_bound = poly->coeff_max / poly->m0;
 	double elapsed = 0;
 	sieve_fb_t sieve_p, sieve_special_q;
 
