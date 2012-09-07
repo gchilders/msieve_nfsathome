@@ -372,8 +372,15 @@ check_found_array(poly_search_t *poly, device_data_t *d)
 		uint64 qroot = found->qroot;
 		int64 offset = found->offset;
 
-		handle_collision(poly, (uint64)p1 * p2, q,
+		double dp = (double)q * p1 * p2;
+		double coeff = poly->m0 * fabs((double)qroot + 
+					(double)offset * q * q) /
+					(dp * dp);
+
+		if (coeff <= poly->coeff_max) {
+			handle_collision(poly, (uint64)p1 * p2, q,
 					qroot, offset);
+		}
 	}
 }
 
