@@ -147,53 +147,6 @@ handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
 }
 
 /*------------------------------------------------------------------------*/
-#ifdef HAVE_CUDA
-static void
-load_sort_engine(msieve_obj *obj, poly_search_t *poly)
-{
-	char libname[256];
-	const char *arch;
-	#if defined(WIN32) || defined(_WIN64)
-	const char *suffix = ".dll";
-	#else
-	const char *suffix = ".so";
-	#endif
-
-	if (poly->gpu_info->compute_version_major >= 2)
-		arch = "sm20";
-	else if (poly->gpu_info->compute_version_minor >= 3)
-		arch = "sm13";
-	else
-		arch = "sm10";
-
-	sprintf(libname, "sort_engine_%s%s", arch, suffix);
-
-	/* override from input args */
-
-	if (obj->nfs_args != NULL) {
-		char *tmp = strstr(obj->nfs_args, "sortlib=");
-
-		if (tmp != NULL) {
-			uint32 i;
-			for (i = 0, tmp += 8; i < sizeof(libname) - 1; i++) {
-				if (*tmp == 0 || isspace(*tmp))
-					break;
-
-				libname[i] = *tmp++;
-			}
-			libname[i] = 0;
-		}
-	}
-
-	poly->sort_engine_handle = load_dynamic_lib(libname);
-	if (poly->sort_engine_handle == NULL) {
-		printf("error: failed to load GPU sorting engine\n");
-		exit(-1);
-	}
-}
-#endif
-
-/*------------------------------------------------------------------------*/
 static void
 poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 {
@@ -218,35 +171,6 @@ poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 	poly->norm_max = data->norm_max;
 	poly->callback = data->callback;
 	poly->callback_data = data->callback_data;
-
-#ifdef HAVE_CUDA
-	CUDA_TRY(cuCtxCreate(&poly->gpu_context, 
-			CU_CTX_BLOCKING_SYNC,
-			poly->gpu_info->device_handle))
-
-	/* load GPU kernels */
-
-	CUDA_TRY(cuModuleLoad(&poly->gpu_module, "stage1_core.ptx"))
-
-	/* the sort engine uses the same CUDA context */
-
-	poly->sort_engine_init = get_lib_symbol(
-					poly->sort_engine_handle,
-					"sort_engine_init");
-	poly->sort_engine_free = get_lib_symbol(
-					poly->sort_engine_handle,
-					"sort_engine_free");
-	poly->sort_engine_run = get_lib_symbol(
-					poly->sort_engine_handle,
-					"sort_engine_run");
-	if (poly->sort_engine_init == NULL ||
-	    poly->sort_engine_free == NULL ||
-	    poly->sort_engine_run == NULL) {
-		printf("error: cannot find GPU sorting function\n");
-		exit(-1);
-	}
-	poly->sort_engine = poly->sort_engine_init();
-#endif
 }
 
 /*------------------------------------------------------------------------*/
@@ -267,9 +191,7 @@ poly_search_free(poly_search_t *poly)
 	mpz_clear(poly->gmp_high_coeff_begin);
 	mpz_clear(poly->gmp_high_coeff_end);
 #ifdef HAVE_CUDA
-	poly->sort_engine_free(poly->sort_engine);
-	unload_dynamic_lib(poly->sort_engine_handle);
-	CUDA_TRY(cuCtxDestroy(poly->gpu_context)) 
+	gpu_data_free(poly->gpu_data);
 #endif
 }
 
@@ -568,6 +490,7 @@ poly_stage1_run(msieve_obj *obj, poly_stage1_t *data)
 	poly_search_t poly;
 #ifdef HAVE_CUDA
 	gpu_config_t gpu_config;
+	gpu_info_t *gpu_info;
 
 	gpu_init(&gpu_config);
 	if (gpu_config.num_gpu == 0) {
@@ -579,16 +502,15 @@ poly_stage1_run(msieve_obj *obj, poly_stage1_t *data)
 			"or is not CUDA-enabled\n", obj->which_gpu);
 		exit(-1);
 	}
-	logprintf(obj, "using GPU %u (%s)\n", obj->which_gpu,
-			gpu_config.info[obj->which_gpu].name);
 
-	poly.gpu_info = gpu_config.info + obj->which_gpu; 
+	gpu_info = gpu_config.info + obj->which_gpu; 
 
+	logprintf(obj, "using GPU %u (%s)\n", obj->which_gpu, gpu_info->name);
 	logprintf(obj, "selected card has CUDA arch %d.%d\n",
-			poly.gpu_info->compute_version_major,
-			poly.gpu_info->compute_version_minor);
+			gpu_info->compute_version_major,
+			gpu_info->compute_version_minor);
 
-	load_sort_engine(obj, &poly);
+	gpu_data_init(obj, &poly, gpu_info);
 #endif
 
 	poly_search_init(&poly, data);

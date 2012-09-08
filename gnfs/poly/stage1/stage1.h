@@ -23,10 +23,6 @@ $Id$
 #include <poly_skew.h>
 #include <cuda_xface.h>
 
-#ifdef HAVE_CUDA
-#include <sort_engine.h> /* interface to GPU sorting library */
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -109,20 +105,9 @@ typedef struct {
 	mpz_t tmp5;
 
 #ifdef HAVE_CUDA
+	/* opaque pointer to GPU data */
 
-	/* main structures for GPU-based sieving */
-
-	CUcontext gpu_context;
-	gpu_info_t *gpu_info;
-	CUmodule gpu_module;
-
-	/* external sorting library, loaded dynamically */
-
-	libhandle_t sort_engine_handle;
-	void * sort_engine;
-	sort_engine_init_func sort_engine_init;
-	sort_engine_free_func sort_engine_free;
-	sort_engine_run_func sort_engine_run;
+	void *gpu_data;
 #endif
 
 	/* function to call when a collision is found */
@@ -311,6 +296,11 @@ handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
 
 double sieve_lattice_gpu(msieve_obj *obj,
 			poly_search_t *poly, double deadline);
+
+void gpu_data_init(msieve_obj *obj, poly_search_t *poly, 
+				gpu_info_t *gpu_info);
+
+void gpu_data_free(void *gpu_data);
 
 #else
 
