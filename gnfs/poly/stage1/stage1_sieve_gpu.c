@@ -100,99 +100,94 @@ typedef struct {
 	uint32 num_p;
 	uint32 num_p_alloc;
 
+	uint32 *p;
+	uint64 *start_roots;
+
 	CUdeviceptr dev_p;
 	CUdeviceptr dev_start_roots;
 	CUstream stream;
 
-	uint32 *p;
-
 	union { 
-		uint64 *roots64[MAX_ROOTS];
-		uint32 *roots32[MAX_ROOTS];
-		void *roots[MAX_ROOTS];
+		uint64 *roots64;
+		uint32 *roots32;
+		void *roots;
 	} r;
 
 } p_soa_var_t;
 
-#define MAX_P_SOA_ARRAYS 16
+#define MAX_P_SOA_ARRAYS 5
 
 typedef struct {
 	uint32 num_arrays;
+	uint32 max_arrays;
+	uint32 max_p_roots;
 	uint32 pp_is_64;
 
-	uint32 max_p_roots;
-	p_soa_var_t *soa;
-
+	p_soa_var_t start_soa[MAX_P_SOA_ARRAYS];
+	p_soa_var_t *soa[MAX_P_SOA_ARRAYS];
 } p_soa_array_t;
 
-static void
-p_soa_array_init(p_soa_array_t *s, uint32 degree, uint32 pp_is_64)
+static p_soa_array_t *
+p_soa_array_init(uint32 degree)
 {
-	uint32 i, j;
-	memset(s, 0, sizeof(p_soa_array_t));
-
-	s->pp_is_64 = pp_is_64;
-	s->soa = (p_soa_var_t *)xmalloc(MAX_P_SOA_ARRAYS *
-					sizeof(p_soa_var_t));
+	uint32 i;
+	p_soa_array_t *s = (p_soa_array_t *)xcalloc(1, 
+					sizeof(p_soa_array_t));
+	p_soa_var_t *start_soa = s->start_soa;
 
 	switch (degree) {
 	case 4:
-		s->num_arrays = 3;
-		s->soa[0].num_roots = 2;
-		s->soa[1].num_roots = 4;
-		s->soa[2].num_roots = 8;
-		s->max_p_roots = 8;
+		s->max_arrays = 3;
+		start_soa[0].num_roots = 2;
+		start_soa[1].num_roots = 4;
+		start_soa[2].num_roots = 8;
 		break;
 
 	case 5:
-		s->num_arrays = 3;
-		s->soa[0].num_roots = 1;
-		s->soa[1].num_roots = 5;
-		s->soa[2].num_roots = 25;
-		s->max_p_roots = 25;
+		s->max_arrays = 3;
+		start_soa[0].num_roots = 1;
+		start_soa[1].num_roots = 5;
+		start_soa[2].num_roots = 25;
 		break;
 
 	case 6:
-		s->num_arrays = 5;
-		s->soa[0].num_roots = 2;
-		s->soa[1].num_roots = 4;
-		s->soa[2].num_roots = 6;
-		s->soa[3].num_roots = 12;
-		s->soa[4].num_roots = 36;
-		s->max_p_roots = 36;
+		s->max_arrays = 5;
+		start_soa[0].num_roots = 2;
+		start_soa[1].num_roots = 4;
+		start_soa[2].num_roots = 6;
+		start_soa[3].num_roots = 12;
+		start_soa[4].num_roots = 36;
 		break;
 
 	case 7: /* ;) */
-		s->num_arrays = 3;
-		s->soa[0].num_roots = 1;
-		s->soa[1].num_roots = 7;
-		s->soa[2].num_roots = 49;
-		s->max_p_roots = 49;
+		s->max_arrays = 3;
+		start_soa[0].num_roots = 1;
+		start_soa[1].num_roots = 7;
+		start_soa[2].num_roots = 49;
 		break;
 	}
+	s->max_p_roots = start_soa[s->max_arrays - 1].num_roots;
 
-	for (i = 0; i < s->num_arrays; i++) {
-		p_soa_var_t *soa = s->soa + i;
+	for (i = 0; i < s->max_arrays; i++) {
+		p_soa_var_t *soa = s->start_soa + i;
 
 		soa->num_p = 0;
 		soa->num_p_alloc = 256;
 		soa->p = (uint32 *)xmalloc(soa->num_p_alloc * sizeof(uint32));
-		for (j = 0; j < soa->num_roots; j++) {
-			soa->r.roots[j] = xmalloc(soa->num_p_alloc *
-					((pp_is_64) ? sizeof(uint64) : 
-					sizeof(uint32)));
-		}
+		soa->start_roots = (uint64 *)xmalloc(soa->num_roots *
+					soa->num_p_alloc * sizeof(uint64));
+		soa->r.roots = xmalloc(soa->num_roots *
+					soa->num_p_alloc * sizeof(uint64));
+		CUDA_TRY(cuMemAlloc(&soa->dev_p, 
+					soa->num_p_alloc * 
+					sizeof(uint32)))
+		CUDA_TRY(cuMemAlloc(&soa->dev_start_roots, 
+					soa->num_p_alloc *
+					soa->num_roots * sizeof(uint64)))
+		CUDA_TRY(cuStreamCreate(&soa->stream, 0))
 	}
-}
 
-static void
-p_soa_var_free(p_soa_var_t *soa)
-{
-	uint32 i;
-
-	free(soa->p);
-	for (i = 0; i < soa->num_roots; i++)
-		free(soa->r.roots[i]);
+	return s;
 }
 
 static void
@@ -200,26 +195,94 @@ p_soa_array_free(p_soa_array_t *s)
 {
 	uint32 i;
 
-	for (i = 0; i < s->num_arrays; i++)
-		p_soa_var_free(s->soa + i);
+	for (i = 0; i < s->max_arrays; i++) {
+		p_soa_var_t *soa = s->start_soa + i;
 
-	free(s->soa);
+		free(soa->p);
+		free(soa->start_roots);
+		free(soa->r.roots);
+		CUDA_TRY(cuMemFree(soa->dev_p));
+		CUDA_TRY(cuMemFree(soa->dev_start_roots));
+		CUDA_TRY(cuStreamDestroy(soa->stream));
+	}
+
+	free(s);
 }
 
 static void
-p_soa_array_compact(p_soa_array_t *s)
+p_soa_array_reset(p_soa_array_t *s)
 {
-	uint32 i, j;
+	uint32 i;
 
-	for (i = j = 0; i < s->num_arrays; i++) {
-		if (s->soa[i].num_p < 50) {
-			p_soa_var_free(s->soa + i);
+	s->num_arrays = 0;
+	s->pp_is_64 = 0;
+	for (i = 0; i < s->max_arrays; i++)
+		s->start_soa[i].num_p = 0;
+}
+
+static void
+p_soa_array_start(p_soa_array_t *s, uint32 pp_is_64)
+{
+	uint32 i, j, k, m;
+	uint32 root_bytes = pp_is_64 ? sizeof(uint64) : sizeof(uint32);
+
+	for (i = j = 0; i < s->max_arrays; i++) {
+		p_soa_var_t *soa = s->start_soa + i;
+		uint32 num_p = soa->num_p;
+		uint32 num_roots = soa->num_roots;
+		uint64 *rs = soa->start_roots;
+		void *root_array = soa->r.roots;
+
+		if (soa->num_p < 50)
+			continue;
+
+		if (pp_is_64) {
+
+			if (num_roots == 1) {
+				root_array = rs;
+			}
+			else {
+				uint64 *rd = soa->r.roots64;
+
+				for (k = 0; k < num_p; k++) {
+					uint64 *rd2 = rd;
+
+					for (m = 0; m < num_roots; m++) {
+						*rd2 = rs[m];
+						rd2 += num_p;
+					}
+					rs += num_roots;
+					rd++;
+				}
+			}
 		}
 		else {
-			s->soa[j++] = s->soa[i];
+			uint32 *rd = soa->r.roots32;
+
+			for (k = 0; k < num_p; k++) {
+				uint32 *rd2 = rd;
+
+				for (m = 0; m < num_roots; m++) {
+					*rd2 = (uint32)rs[m];
+					rd2 += num_p;
+				}
+				rs += num_roots;
+				rd++;
+			}
 		}
+
+		CUDA_TRY(cuMemcpyHtoDAsync(soa->dev_p, 
+				soa->p,
+				num_p * sizeof(uint32),
+				soa->stream))
+		CUDA_TRY(cuMemcpyHtoDAsync(soa->dev_start_roots, 
+				root_array,
+				num_p * num_roots * root_bytes,
+				soa->stream))
+		s->soa[j++] = soa;
 	}
 	s->num_arrays = j;
+	s->pp_is_64 = pp_is_64;
 }
 
 static void
@@ -228,42 +291,44 @@ store_p_soa(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 	uint32 i, j;
 	p_soa_array_t *s = (p_soa_array_t *)extra;
 
-	j = (uint32)(-1);
-	for (i = 0; i < s->num_arrays; i++) {
+	for (i = 0; i < s->max_arrays; i++) {
 
-		if (s->soa[i].num_roots > num_roots)
+		p_soa_var_t *soa = s->start_soa + i;
+		uint32 num_p;
+
+		if (soa->num_roots != num_roots)
 			continue;
 
-		if (j > i || s->soa[i].num_roots > s->soa[j].num_roots)
-			j = i;
-	}
+		num_p = soa->num_p;
 
-	if (j < s->num_arrays) {
-		p_soa_var_t *soa = s->soa + j;
-
-		if (soa->num_p_alloc == soa->num_p) {
+		if (soa->num_p_alloc == num_p) {
 			soa->num_p_alloc *= 2;
 			soa->p = (uint32 *)xrealloc(soa->p, soa->num_p_alloc *
 							sizeof(uint32));
-			for (j = 0; j < soa->num_roots; j++) {
-				soa->r.roots[j] = xrealloc(soa->r.roots[j],
+			soa->start_roots = (uint64 *)xrealloc(soa->start_roots,
+						soa->num_p_alloc *
+						num_roots *
+						sizeof(uint64));
+			soa->r.roots = xrealloc(soa->r.roots,
+						soa->num_p_alloc *
+						num_roots *
+						sizeof(uint64));
+
+			CUDA_TRY(cuMemFree(soa->dev_p));
+			CUDA_TRY(cuMemFree(soa->dev_start_roots));
+			CUDA_TRY(cuMemAlloc(&soa->dev_p, 
 					soa->num_p_alloc * 
-					((s->pp_is_64) ? sizeof(uint64) :
-					 sizeof(uint32)));
-			}
+					sizeof(uint32)))
+			CUDA_TRY(cuMemAlloc(&soa->dev_start_roots, 
+					soa->num_p_alloc *
+					soa->num_roots * sizeof(uint64)))
 		}
 
-		soa->p[soa->num_p] = p;
-		if (s->pp_is_64) {
-			for (j = 0; j < soa->num_roots; j++)
-				soa->r.roots64[j][soa->num_p] = roots[j];
-		}
-		else {
-			for (j = 0; j < soa->num_roots; j++)
-				soa->r.roots32[j][soa->num_p] = (uint32)roots[j];
-		}
-
+		soa->p[num_p] = p;
+		for (j = 0; j < num_roots; j++)
+			soa->start_roots[num_p * num_roots + j] = roots[j];
 		soa->num_p++;
+		return;
 	}
 }
 
@@ -438,7 +503,7 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 			num_aprog_vals * root_bytes))
 
 	for (i = j = 0; i < p_array->num_arrays; i++) {
-		p_soa_var_t *soa = p_array->soa + i;
+		p_soa_var_t *soa = p_array->soa[i];
 		uint32 num_p = soa->num_p;
 		uint32 blocks_x, blocks_y;
 		uint32 size_x, size_y;
@@ -566,36 +631,31 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	uint32 all_q_done = 0;
 	uint32 degree = poly->degree;
 	specialq_array_t q_array;
-	p_soa_array_t p_array;
 	device_data_t *data = (device_data_t *)poly->gpu_data;
+	p_soa_array_t *p_array = data->p_array;
 	double cpu_start_time = get_cpu_time();
 	uint32 unused_bits;
 	uint32 pp_is_64 = (p_max >= 65536);
-	uint32 start_root_bytes = pp_is_64 ? sizeof(uint64) : sizeof(uint32);
 	uint32 max_batch_specialq32;
 	uint32 max_batch_specialq64;
 
 	*elapsed = 0;
 
-	data->p_array = &p_array;
-	p_soa_array_init(&p_array, degree, pp_is_64);
-
 	/* build all the arithmetic progressions */
 
-	sieve_fb_reset(sieve_p, p_min, p_max, 1, p_array.max_p_roots);
+	p_soa_array_reset(p_array);
+	sieve_fb_reset(sieve_p, p_min, p_max, 1, p_array->max_p_roots);
 	while (sieve_fb_next(sieve_p, poly, store_p_soa,
-			&p_array) != P_SEARCH_DONE) {
+			p_array) != P_SEARCH_DONE) {
 		;
 	}
 
-	p_soa_array_compact(&p_array);
-	if (p_array.num_arrays == 0) {
-		p_soa_array_free(&p_array);
+	p_soa_array_start(p_array, pp_is_64);
+	if (p_array->num_arrays == 0)
 		return 0;
-	}
 
-	for (i = j = 0; i < p_array.num_arrays; i++) {
-		p_soa_var_t *soa = p_array.soa + i;
+	for (i = j = 0; i < p_array->num_arrays; i++) {
+		p_soa_var_t *soa = p_array->soa[i];
 
 		j += soa->num_p * soa->num_roots;
 	}
@@ -679,29 +739,6 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	CUDA_TRY(cuMemAlloc(&data->gpu_q_array, sizeof(specialq_t) *
 				(pp_is_64 ? max_batch_specialq64 :
 				 	max_batch_specialq32)))
-
-	/* set up the root generator */
-
-	for (i = 0; i < p_array.num_arrays; i++) {
-		p_soa_var_t *soa = p_array.soa + i;
-		uint32 num = soa->num_p;
-
-		CUDA_TRY(cuStreamCreate(&soa->stream, 0))
-
-		CUDA_TRY(cuMemAlloc(&soa->dev_p, num * sizeof(uint32)))
-		CUDA_TRY(cuMemAlloc(&soa->dev_start_roots,
-				soa->num_roots * num * start_root_bytes))
-
-		CUDA_TRY(cuMemcpyHtoD(soa->dev_p, soa->p,
-				num * sizeof(uint32)))
-
-		for (j = 0; j < soa->num_roots; j++) {
-			CUDA_TRY(cuMemcpyHtoD(soa->dev_start_roots +
-					j * num * start_root_bytes,
-					soa->r.roots[j], 
-					num * start_root_bytes))
-		}
-	}
 
 	/* account for 'trivial' special-q */
 
@@ -788,14 +825,6 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	CUDA_TRY(cuMemFree(data->gpu_root_array))
 	CUDA_TRY(cuMemFree(data->gpu_root_array_scratch))
 	CUDA_TRY(cuMemFree(data->gpu_q_array))
-	for (i = 0; i < p_array.num_arrays; i++) {
-		p_soa_var_t *soa = p_array.soa + i;
-
-		CUDA_TRY(cuMemFree(soa->dev_p));
-		CUDA_TRY(cuMemFree(soa->dev_start_roots));
-		CUDA_TRY(cuStreamDestroy(soa->stream));
-	}
-	p_soa_array_free(&p_array);
 	specialq_array_free(&q_array);
 	return quit;
 }
@@ -961,11 +990,32 @@ load_sort_engine(msieve_obj *obj, device_data_t *d)
 }
 
 /*------------------------------------------------------------------------*/
-void gpu_data_init(msieve_obj *obj, poly_search_t *poly, 
-			gpu_info_t *gpu_info)
+void gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 {
 	uint32 i;
 	device_data_t *d;
+	gpu_config_t gpu_config;
+	gpu_info_t *gpu_info;
+
+	gpu_init(&gpu_config);
+	if (gpu_config.num_gpu == 0) {
+		printf("error: no CUDA-enabled GPUs found\n");
+		exit(-1);
+	}
+	if (obj->which_gpu >= (uint32)gpu_config.num_gpu) {
+		printf("error: GPU %u does not exist "
+			"or is not CUDA-enabled\n", obj->which_gpu);
+		exit(-1);
+	}
+
+	gpu_info = (gpu_info_t *)xmalloc(sizeof(gpu_info_t));
+	memcpy(gpu_info, gpu_config.info + obj->which_gpu,
+			sizeof(gpu_info_t)); 
+
+	logprintf(obj, "using GPU %u (%s)\n", obj->which_gpu, gpu_info->name);
+	logprintf(obj, "selected card has CUDA arch %d.%d\n",
+			gpu_info->compute_version_major,
+			gpu_info->compute_version_minor);
 
 	poly->gpu_data = d = (device_data_t *)xcalloc(1, sizeof(device_data_t));
 
@@ -1017,6 +1067,9 @@ void gpu_data_init(msieve_obj *obj, poly_search_t *poly,
 
 	CUDA_TRY(cuMemsetD8(d->gpu_found_array, 0, sizeof(found_t)))
 
+	/* set up root generation arrays */
+
+	d->p_array = p_soa_array_init(poly->degree);
 }
 
 /*------------------------------------------------------------------------*/
@@ -1026,6 +1079,8 @@ void gpu_data_free(void *gpu_data)
 
 	free(d->found_array);
 	free(d->launch);
+
+	p_soa_array_free(d->p_array);
 
 	CUDA_TRY(cuMemFree(d->gpu_found_array))
 
@@ -1037,6 +1092,7 @@ void gpu_data_free(void *gpu_data)
 
 	CUDA_TRY(cuCtxDestroy(d->gpu_context)) 
 	
+	free(d->gpu_info);
 	free(d);
 }
 

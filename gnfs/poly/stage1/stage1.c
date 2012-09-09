@@ -148,7 +148,7 @@ handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
 
 /*------------------------------------------------------------------------*/
 static void
-poly_search_init(poly_search_t *poly, poly_stage1_t *data)
+poly_search_init(msieve_obj *obj, poly_search_t *poly, poly_stage1_t *data)
 {
 	mpz_init_set(poly->N, data->gmp_N);
 	mpz_init(poly->high_coeff);
@@ -171,6 +171,10 @@ poly_search_init(poly_search_t *poly, poly_stage1_t *data)
 	poly->norm_max = data->norm_max;
 	poly->callback = data->callback;
 	poly->callback_data = data->callback_data;
+
+#ifdef HAVE_CUDA
+	gpu_data_init(obj, poly);
+#endif
 }
 
 /*------------------------------------------------------------------------*/
@@ -488,32 +492,8 @@ poly_stage1_run(msieve_obj *obj, poly_stage1_t *data)
 	/* pass external configuration in and run the search */
 
 	poly_search_t poly;
-#ifdef HAVE_CUDA
-	gpu_config_t gpu_config;
-	gpu_info_t *gpu_info;
 
-	gpu_init(&gpu_config);
-	if (gpu_config.num_gpu == 0) {
-		printf("error: no CUDA-enabled GPUs found\n");
-		exit(-1);
-	}
-	if (obj->which_gpu >= (uint32)gpu_config.num_gpu) {
-		printf("error: GPU %u does not exist "
-			"or is not CUDA-enabled\n", obj->which_gpu);
-		exit(-1);
-	}
-
-	gpu_info = gpu_config.info + obj->which_gpu; 
-
-	logprintf(obj, "using GPU %u (%s)\n", obj->which_gpu, gpu_info->name);
-	logprintf(obj, "selected card has CUDA arch %d.%d\n",
-			gpu_info->compute_version_major,
-			gpu_info->compute_version_minor);
-
-	gpu_data_init(obj, &poly, gpu_info);
-#endif
-
-	poly_search_init(&poly, data);
+	poly_search_init(obj, &poly, data);
 
 	search_coeffs(obj, &poly, data->deadline);
 

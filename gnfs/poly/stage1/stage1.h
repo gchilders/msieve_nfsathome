@@ -297,8 +297,7 @@ handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
 double sieve_lattice_gpu(msieve_obj *obj,
 			poly_search_t *poly, double deadline);
 
-void gpu_data_init(msieve_obj *obj, poly_search_t *poly, 
-				gpu_info_t *gpu_info);
+void gpu_data_init(msieve_obj *obj, poly_search_t *poly);
 
 void gpu_data_free(void *gpu_data);
 
