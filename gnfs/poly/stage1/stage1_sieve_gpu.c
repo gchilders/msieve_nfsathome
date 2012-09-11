@@ -520,11 +520,11 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 		   soa's generate blocks with about the same amount
 		   of arithmetic. There is a modular multiply for
 		   each root and a modular inverse for each (p,q) pair, 
-		   which we count as 5 multiplies */
+		   which we count as 3 multiplies */
 
-		total_blocks = (5 * num_p * num_q +
+		total_blocks = (3 * num_p * num_q +
 			        num_p * soa->num_roots * num_specialq) /
-				20000;
+				50000;
 		total_blocks = MIN(total_blocks, 1000);
 		total_blocks = MAX(total_blocks, 1);
 
@@ -580,6 +580,7 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 	sort_data.num_elements = num_specialq * d->num_entries * num_aprog_vals;
 	sort_data.num_arrays = 1;
 	sort_data.key_bits = key_bits;
+	sort_data.stream = 0;
 	d->sort_engine_run(d->sort_engine, &sort_data);
 
 	if (root_bytes == sizeof(uint64))
