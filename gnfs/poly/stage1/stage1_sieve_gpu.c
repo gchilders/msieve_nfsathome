@@ -650,6 +650,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	uint32 max_batch_specialq64;
 
 	*elapsed = 0;
+	data->gpu_elapsed = 0;
 
 	/* build all the arithmetic progressions */
 
