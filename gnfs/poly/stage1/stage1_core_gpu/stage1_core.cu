@@ -43,7 +43,7 @@ sieve_kernel_trans_pp32_r32(uint32 *p_array, uint32 num_p, uint32 *start_roots,
 	pp_w = montmul32_w(pp);
 
 	specialq_start = blockIdx.y * specialq_block;
-	specialq_end = __min(specialq_start + specialq_block, num_specialq);
+	specialq_end = min(specialq_start + specialq_block, num_specialq);
 	aprog_stride = num_entries * num_specialq;
 
 	qq_prod_offset = specialq_start * num_entries + p_offset;
@@ -229,7 +229,7 @@ sieve_kernel_trans_pp32_r64(uint32 *p_array, uint32 num_p, uint32 *start_roots,
 	pp_w = montmul32_w(pp);
 
 	specialq_start = blockIdx.y * specialq_block;
-	specialq_end = __min(specialq_start + specialq_block, num_specialq);
+	specialq_end = min(specialq_start + specialq_block, num_specialq);
 	aprog_stride = num_entries * num_specialq;
 
 	qq_prod_offset = specialq_start * num_entries + p_offset;
@@ -420,7 +420,7 @@ sieve_kernel_trans_pp64_r64(uint32 *p_array, uint32 num_p, uint64 *start_roots,
 	pp_w = montmul32_w(pp);
 
 	specialq_start = blockIdx.y * specialq_block;
-	specialq_end = __min(specialq_start + specialq_block, num_specialq);
+	specialq_end = min(specialq_start + specialq_block, num_specialq);
 	aprog_stride = num_entries * num_specialq;
 
 	qq_prod_offset = specialq_start * num_entries + p_offset;
