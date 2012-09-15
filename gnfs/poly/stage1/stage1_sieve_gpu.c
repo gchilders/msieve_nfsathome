@@ -410,6 +410,9 @@ typedef struct {
 	gpu_launch_t *launch;
 	CUdeviceptr gpu_q_array;
 
+	size_t max_sort_entries32;
+	size_t max_sort_entries64;
+
 	CUdeviceptr gpu_p_array;
 	CUdeviceptr gpu_p_array_scratch;
 
@@ -583,6 +586,12 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 	sort_data.stream = 0;
 	d->sort_engine_run(d->sort_engine, &sort_data);
 
+	/* the sort engine may have swapped the input arrays */
+	d->gpu_p_array = sort_data.data_in;
+	d->gpu_p_array_scratch = sort_data.data_in_scratch;
+	d->gpu_root_array = sort_data.keys_in;
+	d->gpu_root_array_scratch = sort_data.keys_in_scratch;
+
 	if (root_bytes == sizeof(uint64))
 		launch = d->launch + GPU_FINAL_64;
 	else
@@ -667,69 +676,13 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	printf("aprogs: %u roots\n", data->num_entries);
 #endif
 
-	/* a single transformed array will not have enough
-	   elements for the GPU to sort efficiently; instead,
-	   we batch multiple arrays together and sort the
-	   entire batch. Array elements get their array number
-	   added into unused bits above each p, so the number
-	   of such unused bits is one limit on the batch size.
-	   Another limit is the amount of RAM on the card;
-	   we try to use less than 30% of it. Finally, we top
-	   out at a few ten millions of elements, which is far 
-	   into asymptotically optimal throughput territory 
-	   for all current GPUs
-	
-	   The sizing below assumes we can batch as many special-Q
-	   as we want. However, for small degree-5 problems the 
-	   number of special-Q available is too small to efficiently 
-	   use the card. In that case, we will compensate later by 
-	   making each arithmetic progression contribute multiple 
-	   offsets */
 
 	unused_bits = 1;
 	while (!(p_max & (1 << (31 - unused_bits))))
 		unused_bits++;
 
-	max_batch_specialq32 = 30000000 / data->num_entries;
-
-	max_batch_specialq32 = MIN(max_batch_specialq32,
-				(uint32)(0.3 * data->gpu_info->global_mem_size /
-				 (2 * (sizeof(uint32) + sizeof(uint32)) * 
-				  data->num_entries)));
-
-	max_batch_specialq64 = 20000000 / data->num_entries;
-
-	max_batch_specialq64 = MIN(max_batch_specialq64,
-				(uint32)(0.3 * data->gpu_info->global_mem_size /
-				 (2 * (sizeof(uint32) + sizeof(uint64)) * 
-				  data->num_entries)));
-
-	if (pp_is_64) {
-
-		/* roots to be sorted are always 64-bit integers */
-
-		i = max_batch_specialq64 * sizeof(uint32);
-		j = max_batch_specialq64 * sizeof(uint64);
-	}
-	else {
-		/* roots to be sorted are 32-bit integers except
-		   for small degree-5 problems, where they may
-		   be 64-bit integers if that's more efficient.
-		   Allocate the worst-case memory */
-
-		i = max_batch_specialq32 * sizeof(uint32);
-		j = MAX(max_batch_specialq64 * sizeof(uint64),
-			max_batch_specialq32 * sizeof(uint32));
-	}
-
-	CUDA_TRY(cuMemAlloc(&data->gpu_p_array,
-			data->num_entries * i))
-	CUDA_TRY(cuMemAlloc(&data->gpu_p_array_scratch,
-			data->num_entries * i))
-	CUDA_TRY(cuMemAlloc(&data->gpu_root_array,
-			data->num_entries * j))
-	CUDA_TRY(cuMemAlloc(&data->gpu_root_array_scratch,
-			data->num_entries * j))
+	max_batch_specialq32 = data->max_sort_entries32 / data->num_entries;
+	max_batch_specialq64 = data->max_sort_entries64 / data->num_entries;
 
 	/* allocate the q's one batch at a time */
 
@@ -821,10 +774,6 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 			quit = 1;
 	}
 
-	CUDA_TRY(cuMemFree(data->gpu_p_array))
-	CUDA_TRY(cuMemFree(data->gpu_p_array_scratch))
-	CUDA_TRY(cuMemFree(data->gpu_root_array))
-	CUDA_TRY(cuMemFree(data->gpu_root_array_scratch))
 	CUDA_TRY(cuMemFree(data->gpu_q_array))
 	specialq_array_free(&q_array);
 	return quit;
@@ -840,28 +789,34 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, double deadline)
 	uint32 special_q_min, special_q_max;
 	uint32 special_q_min2, special_q_max2;
 	uint32 special_q_fb_max;
-	double p_size_max = poly->p_size_max;
-	double sieve_bound = poly->coeff_max / poly->m0;
 	double elapsed = 0;
+	double target = poly->coeff_max / poly->m0;
 	sieve_fb_t sieve_p, sieve_special_q;
 
-	/* size the problem; we choose p_min so that we can use
-	   exactly one offset from each progression (the one
-	   nearest to m0) in the search. Choosing larger p
-	   implies that we could use more of their offsets, but
-	   it appears not to be optimal to do so since the
-	   biggest part of the search difficulty is the sorting
-	   phase, and larger p implies that we need to sort more
-	   of them to find each collision */
+	/* Kleinjung shows that the third-to-largest algebraic
+	   polynomial coefficient is of size approximately
 
-	p_min = MIN(MAX_OTHER / P_SCALE, sqrt(0.5 / sieve_bound));
-	p_min = MIN(p_min, sqrt(p_size_max) / P_SCALE);
+	             (correction to m0) * m0
+		    --------------------------
+		    (leading rational coeff)^2
+	
+	   We have a bound 'coeff_max' on what this number is 
+	   supposed to be, and we know m0 and an upper bound on 
+	   the size of the leading rational coefficient P. Let 
+	   P = p1*p2*q, where p1 and p2 are drawn from a fixed
+	   set of candidates, and q (the 'special-q') is arbitrary
+	   except that gcd(q,p1,p2)=1. Then the correction 'C' to 
+	   m0 is < max(p1,p2)^2 */
+	   
+	p_max = MIN(MAX_OTHER, sqrt(poly->p_size_max));
+	p_max = MIN(p_max, sqrt(0.5 / target));
 
-	p_max = p_min * P_SCALE;
-
-	special_q_min = 1;
-	special_q_max = MIN(MAX_SPECIAL_Q, p_size_max / p_max / p_max);
+	special_q_max = MIN(MAX_SPECIAL_Q, 
+			    poly->p_size_max / p_max / p_max);
 	special_q_max = MAX(special_q_max, 1);
+
+	p_min = MAX(1, p_max / P_SCALE);
+	special_q_min = 1;
 
 	/* set up the special q factory; special-q may have 
 	   arbitrary factors, but many small factors are 
@@ -993,10 +948,12 @@ load_sort_engine(msieve_obj *obj, device_data_t *d)
 /*------------------------------------------------------------------------*/
 void gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 {
-	uint32 i;
+	uint32 i, j;
 	device_data_t *d;
 	gpu_config_t gpu_config;
 	gpu_info_t *gpu_info;
+	size_t sort_entries32;
+	size_t sort_entries64;
 
 	gpu_init(&gpu_config);
 	if (gpu_config.num_gpu == 0) {
@@ -1071,12 +1028,55 @@ void gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 	/* set up root generation arrays */
 
 	d->p_array = p_soa_array_init(poly->degree);
+
+	/* a single transformed array will not have enough
+	   elements for the GPU to sort efficiently; instead,
+	   we batch multiple arrays together and sort the
+	   entire batch. Array elements get their array number
+	   added into unused bits above each p, so the number
+	   of such unused bits is one limit on the batch size.
+	   Another limit is the amount of RAM on the card;
+	   we try to use less than 30% of it. Finally, we top
+	   out at a few ten millions of elements, which is far 
+	   into asymptotically optimal throughput territory 
+	   for all current GPUs
+	
+	   The sizing below assumes we can batch as many special-Q
+	   as we want. However, for small degree-5 problems the 
+	   number of special-Q available is too small to efficiently 
+	   use the card. In that case, we will compensate later by 
+	   making each arithmetic progression contribute multiple 
+	   offsets */
+
+	d->max_sort_entries32 = sort_entries32 = MIN(30000000,
+			(uint32)(0.3 * d->gpu_info->global_mem_size /
+				 (2 * (sizeof(uint32) + 
+				       sizeof(uint32)))));
+
+	d->max_sort_entries64 = sort_entries64 = MIN(20000000,
+			(uint32)(0.3 * d->gpu_info->global_mem_size /
+				 (2 * (sizeof(uint32) + 
+				       sizeof(uint64)))));
+
+	i = sizeof(uint32) * MAX(sort_entries32, sort_entries64);
+	j = MAX(sort_entries32 * (sizeof(uint32) + sizeof(uint32)),
+	        sort_entries64 * (sizeof(uint32) + sizeof(uint64)));
+
+	CUDA_TRY(cuMemAlloc(&d->gpu_p_array, i))
+	CUDA_TRY(cuMemAlloc(&d->gpu_p_array_scratch, i))
+	CUDA_TRY(cuMemAlloc(&d->gpu_root_array, j))
+	CUDA_TRY(cuMemAlloc(&d->gpu_root_array_scratch, j))
 }
 
 /*------------------------------------------------------------------------*/
 void gpu_data_free(void *gpu_data)
 {
 	device_data_t *d = (device_data_t *)gpu_data;
+
+	CUDA_TRY(cuMemFree(d->gpu_p_array))
+	CUDA_TRY(cuMemFree(d->gpu_p_array_scratch))
+	CUDA_TRY(cuMemFree(d->gpu_root_array))
+	CUDA_TRY(cuMemFree(d->gpu_root_array_scratch))
 
 	free(d->found_array);
 	free(d->launch);
