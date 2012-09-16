@@ -93,6 +93,7 @@ COMMON_HDR = \
 	include/msieve.h \
 	include/mp.h \
 	include/polyroot.h \
+	include/thread.h \
 	include/util.h
 
 COMMON_SRCS = \
@@ -130,6 +131,7 @@ COMMON_SRCS = \
 	common/prime_sieve.c \
 	common/savefile.c \
 	common/strtoll.c \
+	common/thread.c \
 	common/util.c
 
 COMMON_OBJS = $(COMMON_SRCS:.c=.o)
