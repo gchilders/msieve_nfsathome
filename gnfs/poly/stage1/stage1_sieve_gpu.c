@@ -432,7 +432,8 @@ typedef struct {
 
 /*------------------------------------------------------------------------*/
 static void
-check_found_array(poly_search_t *poly, device_data_t *d)
+check_found_array(poly_search_t *poly, poly_coeff_t *c,
+		device_data_t *d)
 {
 	uint32 i;
 	uint32 found_array_size;
@@ -459,13 +460,16 @@ check_found_array(poly_search_t *poly, device_data_t *d)
 		int64 offset = found->offset;
 
 		double dp = (double)q * p1 * p2;
-		double coeff = poly->m0 * fabs((double)qroot + 
+		double coeff = c->m0 * fabs((double)qroot + 
 					(double)offset * q * q) /
 					(dp * dp);
 
-		if (coeff <= poly->coeff_max)
-			handle_collision(poly, (uint64)p1 * p2, q,
-					qroot, offset);
+		if (coeff <= c->coeff_max &&
+		    handle_collision(c, (uint64)p1 * p2, q,
+					qroot, offset) != 0) {
+			poly->callback(c->high_coeff, c->p, c->m,
+					poly->callback_data);
+		}
 	}
 }
 
@@ -631,6 +635,7 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 /*------------------------------------------------------------------------*/
 static uint32
 sieve_specialq(msieve_obj *obj, poly_search_t *poly,
+		poly_coeff_t *c, void *gpu_data,
 		sieve_fb_t *sieve_special_q, sieve_fb_t *sieve_p,
 		uint32 special_q_min, uint32 special_q_max,
 		uint32 p_min, uint32 p_max, double deadline, 
@@ -641,7 +646,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	uint32 all_q_done = 0;
 	uint32 degree = poly->degree;
 	specialq_array_t q_array;
-	device_data_t *data = (device_data_t *)poly->gpu_data;
+	device_data_t *data = (device_data_t *)gpu_data;
 	p_soa_array_t *p_array = data->p_array;
 	double cpu_start_time = get_cpu_time();
 	uint32 unused_bits;
@@ -656,7 +661,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 
 	p_soa_array_reset(p_array);
 	sieve_fb_reset(sieve_p, p_min, p_max, 1, p_array->max_p_roots);
-	while (sieve_fb_next(sieve_p, poly, store_p_soa,
+	while (sieve_fb_next(sieve_p, c, store_p_soa,
 			p_array) != P_SEARCH_DONE) {
 		;
 	}
@@ -723,7 +728,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 				(uint32)1 << unused_bits);
 
 		while (q_array.num_specialq < max_batch_size) {
-			if (sieve_fb_next(sieve_special_q, poly,
+			if (sieve_fb_next(sieve_special_q, c,
 				store_specialq, &q_array) == P_SEARCH_DONE) {
 
 				all_q_done = 1;
@@ -765,7 +770,7 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 				32 - unused_bits, key_bits, 
 				num_aprog_vals);
 
-		check_found_array(poly, data);
+		check_found_array(poly, c, data);
 
 		specialq_array_reset(&q_array, batch_size);
 
@@ -782,7 +787,8 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 
 /*------------------------------------------------------------------------*/
 double
-sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, double deadline)
+sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, 
+		poly_coeff_t *c, void *gpu_data, double deadline)
 {
 	uint32 degree = poly->degree;
 	uint32 num_pieces;
@@ -791,7 +797,7 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, double deadline)
 	uint32 special_q_min2, special_q_max2;
 	uint32 special_q_fb_max;
 	double elapsed = 0;
-	double target = poly->coeff_max / poly->m0;
+	double target = c->coeff_max / c->m0;
 	sieve_fb_t sieve_p, sieve_special_q;
 
 	/* Kleinjung shows that the third-to-largest algebraic
@@ -809,11 +815,11 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, double deadline)
 	   except that gcd(q,p1,p2)=1. Then the correction 'C' to 
 	   m0 is < max(p1,p2)^2 */
 	   
-	p_max = MIN(MAX_OTHER, sqrt(poly->p_size_max));
+	p_max = MIN(MAX_OTHER, sqrt(c->p_size_max));
 	p_max = MIN(p_max, sqrt(0.5 / target));
 
 	special_q_max = MIN(MAX_SPECIAL_Q, 
-			    poly->p_size_max / p_max / p_max);
+			    c->p_size_max / p_max / p_max);
 	special_q_max = MAX(special_q_max, 1);
 
 	p_min = MAX(1, p_max / P_SCALE);
@@ -826,7 +832,7 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, double deadline)
 	   small as possible */
 
 	special_q_fb_max = MIN(200000, special_q_max);
-	sieve_fb_init(&sieve_special_q, poly,
+	sieve_fb_init(&sieve_special_q, c,
 			2, special_q_fb_max,
 			1, degree,
 			1);
@@ -837,7 +843,7 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, double deadline)
 	   special-q has factors in common with many progressions
 	   in the set */
 
-	sieve_fb_init(&sieve_p, poly, 
+	sieve_fb_init(&sieve_p, c, 
 			100, 5000,
 			1, degree,
 		       	0);
@@ -869,11 +875,11 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, double deadline)
 	}
 
 	gmp_printf("coeff %Zd specialq %u - %u other %u - %u\n",
-			poly->high_coeff,
+			c->high_coeff,
 			special_q_min2, special_q_max2,
 			p_min, p_max);
 
-	sieve_specialq(obj, poly, &sieve_special_q, &sieve_p,
+	sieve_specialq(obj, poly, c, gpu_data, &sieve_special_q, &sieve_p,
 			special_q_min2, special_q_max2, p_min, p_max,
 			deadline, &elapsed);
 
@@ -947,7 +953,8 @@ load_sort_engine(msieve_obj *obj, device_data_t *d)
 }
 
 /*------------------------------------------------------------------------*/
-void gpu_data_init(msieve_obj *obj, poly_search_t *poly)
+void *
+gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 {
 	uint32 i, j;
 	device_data_t *d;
@@ -967,7 +974,9 @@ void gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 		exit(-1);
 	}
 
-	gpu_info = (gpu_info_t *)xmalloc(sizeof(gpu_info_t));
+	d = (device_data_t *)xcalloc(1, sizeof(device_data_t));
+
+	d->gpu_info = gpu_info = (gpu_info_t *)xmalloc(sizeof(gpu_info_t));
 	memcpy(gpu_info, gpu_config.info + obj->which_gpu,
 			sizeof(gpu_info_t)); 
 
@@ -975,10 +984,6 @@ void gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 	logprintf(obj, "selected card has CUDA arch %d.%d\n",
 			gpu_info->compute_version_major,
 			gpu_info->compute_version_minor);
-
-	poly->gpu_data = d = (device_data_t *)xcalloc(1, sizeof(device_data_t));
-
-	d->gpu_info = gpu_info;
 
 	CUDA_TRY(cuCtxCreate(&d->gpu_context, 
 			CU_CTX_BLOCKING_SYNC,
@@ -1067,6 +1072,7 @@ void gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 	CUDA_TRY(cuMemAlloc(&d->gpu_p_array_scratch, i))
 	CUDA_TRY(cuMemAlloc(&d->gpu_root_array, j))
 	CUDA_TRY(cuMemAlloc(&d->gpu_root_array_scratch, j))
+	return d;
 }
 
 /*------------------------------------------------------------------------*/

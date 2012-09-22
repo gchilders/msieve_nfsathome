@@ -59,10 +59,7 @@ typedef struct {
 
 	uint32 degree;
 
-	/* approximately (N/a_d) ^ (1/d) for input N, high
-	   coefficient a_d and poly degree d */
-
-	double m0;
+	mpz_t N;
 
 	/* bound on the norm used in stage 1; this is the maximum
 	   value of (poly coefficient i) * (optimal skew)^i across
@@ -74,6 +71,31 @@ typedef struct {
 
 	double norm_max; 
 
+	/* the range on a_d, provided by calling code */
+
+	mpz_t gmp_high_coeff_begin;
+	mpz_t gmp_high_coeff_end;
+
+	/* function to call when a collision is found */
+
+	stage1_callback_t callback;
+	void *callback_data;
+
+	/* internal stuff */
+
+	mpz_t tmp1;
+
+} poly_search_t;
+
+
+/* data for searching a single leading coefficient */
+
+typedef struct {
+
+	uint32 degree;
+
+	mpz_t high_coeff; 
+
 	/* (computed) bound on the third-highest algebraic
 	   poly coefficient. Making this small is the only
 	   thing stage 1 can do; the other coefficients can
@@ -81,40 +103,28 @@ typedef struct {
 
 	double coeff_max;
 
+	/* approximately (N/a_d) ^ (1/d) for input N, high
+	   coefficient a_d and poly degree d */
+
+	double m0;
+
 	/* bound on the leading rational poly coefficient */
 
 	double p_size_max;
 
-	/* the range on a_d, provided by calling code */
-
-	mpz_t gmp_high_coeff_begin;
-	mpz_t gmp_high_coeff_end;
-
 	/* internal values used */
 
-	mpz_t high_coeff; 
 	mpz_t trans_N;
 	mpz_t trans_m0;
-	mpz_t N; 
 	mpz_t m; 
 	mpz_t p;
 	mpz_t tmp1;
 	mpz_t tmp2;
 	mpz_t tmp3;
-	mpz_t tmp4;
-	mpz_t tmp5;
+} poly_coeff_t;
 
-#ifdef HAVE_CUDA
-	/* opaque pointer to GPU data */
-
-	void *gpu_data;
-#endif
-
-	/* function to call when a collision is found */
-
-	stage1_callback_t callback;
-	void *callback_data;
-} poly_search_t;
+poly_coeff_t * poly_coeff_init(void);
+void poly_coeff_free(poly_coeff_t *c);
 
 /*-----------------------------------------------------------------------*/
 
@@ -245,7 +255,7 @@ typedef struct {
    is zero, a sieve is used to find any prime p which are
    larger than factor_max */
 
-void sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
+void sieve_fb_init(sieve_fb_t *s, poly_coeff_t *coeff,
 			uint32 factor_min, uint32 factor_max,
 			uint32 fb_roots_min, uint32 fb_roots_max,
 			uint32 fb_only);
@@ -275,8 +285,7 @@ typedef void (*root_callback)(uint32 p, uint32 num_roots, uint64 *roots,
    no order may be assumed for composite p returned by 
    consecutive calls */
 
-uint32 sieve_fb_next(sieve_fb_t *s, 
-			poly_search_t *poly, 
+uint32 sieve_fb_next(sieve_fb_t *s, poly_coeff_t *c, 
 			root_callback callback,
 			void *extra);
 
@@ -284,8 +293,8 @@ uint32 sieve_fb_next(sieve_fb_t *s,
 
 /* what to do when the collision search finds a 'stage 1 hit' */
 
-void
-handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
+uint32
+handle_collision(poly_coeff_t *c, uint64 p, uint32 special_q,
 		uint64 special_q_root, int64 res);
 
 /* main search routine */
@@ -295,10 +304,12 @@ handle_collision(poly_search_t *poly, uint64 p, uint32 special_q,
 /* GPU search routine */
 
 double sieve_lattice_gpu(msieve_obj *obj,
-			poly_search_t *poly, double deadline);
+			poly_search_t *poly, 
+			poly_coeff_t *c, 
+			void *gpu_data,
+			double deadline);
 
-void gpu_data_init(msieve_obj *obj, poly_search_t *poly);
-
+void * gpu_data_init(msieve_obj *obj, poly_search_t *poly);
 void gpu_data_free(void *gpu_data);
 
 #else
@@ -306,7 +317,9 @@ void gpu_data_free(void *gpu_data);
 /* CPU search routine */
 
 double sieve_lattice_cpu(msieve_obj *obj,
-			poly_search_t *poly, double deadline);
+			poly_search_t *poly, 
+			poly_coeff_t *c,
+			double deadline);
 
 #endif
 

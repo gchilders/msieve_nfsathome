@@ -63,7 +63,7 @@ sieve_fb_free(sieve_fb_t *s)
 
 /*------------------------------------------------------------------------*/
 static uint32
-get_prime_roots(poly_search_t *poly, uint32 p, uint32 *roots,
+get_prime_roots(poly_coeff_t *c, uint32 p, uint32 *roots,
 		mpz_poly_t *tmp_poly)
 {
 	/* find all nonzero roots of (N' - x^d) mod p, where 
@@ -75,14 +75,14 @@ get_prime_roots(poly_search_t *poly, uint32 p, uint32 *roots,
 
 	uint32 i, high_coeff;
 
-	mpz_tdiv_r_ui(tmp_poly->coeff[0], poly->trans_N, p);
+	mpz_tdiv_r_ui(tmp_poly->coeff[0], c->trans_N, p);
 
 	if (mpz_cmp_ui(tmp_poly->coeff[0], 0) == 0) {
 		/* when p divides trans_N, only a root of zero
 		   exists, so skip this p */
 		return 0;
 	}
-	for (i = 1; i < poly->degree; i++)
+	for (i = 1; i < c->degree; i++)
 		mpz_set_ui(tmp_poly->coeff[i], 0);
 
 	tmp_poly->degree = i;
@@ -93,11 +93,11 @@ get_prime_roots(poly_search_t *poly, uint32 p, uint32 *roots,
 
 /*------------------------------------------------------------------------*/
 static void
-sieve_add_aprog(sieve_fb_t *s, poly_search_t *poly, uint32 p, 
+sieve_add_aprog(sieve_fb_t *s, poly_coeff_t *c, uint32 p, 
 		uint32 fb_roots_min, uint32 fb_roots_max)
 {
 	uint32 i, j, nmodp, num_roots;
-	uint32 degree = poly->degree;
+	uint32 degree = c->degree;
 	uint32 power, power_limit;
 	uint32 roots[MAX_POLYSELECT_DEGREE];
 	aprog_list_t *list = &s->aprog_data;
@@ -117,7 +117,7 @@ sieve_add_aprog(sieve_fb_t *s, poly_search_t *poly, uint32 p,
 
 	a = list->aprogs + list->num_aprogs;
 	a->p = p;
-	num_roots = get_prime_roots(poly, p, roots, &s->tmp_poly);
+	num_roots = get_prime_roots(c, p, roots, &s->tmp_poly);
 
 	if (num_roots == 0 ||
 	    num_roots < fb_roots_min ||
@@ -148,7 +148,7 @@ sieve_add_aprog(sieve_fb_t *s, poly_search_t *poly, uint32 p,
 		power *= p;
 		a->powers[i].power = power;
 
-		nmodp = mpz_tdiv_ui(poly->trans_N, (mp_limb_t)power);
+		nmodp = mpz_tdiv_ui(c->trans_N, (mp_limb_t)power);
 
 		for (j = 0; j < num_roots; j++)
 			a->powers[i].roots[j] = lift_root_32(nmodp,
@@ -160,7 +160,7 @@ sieve_add_aprog(sieve_fb_t *s, poly_search_t *poly, uint32 p,
 
 /*------------------------------------------------------------------------*/
 void
-sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
+sieve_fb_init(sieve_fb_t *s, poly_coeff_t *c,
 		uint32 factor_min, uint32 factor_max,
 		uint32 fb_roots_min, uint32 fb_roots_max,
 		uint32 fb_only)
@@ -170,7 +170,7 @@ sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 	prime_sieve_t prime_sieve;
 
 	memset(s, 0, sizeof(sieve_fb_t));
-	s->degree = poly->degree;
+	s->degree = c->degree;
 	s->fb_only = fb_only;
 
 	mpz_init(s->p);
@@ -199,7 +199,7 @@ sieve_fb_init(sieve_fb_t *s, poly_search_t *poly,
 		if (p > factor_max)
 			break;
 
-		sieve_add_aprog(s, poly, p, fb_roots_min, fb_roots_max);
+		sieve_add_aprog(s, c, p, fb_roots_min, fb_roots_max);
 	}
 
 	free_prime_sieve(&prime_sieve);
@@ -281,7 +281,7 @@ sieve_fb_reset(sieve_fb_t *s, uint32 p_min, uint32 p_max,
 
 /*------------------------------------------------------------------------*/
 static void
-lift_roots(sieve_fb_t *s, poly_search_t *poly, uint32 p, uint32 num_roots)
+lift_roots(sieve_fb_t *s, poly_coeff_t *c, uint32 p, uint32 num_roots)
 {
 	/* we have num_roots arithmetic progressions mod p;
 	   convert the progressions to be mod p^2, using
@@ -293,8 +293,8 @@ lift_roots(sieve_fb_t *s, poly_search_t *poly, uint32 p, uint32 num_roots)
 
 	mpz_set_ui(s->p, (unsigned long)p);
 	mpz_mul(s->pp, s->p, s->p);
-	mpz_tdiv_r(s->nmodpp, poly->trans_N, s->pp);
-	mpz_tdiv_r(s->tmp3, poly->trans_m0, s->pp);
+	mpz_tdiv_r(s->nmodpp, c->trans_N, s->pp);
+	mpz_tdiv_r(s->tmp3, c->trans_m0, s->pp);
 
 	for (i = 0; i < num_roots; i++) {
 
@@ -498,7 +498,7 @@ get_next_enum(sieve_fb_t *s)
 
 /*------------------------------------------------------------------------*/
 uint32
-sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
+sieve_fb_next(sieve_fb_t *s, poly_coeff_t *c,
 		root_callback callback, void *extra)
 {
 	/* main external interface */
@@ -533,7 +533,7 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 				continue;
 			}
 
-			num_roots = get_prime_roots(poly, p, roots,
+			num_roots = get_prime_roots(c, p, roots,
 						    &s->tmp_poly);
 			num_roots = MIN(num_roots, s->num_roots_max);
 
@@ -552,7 +552,7 @@ sieve_fb_next(sieve_fb_t *s, poly_search_t *poly,
 		   progressions it allows and postprocess the
 		   whole batch */
 
-		lift_roots(s, poly, p, num_roots);
+		lift_roots(s, c, p, num_roots);
 		callback(p, num_roots, s->roots, extra);
 
 		return p;
