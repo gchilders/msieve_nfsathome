@@ -439,7 +439,7 @@ batch_invert(uint32 *qlist, uint32 num_q, uint64 *invlist,
 static uint32
 sieve_specialq_64(msieve_obj *obj, poly_search_t *poly, 
 		poly_coeff_t *c, int64 sieve_size,
-		sieve_fb_t *sieve_special_q, sieve_fb_t *sieve_p, 
+		void *sieve_special_q, void *sieve_p, 
 		uint32 special_q_min, uint32 special_q_max, 
 		uint32 p_min, uint32 p_max, double deadline, double *elapsed)
 {
@@ -638,7 +638,8 @@ sieve_lattice_cpu(msieve_obj *obj, poly_search_t *poly,
 	double p_size_max = c->p_size_max;
 	double sieve_bound = c->coeff_max / c->m0;
 	double elapsed_total = 0;
-	sieve_fb_t sieve_p, sieve_special_q;
+	void *sieve_p = sieve_fb_alloc(); 
+	void *sieve_special_q = sieve_fb_alloc();
 
 	/* size the problem; we choose p_min so that we will get
 	   to use a small number of each progression's offsets in
@@ -666,7 +667,7 @@ sieve_lattice_cpu(msieve_obj *obj, poly_search_t *poly,
 	   small as possible */
 
 	special_q_fb_max = MIN(100000, special_q_max);
-	sieve_fb_init(&sieve_special_q, c,
+	sieve_fb_init(sieve_special_q, c,
 			5, special_q_fb_max,
 			1, degree,
 			0);
@@ -677,7 +678,7 @@ sieve_lattice_cpu(msieve_obj *obj, poly_search_t *poly,
 	   special-q has factors in common with many progressions
 	   in the set */
 
-	sieve_fb_init(&sieve_p, c, 
+	sieve_fb_init(sieve_p, c, 
 			35, 5000,
 			1, degree,
 		       	0);
@@ -728,7 +729,7 @@ sieve_lattice_cpu(msieve_obj *obj, poly_search_t *poly,
 				p_min, p_max);
 
 		quit = sieve_specialq_64(obj, poly, c, sieve_size,
-				&sieve_special_q, &sieve_p,
+				sieve_special_q, sieve_p,
 				special_q_min2, special_q_max2,
 				p_min, p_max, deadline, &elapsed);
 
@@ -744,7 +745,7 @@ sieve_lattice_cpu(msieve_obj *obj, poly_search_t *poly,
 		special_q_max /= (P_SCALE * P_SCALE);
 	}
 
-	sieve_fb_free(&sieve_special_q);
-	sieve_fb_free(&sieve_p);
+	sieve_fb_free(sieve_special_q);
+	sieve_fb_free(sieve_p);
 	return elapsed_total;
 }

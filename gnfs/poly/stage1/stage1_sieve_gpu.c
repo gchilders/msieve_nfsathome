@@ -636,7 +636,7 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 static uint32
 sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 		poly_coeff_t *c, void *gpu_data,
-		sieve_fb_t *sieve_special_q, sieve_fb_t *sieve_p,
+		void *sieve_special_q, void *sieve_p,
 		uint32 special_q_min, uint32 special_q_max,
 		uint32 p_min, uint32 p_max, double deadline, 
 		double *elapsed)
@@ -798,7 +798,8 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
 	uint32 special_q_fb_max;
 	double elapsed = 0;
 	double target = c->coeff_max / c->m0;
-	sieve_fb_t sieve_p, sieve_special_q;
+	void * sieve_p = sieve_fb_alloc();
+	void * sieve_special_q = sieve_fb_alloc();
 
 	/* Kleinjung shows that the third-to-largest algebraic
 	   polynomial coefficient is of size approximately
@@ -832,7 +833,7 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
 	   small as possible */
 
 	special_q_fb_max = MIN(200000, special_q_max);
-	sieve_fb_init(&sieve_special_q, c,
+	sieve_fb_init(sieve_special_q, c,
 			2, special_q_fb_max,
 			1, degree,
 			1);
@@ -843,7 +844,7 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
 	   special-q has factors in common with many progressions
 	   in the set */
 
-	sieve_fb_init(&sieve_p, c, 
+	sieve_fb_init(sieve_p, c, 
 			100, 5000,
 			1, degree,
 		       	0);
@@ -879,12 +880,12 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
 			special_q_min2, special_q_max2,
 			p_min, p_max);
 
-	sieve_specialq(obj, poly, c, gpu_data, &sieve_special_q, &sieve_p,
+	sieve_specialq(obj, poly, c, gpu_data, sieve_special_q, sieve_p,
 			special_q_min2, special_q_max2, p_min, p_max,
 			deadline, &elapsed);
 
-	sieve_fb_free(&sieve_special_q);
-	sieve_fb_free(&sieve_p);
+	sieve_fb_free(sieve_special_q);
+	sieve_fb_free(sieve_p);
 	return elapsed;
 }
 

@@ -15,6 +15,83 @@ $Id$
 #include <stage1.h>
 
 #define P_PRIME_LIMIT 0xfffff000
+#define MAX_P_FACTORS 7
+#define MAX_POWERS 4
+
+/* structure for building arithmetic progressions */
+
+typedef struct {
+	uint32 power;
+	uint32 roots[MAX_POLYSELECT_DEGREE];
+} aprog_power_t;
+
+typedef struct {
+	uint32 p;
+
+	/* number of 'degree-th roots' of N (mod p) */
+	uint32 num_roots;
+
+	/* largest e for which p^e < 2^32 */
+	uint32 max_power;
+
+	/* power p^e_j and its 'degree-th roots' of N (mod p^e_j) */
+	aprog_power_t powers[MAX_POWERS];
+
+	/* maximum product of other p which may be
+	   combined with this p */
+	uint32 cofactor_max;
+} aprog_t;
+
+typedef struct {
+	aprog_t *aprogs;
+	uint32 num_aprogs;
+	uint32 num_aprogs_alloc;
+} aprog_list_t;
+
+/* structures for finding arithmetic progressions via
+   explicit enumeration */
+
+typedef struct {
+	/* number of distinct primes p_i in the current enum product */
+	uint32 num_factors;
+
+	/* index into aprog list for each distinct prime p_i */
+	uint32 curr_factor[MAX_P_FACTORS + 1];
+
+	/* exponent e_i of each prime p_i */
+	uint32 curr_power[MAX_P_FACTORS + 1];
+
+	/* the 'running product' of p_1^e_1..p_{i-1}^e_{i-1} for
+	   each i, or 1 if i==1 */
+	uint32 curr_prod[MAX_P_FACTORS + 1];
+
+	/* number of roots in each 'running product' */
+	uint32 curr_num_roots[MAX_P_FACTORS + 1];
+} p_enum_t;
+
+#define ALGO_ENUM  0x1
+#define ALGO_PRIME 0x2
+
+/* a factory for building arithmetic progressions */
+
+typedef struct {
+	uint32 num_roots_min;
+	uint32 num_roots_max;
+	uint32 avail_algos;
+	uint32 fb_only;
+	uint32 degree;
+	uint32 p_min, p_max;
+	uint64 roots[MAX_ROOTS];
+	mpz_poly_t tmp_poly;
+
+	aprog_list_t aprog_data;
+
+	prime_sieve_t p_prime;
+
+	p_enum_t p_enum;
+
+	mpz_t p, pp, nmodpp, tmp1, tmp2, tmp3, gmp_root;
+} sieve_fb_t;
 
 /*------------------------------------------------------------------------*/
 static uint32
@@ -36,19 +113,13 @@ lift_root_32(uint32 n, uint32 r, uint32 old_power,
 
 /*------------------------------------------------------------------------*/
 void
-sieve_fb_free(sieve_fb_t *s)
+sieve_fb_free(void *s_in)
 {
 	uint32 i;
+	sieve_fb_t *s = (sieve_fb_t *)s_in;
 	aprog_list_t *list = &s->aprog_data;
 
 	free_prime_sieve(&s->p_prime);
-
-	for (i = 0; i < list->num_aprogs; i++) {
-		aprog_t *a = list->aprogs + i;
-
-		free(a->powers);
-	}
-
 	free(list->aprogs);
 
 	mpz_clear(s->p);
@@ -129,12 +200,10 @@ sieve_add_aprog(sieve_fb_t *s, poly_coeff_t *c, uint32 p,
 
 	power = p;
 	power_limit = (uint32)(-1) / p;
-	for (i = 1; power < power_limit; i++)
+	for (i = 1; i < MAX_POWERS && power < power_limit; i++)
 		power *= p;
 
 	a->max_power = i;
-	a->powers = (aprog_power_t *)xmalloc(a->max_power *
-					sizeof(aprog_power_t));
 	a->powers[0].power = p;
 
 	for (i = 0; i < num_roots; i++)
@@ -159,19 +228,11 @@ sieve_add_aprog(sieve_fb_t *s, poly_coeff_t *c, uint32 p,
 }
 
 /*------------------------------------------------------------------------*/
-void
-sieve_fb_init(sieve_fb_t *s, poly_coeff_t *c,
-		uint32 factor_min, uint32 factor_max,
-		uint32 fb_roots_min, uint32 fb_roots_max,
-		uint32 fb_only)
+void *
+sieve_fb_alloc(void)
 {
-	uint32 p;
+	sieve_fb_t *s = (sieve_fb_t *)xcalloc(1, sizeof(sieve_fb_t));
 	aprog_list_t *aprog = &s->aprog_data;
-	prime_sieve_t prime_sieve;
-
-	memset(s, 0, sizeof(sieve_fb_t));
-	s->degree = c->degree;
-	s->fb_only = fb_only;
 
 	mpz_init(s->p);
 	mpz_init(s->pp);
@@ -182,15 +243,33 @@ sieve_fb_init(sieve_fb_t *s, poly_coeff_t *c,
 	mpz_init(s->gmp_root);
 	mpz_poly_init(&s->tmp_poly);
 
+	aprog->num_aprogs_alloc = 500;
+	aprog->aprogs = (aprog_t *)xmalloc(aprog->num_aprogs_alloc *
+						sizeof(aprog_t));
+	return s;
+}
+
+/*------------------------------------------------------------------------*/
+void 
+sieve_fb_init(void *s_in, poly_coeff_t *c,
+		uint32 factor_min, uint32 factor_max,
+		uint32 fb_roots_min, uint32 fb_roots_max,
+		uint32 fb_only)
+{
+	uint32 p;
+	sieve_fb_t *s = (sieve_fb_t *)s_in;
+	aprog_list_t *aprog = &s->aprog_data;
+	prime_sieve_t prime_sieve;
+
+	s->degree = c->degree;
+	s->fb_only = fb_only;
+
 	factor_max = MIN(factor_max, 1000000);
 
 	if (factor_max <= factor_min)
 		return;
 
-	aprog->num_aprogs_alloc = 500;
-	aprog->aprogs = (aprog_t *)xmalloc(aprog->num_aprogs_alloc *
-						sizeof(aprog_t));
-
+	aprog->num_aprogs = 0;
 	init_prime_sieve(&prime_sieve, factor_min, factor_max);
 
 	while (1) {
@@ -207,10 +286,11 @@ sieve_fb_init(sieve_fb_t *s, poly_coeff_t *c,
 
 /*------------------------------------------------------------------------*/
 void 
-sieve_fb_reset(sieve_fb_t *s, uint32 p_min, uint32 p_max,
+sieve_fb_reset(void *s_in, uint32 p_min, uint32 p_max,
 		uint32 num_roots_min, uint32 num_roots_max)
 {
 	uint32 i;
+	sieve_fb_t *s = (sieve_fb_t *)s_in;
 	aprog_t *aprogs = s->aprog_data.aprogs;
 	uint32 num_aprogs = s->aprog_data.num_aprogs;
 
@@ -498,12 +578,13 @@ get_next_enum(sieve_fb_t *s)
 
 /*------------------------------------------------------------------------*/
 uint32
-sieve_fb_next(sieve_fb_t *s, poly_coeff_t *c,
+sieve_fb_next(void *s_in, poly_coeff_t *c,
 		root_callback callback, void *extra)
 {
 	/* main external interface */
 
 	uint32 i, p, num_roots;
+	sieve_fb_t *s = (sieve_fb_t *)s_in;
 
 	while (1) {
 		if (s->avail_algos & ALGO_ENUM) {
