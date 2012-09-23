@@ -68,12 +68,29 @@ static INLINE void mutex_unlock(mutex_t *m)
 
 /* a thread pool --------------------------------------------------*/
 
-typedef void (*threadpool_func)(void *data, int thread_num);
+typedef void (*init_func)(void *data, int thread_num);
+typedef void (*run_func)(void *data, int thread_num);
+typedef void (*shutdown_func)(void *data, int thread_num);
 
-struct threadpool* threadpool_init(int num_threads);
+typedef struct {
+	init_func init;
+	shutdown_func shutdown;
+	void *data;
+} thread_control_t;
+
+typedef struct {
+	init_func init;
+	run_func run;
+	shutdown_func shutdown;
+	void *data;
+} task_control_t;
+
+struct threadpool* threadpool_init(int num_threads, 
+				   int queue_size, 
+				   thread_control_t *t);
 
 int threadpool_add_task(struct threadpool *pool, 
-			threadpool_func func, void *data,
+			task_control_t *t, 
 			int blocking);
 
 void threadpool_free(struct threadpool *pool);
