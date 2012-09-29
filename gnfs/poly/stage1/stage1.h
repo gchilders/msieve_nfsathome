@@ -22,6 +22,7 @@ $Id$
 
 #include <poly_skew.h>
 #include <cuda_xface.h>
+#include <thread.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -125,6 +126,7 @@ typedef struct {
 
 poly_coeff_t * poly_coeff_init(void);
 void poly_coeff_free(poly_coeff_t *c);
+void poly_coeff_copy(poly_coeff_t *dest, poly_coeff_t *src);
 
 /*-----------------------------------------------------------------------*/
 

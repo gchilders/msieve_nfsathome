@@ -203,6 +203,19 @@ poly_coeff_free(poly_coeff_t *c)
 	free(c);
 }
 
+void
+poly_coeff_copy(poly_coeff_t *dest, poly_coeff_t *src)
+{
+	dest->degree = src->degree;
+	dest->coeff_max = src->coeff_max;
+	dest->m0 = src->m0;
+	dest->p_size_max = src->p_size_max;
+
+	mpz_set(dest->high_coeff, src->high_coeff);
+	mpz_set(dest->trans_N, src->trans_N);
+	mpz_set(dest->trans_m0, src->trans_m0);
+}
+
 /*------------------------------------------------------------------------*/
 typedef struct {
 	uint32 p, r;
