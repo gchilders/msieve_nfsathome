@@ -115,7 +115,6 @@ lift_root_32(uint32 n, uint32 r, uint32 old_power,
 void
 sieve_fb_free(void *s_in)
 {
-	uint32 i;
 	sieve_fb_t *s = (sieve_fb_t *)s_in;
 	aprog_list_t *list = &s->aprog_data;
 
