@@ -105,7 +105,6 @@ typedef struct {
 
 	CUdeviceptr dev_p;
 	CUdeviceptr dev_start_roots;
-	CUstream stream;
 
 	union { 
 		uint64 *roots64;
@@ -184,7 +183,6 @@ p_soa_array_init(uint32 degree)
 		CUDA_TRY(cuMemAlloc(&soa->dev_start_roots, 
 					soa->num_p_alloc *
 					soa->num_roots * sizeof(uint64)))
-		CUDA_TRY(cuStreamCreate(&soa->stream, 0))
 	}
 
 	return s;
@@ -201,9 +199,8 @@ p_soa_array_free(p_soa_array_t *s)
 		free(soa->p);
 		free(soa->start_roots);
 		free(soa->r.roots);
-		CUDA_TRY(cuMemFree(soa->dev_p));
-		CUDA_TRY(cuMemFree(soa->dev_start_roots));
-		CUDA_TRY(cuStreamDestroy(soa->stream));
+		CUDA_TRY(cuMemFree(soa->dev_p))
+		CUDA_TRY(cuMemFree(soa->dev_start_roots))
 	}
 
 	free(s);
@@ -221,7 +218,8 @@ p_soa_array_reset(p_soa_array_t *s)
 }
 
 static void
-p_soa_array_start(p_soa_array_t *s, uint32 pp_is_64)
+p_soa_array_start(p_soa_array_t *s, uint32 pp_is_64,
+		  CUstream stream)
 {
 	uint32 i, j, k, m;
 	uint32 root_bytes = pp_is_64 ? sizeof(uint64) : sizeof(uint32);
@@ -274,11 +272,11 @@ p_soa_array_start(p_soa_array_t *s, uint32 pp_is_64)
 		CUDA_TRY(cuMemcpyHtoDAsync(soa->dev_p, 
 				soa->p,
 				num_p * sizeof(uint32),
-				soa->stream))
+				stream))
 		CUDA_TRY(cuMemcpyHtoDAsync(soa->dev_start_roots, 
 				root_array,
 				num_p * num_roots * root_bytes,
-				soa->stream))
+				stream))
 		s->soa[j++] = soa;
 	}
 	s->num_arrays = j;
@@ -314,8 +312,8 @@ store_p_soa(uint32 p, uint32 num_roots, uint64 *roots, void *extra)
 						num_roots *
 						sizeof(uint64));
 
-			CUDA_TRY(cuMemFree(soa->dev_p));
-			CUDA_TRY(cuMemFree(soa->dev_start_roots));
+			CUDA_TRY(cuMemFree(soa->dev_p))
+			CUDA_TRY(cuMemFree(soa->dev_start_roots))
 			CUDA_TRY(cuMemAlloc(&soa->dev_p, 
 					soa->num_p_alloc * 
 					sizeof(uint32)))
@@ -338,26 +336,40 @@ typedef struct {
 	uint32 num_specialq;
 	uint32 max_specialq;
 	specialq_t *specialq;
+	CUdeviceptr dev_q;
 } specialq_array_t;
 
-static void
-specialq_array_init(specialq_array_t *q_array, uint32 max_specialq)
+static specialq_array_t *
+specialq_array_init(void)
 {
-	memset(q_array, 0, sizeof(specialq_array_t));
+	specialq_array_t *q_array = (specialq_array_t *)xcalloc(1,
+					sizeof(specialq_array_t));
 
-	q_array->max_specialq = max_specialq;
-	q_array->specialq = (specialq_t *)xmalloc(max_specialq *
+	q_array->max_specialq = 512;
+	q_array->specialq = (specialq_t *)xmalloc(q_array->max_specialq *
 						sizeof(specialq_t));
+	CUDA_TRY(cuMemAlloc(&q_array->dev_q,
+				q_array->max_specialq * 
+				sizeof(specialq_t)))
+	return q_array;
 }
 
 static void
 specialq_array_free(specialq_array_t *q_array)
 {
+	CUDA_TRY(cuMemFree(q_array->dev_q))
 	free(q_array->specialq);
+	free(q_array);
 }
 
 static void
-specialq_array_reset(specialq_array_t *q_array, 
+specialq_array_reset(specialq_array_t *q_array)
+{
+	q_array->num_specialq = 0;
+}
+
+static void
+specialq_array_nextbatch(specialq_array_t *q_array, 
 			uint32 num_removed)
 {
 	uint32 new_size;
@@ -375,43 +387,64 @@ specialq_array_reset(specialq_array_t *q_array,
 }
 
 static void
+specialq_array_start(specialq_array_t *q_array, 
+			uint32 num_specialq,
+			CUstream stream)
+{
+	CUDA_TRY(cuMemcpyHtoDAsync(q_array->dev_q,
+			q_array->specialq,
+			num_specialq * sizeof(specialq_t),
+			stream))
+}
+
+static void
 store_specialq(uint32 q, uint32 num_roots, uint64 *roots, void *extra)
 {
 	uint32 i;
+	uint64 q2 = (uint64)q * q;
 	specialq_array_t *q_array = (specialq_array_t *)extra;
 
-	for (i = 0; i < num_roots &&
-			q_array->num_specialq < q_array->max_specialq; i++) {
+	if (q_array->num_specialq + num_roots >= q_array->max_specialq) {
 
-		q_array->specialq[q_array->num_specialq].p = q;
-		q_array->specialq[q_array->num_specialq].pp = (uint64)q * q;
-		q_array->specialq[q_array->num_specialq].root = roots[i];
-
-		q_array->num_specialq++;
+		q_array->max_specialq *= 2;
+		q_array->specialq = (specialq_t *)xrealloc(
+						q_array->specialq,
+						q_array->max_specialq *
+						sizeof(specialq_t));
+		CUDA_TRY(cuMemFree(q_array->dev_q))
+		CUDA_TRY(cuMemAlloc(&q_array->dev_q,
+					q_array->max_specialq * 
+					sizeof(specialq_t)))
 	}
+
+	for (i = 0; i < num_roots; i++) {
+		specialq_t *s = q_array->specialq + 
+				q_array->num_specialq + i;
+
+		s->p = q;
+		s->pp = q2;
+		s->root = roots[i];
+	}
+
+	q_array->num_specialq += num_roots;
 }
 
 typedef struct {
 
 	CUcontext gpu_context;
-	gpu_info_t *gpu_info;
 	CUmodule gpu_module;
 
-	libhandle_t sort_engine_handle;
-	void * sort_engine;
-	sort_engine_init_func sort_engine_init;
-	sort_engine_free_func sort_engine_free;
-	sort_engine_run_func sort_engine_run;
+	void *sieve_p_fb;
+	void *sieve_q_fb;
 
 	p_soa_array_t *p_array;
+	specialq_array_t *q_array;
+
+	CUstream stream;
 
 	uint32 num_entries;
 
 	gpu_launch_t *launch;
-	CUdeviceptr gpu_q_array;
-
-	size_t max_sort_entries32;
-	size_t max_sort_entries64;
 
 	CUdeviceptr gpu_p_array;
 	CUdeviceptr gpu_p_array_scratch;
@@ -421,26 +454,86 @@ typedef struct {
 
 	CUdeviceptr gpu_found_array;
 	found_t *found_array;
-	uint32 found_array_size;
+
+	void * sort_engine;
+
+} device_thread_data_t;
+
+typedef struct {
+
+	poly_search_t *poly;
+
+	gpu_info_t *gpu_info;
+
+	libhandle_t sort_engine_handle;
+	sort_engine_init_func sort_engine_init;
+	sort_engine_free_func sort_engine_free;
+	sort_engine_run_func sort_engine_run;
+
+	size_t max_sort_entries32;
+	size_t max_sort_entries64;
 
 	CUevent start;
 	CUevent end;
-
 	double gpu_elapsed;
+
+	uint32 num_threads;
+	device_thread_data_t *threads;
+
+	struct threadpool *gpu_threadpool;
+	struct threadpool *stage2_threadpool;
 
 } device_data_t;
 
 /*------------------------------------------------------------------------*/
+/* infrastructure for submitting stage 1 hits to the stage 2 thread pool */
+
+typedef struct {
+	stage1_callback_t callback;
+	void *callback_data;
+
+	mpz_t ad;
+	mpz_t p;
+	mpz_t m;
+
+} stage1_hit_data_t;
+
 static void
-check_found_array(poly_search_t *poly, poly_coeff_t *c,
-		device_data_t *d)
+stage1_hit_free(void *data, int threadid)
+{
+	stage1_hit_data_t *hit_data = (stage1_hit_data_t *)data;
+
+	mpz_clear(hit_data->ad);
+	mpz_clear(hit_data->p);
+	mpz_clear(hit_data->m);
+	free(hit_data);
+}
+
+static void
+stage1_hit_run(void *data, int threadid)
+{
+	stage1_hit_data_t *hit_data = (stage1_hit_data_t *)data;
+
+	hit_data->callback(hit_data->ad,
+			   hit_data->p,
+			   hit_data->m,
+			   hit_data->callback_data);
+}
+
+static void
+check_found_array(poly_coeff_t *c, device_data_t *d,
+			device_thread_data_t *t)
 {
 	uint32 i;
 	uint32 found_array_size;
-	found_t *found_array = d->found_array;
+	found_t *found_array = t->found_array;
 
-	CUDA_TRY(cuMemcpyDtoH(found_array, d->gpu_found_array,
-			d->found_array_size * sizeof(found_t)))
+	CUDA_TRY(cuMemcpyDtoHAsync(found_array, t->gpu_found_array,
+			FOUND_ARRAY_SIZE * sizeof(found_t), t->stream))
+
+	/* we have to synchronize now */
+
+	CUDA_TRY(cuStreamSynchronize(t->stream))
 
 	found_array_size = MIN(FOUND_ARRAY_SIZE - 1,
 				found_array[0].p1);
@@ -449,7 +542,8 @@ check_found_array(poly_search_t *poly, poly_coeff_t *c,
 		return;
 
 	/* clear only the first element */
-	CUDA_TRY(cuMemsetD8(d->gpu_found_array, 0, sizeof(found_t)))
+	CUDA_TRY(cuMemsetD8Async(t->gpu_found_array, 0, 
+				sizeof(found_t), t->stream))
 
 	for (i = 1; i <= found_array_size; i++) {
 		found_t *found = found_array + i;
@@ -467,8 +561,26 @@ check_found_array(poly_search_t *poly, poly_coeff_t *c,
 		if (coeff <= c->coeff_max &&
 		    handle_collision(c, (uint64)p1 * p2, q,
 					qroot, offset) != 0) {
-			poly->callback(c->high_coeff, c->p, c->m,
-					poly->callback_data);
+
+			/* submit the hit to the stage 2 thread pool */
+
+			task_control_t task_control;
+			stage1_hit_data_t *hit_data = (stage1_hit_data_t *)
+						xmalloc(sizeof(stage1_hit_data_t));
+
+			hit_data->callback = d->poly->callback;
+			hit_data->callback_data = d->poly->callback_data;
+			mpz_init_set(hit_data->ad, c->high_coeff);
+			mpz_init_set(hit_data->p, c->p);
+			mpz_init_set(hit_data->m, c->m);
+
+			task_control.init = NULL;
+			task_control.run = stage1_hit_run;
+			task_control.shutdown = stage1_hit_free;
+			task_control.data = hit_data;
+
+			threadpool_add_task(d->stage2_threadpool,
+						&task_control, 1);
 		}
 	}
 }
@@ -479,36 +591,34 @@ check_found_array(poly_search_t *poly, poly_coeff_t *c,
 /*------------------------------------------------------------------------*/
 static uint32
 handle_special_q_batch(msieve_obj *obj, device_data_t *d, 
-			specialq_t *specialq_batch, uint32 num_specialq,
+			device_thread_data_t *t, uint32 num_specialq,
 		       	uint32 shift, uint32 key_bits, uint32 num_aprog_vals)
 {
 	uint32 i, j;
 	uint32 quit = 0;
-	p_soa_array_t *p_array = d->p_array;
+	p_soa_array_t *p_array = t->p_array;
+	specialq_array_t *q_array = t->q_array;
 	uint32 num_blocks;
-	float elapsed_ms;
 	gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
 	sort_data_t sort_data;
 	gpu_launch_t *launch;
 	uint32 num_q, curr_q;
 	uint32 root_bytes = (key_bits > 32) ? sizeof(uint64) : sizeof(uint32);
 
-	CUDA_TRY(cuEventRecord(d->start, 0))
+	specialq_array_start(q_array, num_specialq, t->stream);
+
+	CUDA_TRY(cuMemsetD8Async(t->gpu_root_array, 0,
+			num_specialq * t->num_entries * 
+			num_aprog_vals * root_bytes,
+			t->stream))
 
 	for (i = num_q = curr_q = 0; i < num_specialq; i++) {
-		if (specialq_batch[i].p != curr_q) {
+		if (q_array->specialq[i].p != curr_q) {
 			num_q++;
-			curr_q = specialq_batch[i].p;
+			curr_q = q_array->specialq[i].p;
 		}
 	}
 	
-	CUDA_TRY(cuMemcpyHtoD(d->gpu_q_array, specialq_batch,
-			sizeof(specialq_t) * num_specialq))
-
-	CUDA_TRY(cuMemsetD8(d->gpu_root_array, 0,
-			num_specialq * d->num_entries * 
-			num_aprog_vals * root_bytes))
-
 	for (i = j = 0; i < p_array->num_arrays; i++) {
 		p_soa_var_t *soa = p_array->soa[i];
 		uint32 num_p = soa->num_p;
@@ -517,11 +627,11 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 		uint32 total_blocks;
 
 		if (p_array->pp_is_64)
-			launch = d->launch + GPU_TRANS_PP64_R64;
+			launch = t->launch + GPU_TRANS_PP64_R64;
 		else if (root_bytes == sizeof(uint64))
-			launch = d->launch + GPU_TRANS_PP32_R64;
+			launch = t->launch + GPU_TRANS_PP32_R64;
 		else
-			launch = d->launch + GPU_TRANS_PP32_R32;
+			launch = t->launch + GPU_TRANS_PP32_R32;
 
 		/* perform a block decomposition so that all the
 		   soa's generate blocks with about the same amount
@@ -560,13 +670,13 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 		gpu_args[2].ptr_arg = (void *)(size_t)soa->dev_start_roots;
 		gpu_args[3].uint32_arg = soa->num_roots;
 		gpu_args[4].ptr_arg = (void *)(size_t)(
-				d->gpu_p_array + j * sizeof(uint32));
+				t->gpu_p_array + j * sizeof(uint32));
 		gpu_args[5].ptr_arg = (void *)(size_t)(
-				d->gpu_root_array + j * root_bytes);
-		gpu_args[6].ptr_arg = (void *)(size_t)d->gpu_q_array;
+				t->gpu_root_array + j * root_bytes);
+		gpu_args[6].ptr_arg = (void *)(size_t)q_array->dev_q;
 		gpu_args[7].uint32_arg = num_specialq;
 		gpu_args[8].uint32_arg = size_y;
-		gpu_args[9].uint32_arg = d->num_entries;
+		gpu_args[9].uint32_arg = t->num_entries;
 		gpu_args[10].uint32_arg = shift;
 		gpu_args[11].uint32_arg = num_aprog_vals;
 		gpu_launch_set(launch, gpu_args);
@@ -575,47 +685,48 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 				size_x, 1, 1))
 
 		CUDA_TRY(cuLaunchGridAsync(launch->kernel_func,
-				blocks_x, blocks_y, soa->stream))
+				blocks_x, blocks_y, t->stream))
 
 		j += num_p * soa->num_roots;
 	}
 
-	sort_data.keys_in = d->gpu_root_array;
-	sort_data.keys_in_scratch = d->gpu_root_array_scratch;
-	sort_data.data_in = d->gpu_p_array;
-	sort_data.data_in_scratch = d->gpu_p_array_scratch;
-	sort_data.num_elements = num_specialq * d->num_entries * num_aprog_vals;
+	sort_data.keys_in = t->gpu_root_array;
+	sort_data.keys_in_scratch = t->gpu_root_array_scratch;
+	sort_data.data_in = t->gpu_p_array;
+	sort_data.data_in_scratch = t->gpu_p_array_scratch;
+	sort_data.num_elements = num_specialq * t->num_entries * num_aprog_vals;
 	sort_data.num_arrays = 1;
 	sort_data.key_bits = key_bits;
-	sort_data.stream = 0;
-	d->sort_engine_run(d->sort_engine, &sort_data);
+	sort_data.stream = t->stream;
+	d->sort_engine_run(t->sort_engine, &sort_data);
 
 	/* the sort engine may have swapped the input arrays */
-	d->gpu_p_array = sort_data.data_in;
-	d->gpu_p_array_scratch = sort_data.data_in_scratch;
-	d->gpu_root_array = sort_data.keys_in;
-	d->gpu_root_array_scratch = sort_data.keys_in_scratch;
+	t->gpu_p_array = sort_data.data_in;
+	t->gpu_p_array_scratch = sort_data.data_in_scratch;
+	t->gpu_root_array = sort_data.keys_in;
+	t->gpu_root_array_scratch = sort_data.keys_in_scratch;
 
 	if (root_bytes == sizeof(uint64))
-		launch = d->launch + GPU_FINAL_64;
+		launch = t->launch + GPU_FINAL_64;
 	else
-		launch = d->launch + GPU_FINAL_32;
+		launch = t->launch + GPU_FINAL_32;
 
-	gpu_args[0].ptr_arg = (void *)(size_t)(d->gpu_p_array);
-	gpu_args[1].ptr_arg = (void *)(size_t)(d->gpu_root_array);
-	gpu_args[2].uint32_arg = num_specialq * d->num_entries * num_aprog_vals;
-	gpu_args[3].ptr_arg = (void *)(size_t)(d->gpu_q_array);
-	gpu_args[4].ptr_arg = (void *)(size_t)(d->gpu_found_array);
+	gpu_args[0].ptr_arg = (void *)(size_t)(t->gpu_p_array);
+	gpu_args[1].ptr_arg = (void *)(size_t)(t->gpu_root_array);
+	gpu_args[2].uint32_arg = num_specialq * t->num_entries * num_aprog_vals;
+	gpu_args[3].ptr_arg = (void *)(size_t)q_array->dev_q;
+	gpu_args[4].ptr_arg = (void *)(size_t)(t->gpu_found_array);
 	gpu_args[5].uint32_arg = shift;
 	gpu_launch_set(launch, gpu_args);
 
-	num_blocks = 1 + (num_specialq * d->num_entries * 
+	num_blocks = 1 + (num_specialq * t->num_entries * 
 			num_aprog_vals - 1) /
 			launch->threads_per_block;
 	num_blocks = MIN(num_blocks, 1000);
 
-	CUDA_TRY(cuLaunchGrid(launch->kernel_func, num_blocks, 1))
-
+	CUDA_TRY(cuLaunchGridAsync(launch->kernel_func, 
+				num_blocks, 1, t->stream))
+#if 0
 	CUDA_TRY(cuEventRecord(d->end, 0))
 	CUDA_TRY(cuEventSynchronize(d->end))
 	CUDA_TRY(cuEventElapsedTime(&elapsed_ms, d->start, d->end))
@@ -625,7 +736,7 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 		   was in hibernation and don't let it count. */
 		d->gpu_elapsed += elapsed_ms / 1000;
 	}
-
+#endif
 	if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
 		quit = 1;
 
@@ -634,9 +745,9 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 
 /*------------------------------------------------------------------------*/
 static uint32
-sieve_specialq(msieve_obj *obj, poly_search_t *poly,
-		poly_coeff_t *c, void *gpu_data,
-		void *sieve_special_q, void *sieve_p,
+sieve_specialq(msieve_obj *obj,
+		poly_coeff_t *c, device_data_t *d,
+		device_thread_data_t *t,
 		uint32 special_q_min, uint32 special_q_max,
 		uint32 p_min, uint32 p_max, double deadline, 
 		double *elapsed)
@@ -644,10 +755,11 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	uint32 i, j;
 	uint32 quit = 0;
 	uint32 all_q_done = 0;
-	uint32 degree = poly->degree;
-	specialq_array_t q_array;
-	device_data_t *data = (device_data_t *)gpu_data;
-	p_soa_array_t *p_array = data->p_array;
+	uint32 degree = d->poly->degree;
+	p_soa_array_t *p_array = t->p_array;
+	void *p_fb = t->sieve_p_fb;
+	specialq_array_t *q_array = t->q_array;
+	void *q_fb = t->sieve_q_fb;
 	double cpu_start_time = get_cpu_time();
 	uint32 unused_bits;
 	uint32 pp_is_64 = (p_max >= 65536);
@@ -655,18 +767,18 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 	uint32 max_batch_specialq64;
 
 	*elapsed = 0;
-	data->gpu_elapsed = 0;
+	d->gpu_elapsed = 0;
 
 	/* build all the arithmetic progressions */
 
 	p_soa_array_reset(p_array);
-	sieve_fb_reset(sieve_p, p_min, p_max, 1, p_array->max_p_roots);
-	while (sieve_fb_next(sieve_p, c, store_p_soa,
+	sieve_fb_reset(p_fb, p_min, p_max, 1, p_array->max_p_roots);
+	while (sieve_fb_next(p_fb, c, store_p_soa,
 			p_array) != P_SEARCH_DONE) {
 		;
 	}
 
-	p_soa_array_start(p_array, pp_is_64);
+	p_soa_array_start(p_array, pp_is_64, t->stream);
 	if (p_array->num_arrays == 0)
 		return 0;
 
@@ -676,42 +788,29 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 		j += soa->num_p * soa->num_roots;
 	}
 
-	data->num_entries = j;
-
-#if 1
-	printf("aprogs: %u roots\n", data->num_entries);
-#endif
-
+	t->num_entries = j;
 
 	unused_bits = 1;
 	while (!(p_max & (1 << (31 - unused_bits))))
 		unused_bits++;
 
-	max_batch_specialq32 = data->max_sort_entries32 / data->num_entries;
-	max_batch_specialq64 = data->max_sort_entries64 / data->num_entries;
-
-	/* allocate the q's one batch at a time */
-
-	specialq_array_init(&q_array, MAX_ROOTS + (pp_is_64 ? 
-					max_batch_specialq64 :
-					max_batch_specialq32));
-
-	CUDA_TRY(cuMemAlloc(&data->gpu_q_array, sizeof(specialq_t) *
-				(pp_is_64 ? max_batch_specialq64 :
-				 	max_batch_specialq32)))
+	max_batch_specialq32 = d->max_sort_entries32 / t->num_entries;
+	max_batch_specialq64 = d->max_sort_entries64 / t->num_entries;
 
 	/* account for 'trivial' special-q */
 
+	specialq_array_reset(q_array);
+
 	if (special_q_min == 1) {
 
-		q_array.specialq[0].p = 1;
-		q_array.specialq[0].root = 0;
-		q_array.num_specialq++;
+		q_array->specialq[0].p = 1;
+		q_array->specialq[0].root = 0;
+		q_array->num_specialq++;
 	}
 
 	/* handle special-q in batches */
 
-	sieve_fb_reset(sieve_special_q, special_q_min, 
+	sieve_fb_reset(q_fb, special_q_min, 
 			special_q_max, degree, MAX_ROOTS);
 
 	while (!quit && !all_q_done) {
@@ -727,16 +826,16 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 		max_batch_size = MIN(max_batch_size, 
 				(uint32)1 << unused_bits);
 
-		while (q_array.num_specialq < max_batch_size) {
-			if (sieve_fb_next(sieve_special_q, c,
-				store_specialq, &q_array) == P_SEARCH_DONE) {
+		while (q_array->num_specialq < max_batch_size) {
+			if (sieve_fb_next(q_fb, c,
+				store_specialq, q_array) == P_SEARCH_DONE) {
 
 				all_q_done = 1;
 				break;
 			}
 		}
 
-		batch_size = MIN(max_batch_size, q_array.num_specialq);
+		batch_size = MIN(max_batch_size, q_array->num_specialq);
 		if (batch_size == 0)
 			continue;
 
@@ -765,32 +864,28 @@ sieve_specialq(msieve_obj *obj, poly_search_t *poly,
 		if (num_aprog_vals > 1)
 			key_bits++;
 
-		quit = handle_special_q_batch(obj, data,
-				q_array.specialq, batch_size,
-				32 - unused_bits, key_bits, 
-				num_aprog_vals);
+		quit = handle_special_q_batch(obj, d, t, batch_size, 
+				32 - unused_bits, key_bits, num_aprog_vals);
 
-		check_found_array(poly, c, data);
+		check_found_array(c, d, t);
 
-		specialq_array_reset(&q_array, batch_size);
+		specialq_array_nextbatch(q_array, batch_size);
 
-		*elapsed = get_cpu_time() - cpu_start_time +
-				data->gpu_elapsed;
+		*elapsed = get_cpu_time() - cpu_start_time;
 		if (*elapsed > deadline)
 			quit = 1;
 	}
 
-	CUDA_TRY(cuMemFree(data->gpu_q_array))
-	specialq_array_free(&q_array);
 	return quit;
 }
 
 /*------------------------------------------------------------------------*/
-double
-sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly, 
-		poly_coeff_t *c, void *gpu_data, double deadline)
+static double
+sieve_lattice_gpu_core(msieve_obj *obj,
+		poly_coeff_t *c, device_data_t *d, 
+		device_thread_data_t *t, double deadline)
 {
-	uint32 degree = poly->degree;
+	uint32 degree = d->poly->degree;
 	uint32 num_pieces;
 	uint32 p_min, p_max;
 	uint32 special_q_min, special_q_max;
@@ -798,8 +893,6 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
 	uint32 special_q_fb_max;
 	double elapsed = 0;
 	double target = c->coeff_max / c->m0;
-	void * sieve_p = sieve_fb_alloc();
-	void * sieve_special_q = sieve_fb_alloc();
 
 	/* Kleinjung shows that the third-to-largest algebraic
 	   polynomial coefficient is of size approximately
@@ -833,7 +926,7 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
 	   small as possible */
 
 	special_q_fb_max = MIN(200000, special_q_max);
-	sieve_fb_init(sieve_special_q, c,
+	sieve_fb_init(t->sieve_q_fb, c,
 			2, special_q_fb_max,
 			1, degree,
 			1);
@@ -844,7 +937,7 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
 	   special-q has factors in common with many progressions
 	   in the set */
 
-	sieve_fb_init(sieve_p, c, 
+	sieve_fb_init(t->sieve_p_fb, c, 
 			100, 5000,
 			1, degree,
 		       	0);
@@ -862,11 +955,11 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
 				/ num_pieces;
 		uint32 piece = get_rand(&obj->seed1, &obj->seed2)
 				% num_pieces;
-
+#if 0
 		printf("randomizing rational coefficient: "
 			"using piece #%u of %u\n",
 			piece + 1, num_pieces);
-
+#endif
 		special_q_min2 = special_q_min + piece * piece_length;
 		special_q_max2 = special_q_min2 + piece_length;
 	}
@@ -874,18 +967,16 @@ sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
 		special_q_min2 = special_q_min;
 		special_q_max2 = special_q_max;
 	}
-
+#if 1
 	gmp_printf("coeff %Zd specialq %u - %u other %u - %u\n",
 			c->high_coeff,
 			special_q_min2, special_q_max2,
 			p_min, p_max);
-
-	sieve_specialq(obj, poly, c, gpu_data, sieve_special_q, sieve_p,
+#endif
+	sieve_specialq(obj, c, d, t,
 			special_q_min2, special_q_max2, p_min, p_max,
 			deadline, &elapsed);
 
-	sieve_fb_free(sieve_special_q);
-	sieve_fb_free(sieve_p);
 	return elapsed;
 }
 
@@ -950,19 +1041,120 @@ load_sort_engine(msieve_obj *obj, device_data_t *d)
 		printf("error: cannot find GPU sorting function\n");
 		exit(-1);
 	}
-	d->sort_engine = d->sort_engine_init();
+}
+
+
+/*------------------------------------------------------------------------*/
+static void
+gpu_thread_data_init(void *data, int threadid)
+{
+	uint32 i, j;
+	device_data_t *d = (device_data_t *)data;
+	device_thread_data_t *t = d->threads + threadid;
+
+	CUDA_TRY(cuCtxCreate(&t->gpu_context, 
+			CU_CTX_BLOCKING_SYNC,
+			d->gpu_info->device_handle))
+
+	/* load GPU kernels */
+
+	CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core.ptx"))
+
+	t->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
+				sizeof(gpu_launch_t));
+
+	for (i = 0; i < NUM_GPU_FUNCTIONS; i++) {
+		gpu_launch_t *launch = t->launch + i;
+
+		gpu_launch_init(t->gpu_module, gpu_kernel_names[i],
+				gpu_kernel_args + (i / 3), launch);
+
+		if (i == GPU_FINAL_32 || i == GPU_FINAL_64) {
+			/* performance of the cleanup functions is not 
+			   that sensitive to the block shape; set it 
+			   once up front */
+
+			launch->threads_per_block = 
+					MIN(256, launch->threads_per_block);
+			CUDA_TRY(cuFuncSetBlockShape(launch->kernel_func,
+					launch->threads_per_block, 1, 1))
+		}
+	}
+
+	/* threads each send a stream of kernel calls */
+
+	CUDA_TRY(cuStreamCreate(&t->stream, 0))
+
+	/* set up found array */
+
+	CUDA_TRY(cuMemAlloc(&t->gpu_found_array, sizeof(found_t) *
+			FOUND_ARRAY_SIZE))
+	t->found_array = (found_t *)xmalloc(sizeof(found_t) * 
+			FOUND_ARRAY_SIZE);
+
+	CUDA_TRY(cuMemsetD8(t->gpu_found_array, 0, sizeof(found_t)))
+
+	/* set up root generation arrays */
+
+	t->sieve_p_fb = sieve_fb_alloc();
+	t->sieve_q_fb = sieve_fb_alloc();
+
+	t->p_array = p_soa_array_init(d->poly->degree);
+	t->q_array = specialq_array_init();
+
+	i = sizeof(uint32) * MAX(d->max_sort_entries32, d->max_sort_entries64);
+	j = MAX(d->max_sort_entries32 * sizeof(uint32),
+	        d->max_sort_entries64 * sizeof(uint64));
+
+	CUDA_TRY(cuMemAlloc(&t->gpu_p_array, i))
+	CUDA_TRY(cuMemAlloc(&t->gpu_p_array_scratch, i))
+	CUDA_TRY(cuMemAlloc(&t->gpu_root_array, j))
+	CUDA_TRY(cuMemAlloc(&t->gpu_root_array_scratch, j))
+
+	t->sort_engine = d->sort_engine_init();
+}
+
+
+/*------------------------------------------------------------------------*/
+static void
+gpu_thread_data_free(void *data, int threadid)
+{
+	device_data_t *d = (device_data_t *)data;
+	device_thread_data_t *t = d->threads + threadid;
+
+	d->sort_engine_free(t->sort_engine);
+
+	CUDA_TRY(cuMemFree(t->gpu_p_array))
+	CUDA_TRY(cuMemFree(t->gpu_p_array_scratch))
+	CUDA_TRY(cuMemFree(t->gpu_root_array))
+	CUDA_TRY(cuMemFree(t->gpu_root_array_scratch))
+
+	sieve_fb_free(t->sieve_p_fb);
+	sieve_fb_free(t->sieve_q_fb);
+
+	CUDA_TRY(cuStreamDestroy(t->stream))
+
+	free(t->found_array);
+	CUDA_TRY(cuMemFree(t->gpu_found_array))
+
+	free(t->launch);
+
+	p_soa_array_free(t->p_array);
+	specialq_array_free(t->q_array);
+
+	CUDA_TRY(cuCtxDestroy(t->gpu_context)) 
 }
 
 /*------------------------------------------------------------------------*/
 void *
 gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 {
-	uint32 i, j;
 	device_data_t *d;
 	gpu_config_t gpu_config;
 	gpu_info_t *gpu_info;
-	size_t sort_entries32;
-	size_t sort_entries64;
+
+	uint32 num_threads;
+	thread_control_t thread_control;
 
 	gpu_init(&gpu_config);
 	if (gpu_config.num_gpu == 0) {
@@ -986,55 +1178,7 @@ gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 			gpu_info->compute_version_major,
 			gpu_info->compute_version_minor);
 
-	CUDA_TRY(cuCtxCreate(&d->gpu_context, 
-			CU_CTX_BLOCKING_SYNC,
-			gpu_info->device_handle))
-
 	load_sort_engine(obj, d);
-
-	/* load GPU kernels */
-
-	CUDA_TRY(cuModuleLoad(&d->gpu_module, "stage1_core.ptx"))
-
-	d->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
-				sizeof(gpu_launch_t));
-
-	for (i = 0; i < NUM_GPU_FUNCTIONS; i++) {
-		gpu_launch_t *launch = d->launch + i;
-
-		gpu_launch_init(d->gpu_module, gpu_kernel_names[i],
-				gpu_kernel_args + (i / 3), launch);
-
-		if (i == GPU_FINAL_32 || i == GPU_FINAL_64) {
-			/* performance of the cleanup functions is not 
-			   that sensitive to the block shape; set it 
-			   once up front */
-
-			launch->threads_per_block = 
-					MIN(256, launch->threads_per_block);
-			CUDA_TRY(cuFuncSetBlockShape(launch->kernel_func,
-					launch->threads_per_block, 1, 1))
-		}
-	}
-
-	/* set up timing */
-
-	CUDA_TRY(cuEventCreate(&d->start, CU_EVENT_BLOCKING_SYNC))
-	CUDA_TRY(cuEventCreate(&d->end, CU_EVENT_BLOCKING_SYNC))
-
-	/* set up found array */
-
-	d->found_array_size = FOUND_ARRAY_SIZE;
-	CUDA_TRY(cuMemAlloc(&d->gpu_found_array, sizeof(found_t) *
-			d->found_array_size))
-	d->found_array = (found_t *)xmalloc(sizeof(found_t) *
-			d->found_array_size);
-
-	CUDA_TRY(cuMemsetD8(d->gpu_found_array, 0, sizeof(found_t)))
-
-	/* set up root generation arrays */
-
-	d->p_array = p_soa_array_init(poly->degree);
 
 	/* a single transformed array will not have enough
 	   elements for the GPU to sort efficiently; instead,
@@ -1055,24 +1199,46 @@ gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 	   making each arithmetic progression contribute multiple 
 	   offsets */
 
-	d->max_sort_entries32 = sort_entries32 = MIN(30000000,
-			(uint32)(0.3 * d->gpu_info->global_mem_size /
+	d->max_sort_entries32 = MIN(30000000, (uint32)(0.3 * 
+				d->gpu_info->global_mem_size /
 				 (2 * (sizeof(uint32) + 
 				       sizeof(uint32)))));
 
-	d->max_sort_entries64 = sort_entries64 = MIN(20000000,
-			(uint32)(0.3 * d->gpu_info->global_mem_size /
+	d->max_sort_entries64 = MIN(20000000, (uint32)(0.3 * 
+				d->gpu_info->global_mem_size /
 				 (2 * (sizeof(uint32) + 
 				       sizeof(uint64)))));
 
-	i = sizeof(uint32) * MAX(sort_entries32, sort_entries64);
-	j = MAX(sort_entries32 * (sizeof(uint32) + sizeof(uint32)),
-	        sort_entries64 * (sizeof(uint32) + sizeof(uint64)));
+	/* account for multiple threads; we allocate a thread pool
+	   with a number of threads requested, where each thread
+	   deals with a single leading coefficient. We also allocate
+	   another thread pool with a single thread, that runs stage
+	   2. Eventually the latter can be made more concurrent.  
+	 
+	   Each GPU thread gets an equal share of the total memory
+	   used on the card. The GPU thread pool should only accumulate
+	   a few leading coefficients at a time, but the stage 2 thread
+	   pool should have a deeper queue of work */
 
-	CUDA_TRY(cuMemAlloc(&d->gpu_p_array, i))
-	CUDA_TRY(cuMemAlloc(&d->gpu_p_array_scratch, i))
-	CUDA_TRY(cuMemAlloc(&d->gpu_root_array, j))
-	CUDA_TRY(cuMemAlloc(&d->gpu_root_array_scratch, j))
+	d->poly = poly;
+	d->num_threads = num_threads = MAX(1, obj->num_threads);
+	d->max_sort_entries32 /= num_threads;
+	d->max_sort_entries64 /= num_threads;
+	d->threads = (device_thread_data_t *)xcalloc(num_threads,
+					sizeof(device_thread_data_t));
+
+	thread_control.init = gpu_thread_data_init;
+	thread_control.shutdown = gpu_thread_data_free;
+	thread_control.data = d;
+	d->gpu_threadpool = threadpool_init(num_threads,
+					MAX(10, num_threads),
+					&thread_control);
+
+	thread_control.init = NULL;
+	thread_control.shutdown = NULL;
+	thread_control.data = NULL;
+	d->stage2_threadpool = threadpool_init(1, 1000, &thread_control);
+
 	return d;
 }
 
@@ -1081,27 +1247,79 @@ void gpu_data_free(void *gpu_data)
 {
 	device_data_t *d = (device_data_t *)gpu_data;
 
-	CUDA_TRY(cuMemFree(d->gpu_p_array))
-	CUDA_TRY(cuMemFree(d->gpu_p_array_scratch))
-	CUDA_TRY(cuMemFree(d->gpu_root_array))
-	CUDA_TRY(cuMemFree(d->gpu_root_array_scratch))
+	/* shut down the GPU threadpool first, since
+	   we don't want it feeding the stage 2 threadpool
+	   after it's been freed */
 
-	free(d->found_array);
-	free(d->launch);
+	threadpool_free(d->gpu_threadpool);
+	threadpool_free(d->stage2_threadpool);
 
-	p_soa_array_free(d->p_array);
+	free(d->threads);
 
-	CUDA_TRY(cuMemFree(d->gpu_found_array))
-
-	CUDA_TRY(cuEventDestroy(d->start))
-	CUDA_TRY(cuEventDestroy(d->end))
-
-	d->sort_engine_free(d->sort_engine);
 	unload_dynamic_lib(d->sort_engine_handle);
 
-	CUDA_TRY(cuCtxDestroy(d->gpu_context)) 
-	
 	free(d->gpu_info);
 	free(d);
 }
+
+/*------------------------------------------------------------------------*/
+/* infrastructure for submitting new leading
+   coeffs to the GPU thread pool */
+
+typedef struct {
+	msieve_obj *obj;
+	poly_coeff_t *c;
+	device_data_t *d;
+	uint32 deadline;
+} task_data_t;
+
+static void
+task_data_free(void *data, int threadid)
+{
+	task_data_t *task_data = (task_data_t *)data;
+
+	poly_coeff_free(task_data->c);
+	free(task_data);
+}
+
+static void
+task_data_run(void *data, int threadid)
+{
+	task_data_t *task_data = (task_data_t *)data;
+
+	sieve_lattice_gpu_core(task_data->obj, task_data->c, task_data->d,
+				task_data->d->threads + threadid,
+				task_data->deadline);
+}
+
+/* external entry point */
+double sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
+			poly_coeff_t *c, void *gpu_data,
+			double deadline)
+{
+	/* submit a leading coefficient asynchronously to the
+	   GPU thread pool; we copy the coefficient so the input
+	   one can be overwritten by calling code */
+
+	task_control_t task_control;
+	task_data_t *task_data = (task_data_t *)xmalloc(sizeof(task_data_t));
+	device_data_t *d = (device_data_t *)gpu_data;
+	poly_coeff_t *c2 = poly_coeff_init();
+
+	poly_coeff_copy(c2, c);
+
+	task_data->obj = obj;
+	task_data->c = c2;
+	task_data->d = d;
+	task_data->deadline = deadline;
+
+	task_control.init = NULL;
+	task_control.run = task_data_run;
+	task_control.shutdown = task_data_free;
+	task_control.data = task_data;
+
+	threadpool_add_task(d->gpu_threadpool, &task_control, 1);
+	return 0;
+}
+
 
