@@ -12,10 +12,7 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#ifdef HAVE_CUDA
 #include <sort_engine.h> /* interface to GPU sorting library */
-#endif
-
 #include <stage1.h>
 #include <stage1_core_gpu/stage1_core.h>
 
@@ -749,7 +746,8 @@ sieve_specialq(msieve_obj *obj,
 		poly_coeff_t *c, device_data_t *d,
 		device_thread_data_t *t,
 		uint32 special_q_min, uint32 special_q_max,
-		uint32 p_min, uint32 p_max, double deadline, 
+		uint32 p_min, uint32 p_max, 
+		uint32 max_aprog_vals, double deadline, 
 		double *elapsed)
 {
 	uint32 i, j;
@@ -846,6 +844,7 @@ sieve_specialq(msieve_obj *obj,
 			   generate multiple offsets, centered about 0 */
 
 			num_aprog_vals = max_batch_size / batch_size;
+			num_aprog_vals = MIN(num_aprog_vals, max_aprog_vals);
 
 			/* if we were set up for 32-bit sort keys but
 			   now require 64-bit sort keys, make sure to 
@@ -893,6 +892,7 @@ sieve_lattice_gpu_core(msieve_obj *obj,
 	uint32 special_q_fb_max;
 	double elapsed = 0;
 	double target = c->coeff_max / c->m0;
+	uint32 max_aprog_vals = ceil(2 * P_SCALE);
 
 	/* Kleinjung shows that the third-to-largest algebraic
 	   polynomial coefficient is of size approximately
@@ -975,7 +975,7 @@ sieve_lattice_gpu_core(msieve_obj *obj,
 #endif
 	sieve_specialq(obj, c, d, t,
 			special_q_min2, special_q_max2, p_min, p_max,
-			deadline, &elapsed);
+			max_aprog_vals, deadline, &elapsed);
 
 	return elapsed;
 }
