@@ -231,7 +231,7 @@ p_soa_array_start(p_soa_array_t *s, uint32 pp_is_64,
 		uint64 *rs = soa->start_roots;
 		void *root_array = soa->r.roots;
 
-		if (soa->num_p < 50)
+		if (num_p * num_roots < 50)
 			continue;
 
 		if (pp_is_64) {
@@ -1051,6 +1051,11 @@ gpu_thread_data_init(void *data, int threadid)
 	uint32 i, j;
 	device_data_t *d = (device_data_t *)data;
 	device_thread_data_t *t = d->threads + threadid;
+
+	/* every thread needs its own context; making all
+	   threads share the same context causes problems
+	   with the sort engine, because apparently it
+	   changes the GPU cache size on the fly */
 
 	CUDA_TRY(cuCtxCreate(&t->gpu_context, 
 			CU_CTX_BLOCKING_SYNC,
