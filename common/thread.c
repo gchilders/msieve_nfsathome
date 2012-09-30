@@ -222,6 +222,15 @@ static task_control_t * threadpool_task_get_task(struct threadpool *pool)
  * @param data Contains a pointer to the startup data
  * @return NULL.
  */
+#if defined(__GNUC__) && (__GNUC__ > 4 || __GNUC__ == 4 && __GNUC_MINOR__>1)
+
+/* gcc on win32 needs to force 16-byte stack alignment on 
+   thread entry, as this exceeds what windows may provide; see
+
+   http://sourceware.org/ml/pthreads-win32/2008/msg00053.html
+*/
+__attribute__((force_align_arg_pointer))
+#endif
 static void *worker_thr_routine(void *data)
 {
 	struct thread_init *init = (struct thread_init *)data;
