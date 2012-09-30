@@ -1063,7 +1063,12 @@ gpu_thread_data_init(void *data, int threadid)
 
 	/* load GPU kernels */
 
-	CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core.ptx"))
+	if (d->gpu_info->compute_version_major >= 2)
+		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm20.ptx"))
+	else if (d->gpu_info->compute_version_minor >= 3)
+		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm13.ptx"))
+	else
+		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm11.ptx"))
 
 	t->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
 				sizeof(gpu_launch_t));
