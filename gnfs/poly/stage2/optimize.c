@@ -385,7 +385,6 @@ optimize_initial(curr_poly_t *c, uint32 deg, double *pol_norm, uint32 skew_only)
 			score = minimize(best, num_vars, tol, 40, 
 					objective, &opt_data);
 
-			printf("i %u score %le\n", i, score);
 			for (j = 0; j <= rotate_dim; j++) {
 				double cj = floor(best[ROTATE0 + j] + 0.5);
 				mpz_set_d(c->gmp_help1, cj);
@@ -417,7 +416,6 @@ optimize_initial(curr_poly_t *c, uint32 deg, double *pol_norm, uint32 skew_only)
 			tol = 1e-5;
 			score = ifs_rectangular(apoly.coeff, apoly.degree,
 						best[SKEWNESS]);
-			printf("transition score %le\n", score);
 		}
 	}
 
