@@ -88,7 +88,7 @@ get_cpu_time(void) {
 	FILETIME kernel_time = {0, 0};
 	FILETIME user_time = {0, 0};
 
-	GetProcessTimes(GetCurrentProcess(),
+	GetProcessTimes(GetCurrentThread(),
 			&create_time,
 			&exit_time,
 			&kernel_time,
@@ -99,7 +99,11 @@ get_cpu_time(void) {
 #else
 	struct rusage r_usage;
 
+	#ifdef __linux__
+	getrusage(RUSAGE_THREAD, &r_usage);
+	#else
 	getrusage(RUSAGE_SELF, &r_usage);
+	#endif
 
 	return ((uint64)r_usage.ru_utime.tv_sec * 1000000 +
 	               r_usage.ru_utime.tv_usec) / 1000000.0;
