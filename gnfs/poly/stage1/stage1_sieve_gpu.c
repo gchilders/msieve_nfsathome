@@ -454,6 +454,11 @@ typedef struct {
 
 	void * sort_engine;
 
+	CUevent start_event;
+	CUevent end_event;
+	double gpu_elapsed;
+	double cumulative_elapsed;
+
 } device_thread_data_t;
 
 typedef struct {
@@ -469,10 +474,6 @@ typedef struct {
 
 	size_t max_sort_entries32;
 	size_t max_sort_entries64;
-
-	CUevent start;
-	CUevent end;
-	double gpu_elapsed;
 
 	uint32 num_threads;
 	device_thread_data_t *threads;
@@ -601,6 +602,9 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 	gpu_launch_t *launch;
 	uint32 num_q, curr_q;
 	uint32 root_bytes = (key_bits > 32) ? sizeof(uint64) : sizeof(uint32);
+	float elapsed_ms;
+
+	CUDA_TRY(cuEventRecord(t->start_event, t->stream))
 
 	specialq_array_start(q_array, num_specialq, t->stream);
 
@@ -723,17 +727,18 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 
 	CUDA_TRY(cuLaunchGridAsync(launch->kernel_func, 
 				num_blocks, 1, t->stream))
-#if 0
-	CUDA_TRY(cuEventRecord(d->end, 0))
-	CUDA_TRY(cuEventSynchronize(d->end))
-	CUDA_TRY(cuEventElapsedTime(&elapsed_ms, d->start, d->end))
+
+	CUDA_TRY(cuEventRecord(t->end_event, t->stream))
+	CUDA_TRY(cuEventSynchronize(t->end_event))
+	CUDA_TRY(cuEventElapsedTime(&elapsed_ms, 
+			t->start_event, t->end_event))
 	if (elapsed_ms < 60000 && elapsed_ms > 0) {
 		/* this function should execute in under a second. If
 		   it takes a very long time, assume that the system
 		   was in hibernation and don't let it count. */
-		d->gpu_elapsed += elapsed_ms / 1000;
+		t->gpu_elapsed += elapsed_ms / 1000;
 	}
-#endif
+
 	if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
 		quit = 1;
 
@@ -747,8 +752,7 @@ sieve_specialq(msieve_obj *obj,
 		device_thread_data_t *t,
 		uint32 special_q_min, uint32 special_q_max,
 		uint32 p_min, uint32 p_max, 
-		uint32 max_aprog_vals, double deadline, 
-		double *elapsed)
+		uint32 max_aprog_vals, double deadline)
 {
 	uint32 i, j;
 	uint32 quit = 0;
@@ -763,9 +767,9 @@ sieve_specialq(msieve_obj *obj,
 	uint32 pp_is_64 = (p_max >= 65536);
 	uint32 max_batch_specialq32;
 	uint32 max_batch_specialq64;
+	double elapsed = 0;
 
-	*elapsed = 0;
-	d->gpu_elapsed = 0;
+	t->gpu_elapsed = 0;
 
 	/* build all the arithmetic progressions */
 
@@ -870,16 +874,17 @@ sieve_specialq(msieve_obj *obj,
 
 		specialq_array_nextbatch(q_array, batch_size);
 
-		*elapsed = get_cpu_time() - cpu_start_time;
-		if (*elapsed > deadline)
+		elapsed = get_cpu_time() - cpu_start_time + t->gpu_elapsed;
+		if (elapsed > deadline)
 			quit = 1;
 	}
 
+	t->cumulative_elapsed += elapsed;
 	return quit;
 }
 
 /*------------------------------------------------------------------------*/
-static double
+static void
 sieve_lattice_gpu_core(msieve_obj *obj,
 		poly_coeff_t *c, device_data_t *d, 
 		device_thread_data_t *t, double deadline)
@@ -890,7 +895,6 @@ sieve_lattice_gpu_core(msieve_obj *obj,
 	uint32 special_q_min, special_q_max;
 	uint32 special_q_min2, special_q_max2;
 	uint32 special_q_fb_max;
-	double elapsed = 0;
 	double target = c->coeff_max / c->m0;
 	uint32 max_aprog_vals = ceil(2 * P_SCALE);
 
@@ -975,9 +979,7 @@ sieve_lattice_gpu_core(msieve_obj *obj,
 #endif
 	sieve_specialq(obj, c, d, t,
 			special_q_min2, special_q_max2, p_min, p_max,
-			max_aprog_vals, deadline, &elapsed);
-
-	return elapsed;
+			max_aprog_vals, deadline);
 }
 
 /*------------------------------------------------------------------------*/
@@ -1122,6 +1124,9 @@ gpu_thread_data_init(void *data, int threadid)
 	CUDA_TRY(cuMemAlloc(&t->gpu_root_array_scratch, j))
 
 	t->sort_engine = d->sort_engine_init();
+
+	CUDA_TRY(cuEventCreate(&t->start_event, 0))
+	CUDA_TRY(cuEventCreate(&t->end_event, 0))
 }
 
 
@@ -1131,6 +1136,9 @@ gpu_thread_data_free(void *data, int threadid)
 {
 	device_data_t *d = (device_data_t *)data;
 	device_thread_data_t *t = d->threads + threadid;
+
+	CUDA_TRY(cuEventDestroy(t->start_event))
+	CUDA_TRY(cuEventDestroy(t->end_event))
 
 	d->sort_engine_free(t->sort_engine);
 
@@ -1311,10 +1319,12 @@ double sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
 	   GPU thread pool; we copy the coefficient so the input
 	   one can be overwritten by calling code */
 
+	uint32 i;
 	task_control_t task_control;
 	task_data_t *task_data = (task_data_t *)xmalloc(sizeof(task_data_t));
 	device_data_t *d = (device_data_t *)gpu_data;
 	poly_coeff_t *c2 = poly_coeff_init();
+	double cumulative_elapsed = 0;
 
 	poly_coeff_copy(c2, c);
 
@@ -1329,7 +1339,13 @@ double sieve_lattice_gpu(msieve_obj *obj, poly_search_t *poly,
 	task_control.data = task_data;
 
 	threadpool_add_task(d->gpu_threadpool, &task_control, 1);
-	return 0;
+
+	/* return total time spent by all stage 1 threads */
+
+	for (i = 0; i < d->num_threads; i++)
+		cumulative_elapsed += d->threads[i].cumulative_elapsed;
+
+	return cumulative_elapsed;
 }
 
 
