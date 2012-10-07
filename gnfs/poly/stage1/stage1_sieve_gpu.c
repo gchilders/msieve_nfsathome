@@ -1125,8 +1125,8 @@ gpu_thread_data_init(void *data, int threadid)
 
 	t->sort_engine = d->sort_engine_init();
 
-	CUDA_TRY(cuEventCreate(&t->start_event, 0))
-	CUDA_TRY(cuEventCreate(&t->end_event, 0))
+	CUDA_TRY(cuEventCreate(&t->start_event, CU_EVENT_BLOCKING_SYNC))
+	CUDA_TRY(cuEventCreate(&t->end_event, CU_EVENT_BLOCKING_SYNC))
 }
 
 
@@ -1170,6 +1170,7 @@ gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 	device_data_t *d;
 	gpu_config_t gpu_config;
 	gpu_info_t *gpu_info;
+	size_t gpu_mem;
 
 	uint32 num_threads;
 	thread_control_t thread_control;
@@ -1217,15 +1218,28 @@ gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 	   making each arithmetic progression contribute multiple 
 	   offsets */
 
-	d->max_sort_entries32 = MIN(30000000, (uint32)(0.3 * 
-				d->gpu_info->global_mem_size /
-				 (2 * (sizeof(uint32) + 
-				       sizeof(uint32)))));
+	gpu_mem = 0.3 * d->gpu_info->global_mem_size;
+	if (obj->nfs_args != NULL) {
 
-	d->max_sort_entries64 = MIN(20000000, (uint32)(0.3 * 
-				d->gpu_info->global_mem_size /
+		char *tmp = strstr(obj->nfs_args, "gpu_mem_mb=");
+		if (tmp != NULL) {
+			size_t m = strtoul(tmp + 11, NULL, 10);
+
+			gpu_mem = MIN(d->gpu_info->global_mem_size,
+					m * 1048576);
+			gpu_mem = MAX(10 * 1048576, gpu_mem);
+			logprintf(obj, "setting max GPU mem use to %.1lf MB\n",
+					(double)gpu_mem / 1048576);
+		}
+	}
+
+	d->max_sort_entries32 = MIN(30000000, gpu_mem /
 				 (2 * (sizeof(uint32) + 
-				       sizeof(uint64)))));
+				       sizeof(uint32))));
+
+	d->max_sort_entries64 = MIN(20000000, gpu_mem /
+				 (2 * (sizeof(uint32) + 
+				       sizeof(uint64))));
 
 	/* account for multiple threads; we allocate a thread pool
 	   with a number of threads requested, where each thread

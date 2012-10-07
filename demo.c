@@ -136,6 +136,7 @@ void print_usage(char *progname) {
 		 " polynomial selection options:\n"
 #ifdef HAVE_CUDA
 		 "   sortlib=X       use GPU sorting library X\n"
+		 "   gpu_mem_mb=X    use X megabytes of GPU memory\n"
 #endif
 		 "   polydegree=X    select polynomials with degree X\n"
 		 "   min_coeff=X     minimum leading coefficient to search\n"
