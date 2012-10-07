@@ -99,7 +99,7 @@ get_cpu_time(void) {
 #else
 	struct rusage r_usage;
 
-	#ifdef __linux__
+	#if 0 /* use for linux 2.6.26+ */
 	getrusage(RUSAGE_THREAD, &r_usage);
 	#else
 	getrusage(RUSAGE_SELF, &r_usage);

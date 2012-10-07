@@ -132,8 +132,8 @@ gcd32(uint32 x, uint32 y) {
 		uint32 shift = 31 - __clz(v & -v);
 		v = v >> shift;
 
-		x = __min(u, v);
-		y = __max(u, v);
+		x = min(u, v);
+		y = max(u, v);
 		u = x;
 		v = y - x;
 	} while (v != 0);
