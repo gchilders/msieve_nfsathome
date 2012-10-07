@@ -363,8 +363,6 @@ optimize_initial(curr_poly_t *c, uint32 deg, double *pol_norm, uint32 skew_only)
 	}
 	else if (deg == 6) {
 		score = optimize_initial_deg6(best, c, deg);
-
-		printf("preopt %.7e skew %lf\n", score, best[SKEWNESS]);
 	}
 
 	score = 1e200;
