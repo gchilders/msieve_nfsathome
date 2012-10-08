@@ -804,10 +804,9 @@ sieve_specialq(msieve_obj *obj,
 	specialq_array_reset(q_array);
 
 	if (special_q_min == 1) {
+		uint64 trivroots[1] = { 0 };
 
-		q_array->specialq[0].p = 1;
-		q_array->specialq[0].root = 0;
-		q_array->num_specialq++;
+		store_specialq(1, 1, trivroots, q_array);
 	}
 
 	/* handle special-q in batches */
