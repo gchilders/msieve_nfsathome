@@ -631,26 +631,7 @@ sieve_kernel_final_32(uint32 *p_array, int32 *roots, uint32 p_array_size,
 			if (root1 != root2)
 				break;
 
-			if (p1 >= p2 &&
-			    (p1 >> shift) == (p2 >> shift) &&
-			    gcd32( (p1 & mask), (p2 & mask) ) == 1) {
-
-				store_hit(found_array, FOUND_ARRAY_SIZE,
-						p1 & mask, p2 & mask, 
-						(int64)root1,
-						q_batch + (p1 >> shift));
-			}
-		}
-
-		for (j = i - 1; (int32)j >= 0; j--) {
-			int32 root2 = roots[j];
-			uint32 p2 = p_array[j];
-
-			if (root1 != root2)
-				break;
-
-			if (p1 >= p2 &&
-			    (p1 >> shift) == (p2 >> shift) &&
+			if ((p1 >> shift) == (p2 >> shift) &&
 			    gcd32( (p1 & mask), (p2 & mask) ) == 1) {
 
 				store_hit(found_array, FOUND_ARRAY_SIZE,
@@ -688,25 +669,7 @@ sieve_kernel_final_64(uint32 *p_array, int64 *roots, uint32 p_array_size,
 			if (root1 != root2)
 				break;
 
-			if (p1 >= p2 &&
-			    (p1 >> shift) == (p2 >> shift) &&
-			    gcd32( (p1 & mask), (p2 & mask) ) == 1) {
-
-				store_hit(found_array, FOUND_ARRAY_SIZE,
-						p1 & mask, p2 & mask, root1,
-						q_batch + (p1 >> shift));
-			}
-		}
-
-		for (j = i - 1; (int32)j >= 0; j--) {
-			int64 root2 = roots[j];
-			uint32 p2 = p_array[j];
-
-			if (root1 != root2)
-				break;
-
-			if (p1 >= p2 &&
-			    (p1 >> shift) == (p2 >> shift) &&
+			if ((p1 >> shift) == (p2 >> shift) &&
 			    gcd32( (p1 & mask), (p2 & mask) ) == 1) {
 
 				store_hit(found_array, FOUND_ARRAY_SIZE,
