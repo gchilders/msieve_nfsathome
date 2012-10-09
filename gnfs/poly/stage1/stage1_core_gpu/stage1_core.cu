@@ -643,7 +643,7 @@ sieve_kernel_final_32(uint32 *p_array, int32 *roots, uint32 p_array_size,
 		}
 
 		for (j = i - 1; (int32)j >= 0; j--) {
-			int64 root2 = roots[j];
+			int32 root2 = roots[j];
 			uint32 p2 = p_array[j];
 
 			if (root1 != root2)
