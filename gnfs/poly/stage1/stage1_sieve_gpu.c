@@ -826,6 +826,10 @@ sieve_specialq(msieve_obj *obj,
 				max_batch_specialq32;
 		max_batch_size = MIN(max_batch_size, 
 				(uint32)1 << unused_bits);
+		if (max_batch_size == 0) {
+			printf("error: max_batch_size == 0\n");
+			exit(-1);
+		}
 
 		while (q_array->num_specialq < max_batch_size) {
 			if (sieve_fb_next(q_fb, c,
@@ -835,10 +839,10 @@ sieve_specialq(msieve_obj *obj,
 				break;
 			}
 		}
+		if (q_array->num_specialq == 0)
+			continue;
 
 		batch_size = MIN(max_batch_size, q_array->num_specialq);
-		if (batch_size == 0)
-			continue;
 
 		if (batch_size < max_batch_size / 3) {
 
