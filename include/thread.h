@@ -95,6 +95,10 @@ int threadpool_add_task(struct threadpool *pool,
 
 void threadpool_free(struct threadpool *pool);
 
+/* returns zero if no pending tasks */
+int threadpool_drain(struct threadpool *pool,
+			int blocking);
+
 
 #ifdef __cplusplus
 }

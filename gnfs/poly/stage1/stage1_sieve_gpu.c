@@ -463,6 +463,8 @@ typedef struct {
 
 typedef struct {
 
+	msieve_obj *obj;
+
 	poly_search_t *poly;
 
 	gpu_info_t *gpu_info;
@@ -603,6 +605,10 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 	uint32 num_q, curr_q;
 	uint32 root_bytes = (key_bits > 32) ? sizeof(uint64) : sizeof(uint32);
 	float elapsed_ms;
+
+#if 1
+	printf("num_specialq: %u\n", num_specialq);
+#endif
 
 	CUDA_TRY(cuEventRecord(t->start_event, t->stream))
 
@@ -962,7 +968,7 @@ sieve_lattice_gpu_core(msieve_obj *obj,
 				/ num_pieces;
 		uint32 piece = get_rand(&obj->seed1, &obj->seed2)
 				% num_pieces;
-#if 0
+#if 1
 		printf("randomizing rational coefficient: "
 			"using piece #%u of %u\n",
 			piece + 1, num_pieces);
@@ -1191,6 +1197,7 @@ gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 
 	d = (device_data_t *)xcalloc(1, sizeof(device_data_t));
 
+	d->obj = obj;
 	d->gpu_info = gpu_info = (gpu_info_t *)xmalloc(sizeof(gpu_info_t));
 	memcpy(gpu_info, gpu_config.info + obj->which_gpu,
 			sizeof(gpu_info_t)); 
@@ -1281,6 +1288,26 @@ gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 void gpu_data_free(void *gpu_data)
 {
 	device_data_t *d = (device_data_t *)gpu_data;
+
+	if (!(d->obj->flags & MSIEVE_FLAG_STOP_SIEVING)) {
+
+		/* we're allowed to try to shut down gracefully;
+		   give the stage 1 thread pool a few seconds
+		   to try and empty, then give up and free it */
+
+		uint32 i;
+
+		for (i = 0; i < 5; i++) {
+			if (threadpool_drain(d->gpu_threadpool, 0) == 0)
+				break;
+
+#if defined(WIN32) || defined(_WIN64)
+			Sleep(1000);
+#else
+			sleep(1);
+#endif
+		}
+	}
 
 	/* shut down the GPU threadpool first, since
 	   we don't want it feeding the stage 2 threadpool
