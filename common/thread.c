@@ -52,9 +52,11 @@ struct threadpool
 	volatile unsigned short stop_flag;
 
 	pthread_mutex_t free_tasks_mutex;
-	pthread_mutex_t mutex;
 	pthread_cond_t free_tasks_cond;
-	pthread_cond_t cond;
+	pthread_cond_t tasks_done_cond;
+
+	pthread_mutex_t mutex;
+	pthread_cond_t new_tasks_cond;
 };
 
 static void threadpool_queue_init(struct threadpool_queue *queue,
@@ -146,6 +148,21 @@ static int threadpool_queue_is_empty(struct threadpool_queue *queue)
 }
 
 /**
+ * This function checks if a given queue is full.
+ *
+ * @param queue The queue structure.
+ * @return 1 if the queue is full, else 0.
+ */
+static int threadpool_queue_is_full(struct threadpool_queue *queue)
+{
+	if (queue->num_tasks == queue->max_tasks) {
+		return 1;
+	}
+
+	return 0;
+}
+
+/**
  * This function queries for the size of the given queue argument.
  *
  * @param queue The queue structure.
@@ -185,7 +202,7 @@ static task_control_t * threadpool_task_get_task(struct threadpool *pool)
 
 	while (threadpool_queue_is_empty(&(pool->tasks_queue)) && !pool->stop_flag) {
 		/* Block until a new task arrives. */
-		if (pthread_cond_wait(&(pool->cond),&(pool->mutex))) {
+		if (pthread_cond_wait(&(pool->new_tasks_cond),&(pool->mutex))) {
 			perror("pthread_cond_wait: ");
 			if (pthread_mutex_unlock(&(pool->mutex))) {
 				perror("pthread_mutex_unlock: ");
@@ -301,6 +318,19 @@ static void *worker_thr_routine(void *data)
 			}
 		}
 
+		if (threadpool_queue_is_full(&(pool->free_tasks_queue)) == 1) {
+			/* Notify any waiting threads that threadpool is not busy */
+
+			if (pthread_cond_broadcast(&(pool->tasks_done_cond))) {
+				perror("pthread_cond_broadcast: ");
+				if (pthread_mutex_unlock(&(pool->free_tasks_mutex))) {
+					perror("pthread_mutex_unlock: ");
+				}
+
+				break;
+			}
+		}
+
 		if (pthread_mutex_unlock(&(pool->free_tasks_mutex))) {
 			perror("pthread_mutex_unlock: ");
 			REPORT_ERROR("The worker thread has exited.");
@@ -341,7 +371,7 @@ void threadpool_free(struct threadpool *pool)
 		return;
 	}
 
-	if (pthread_cond_broadcast(&(pool->cond))) {
+	if (pthread_cond_broadcast(&(pool->new_tasks_cond))) {
 		perror("pthread_cond_broadcast: ");
 		REPORT_ERROR("Warning: Memory was not released.");
 		REPORT_ERROR("Warning: Some of the worker threads may have failed to exit.");
@@ -406,7 +436,12 @@ struct threadpool* threadpool_init(int num_of_threads,
 		free(pool);
 		return NULL;
 	}
-	if (pthread_cond_init(&(pool->cond),NULL)) {
+	if (pthread_cond_init(&(pool->tasks_done_cond),NULL)) {
+		perror("pthread_mutex_init: ");
+		free(pool);
+		return NULL;
+	}
+	if (pthread_cond_init(&(pool->new_tasks_cond),NULL)) {
 		perror("pthread_mutex_init: ");
 		free(pool);
 		return NULL;
@@ -532,7 +567,7 @@ int threadpool_add_task(struct threadpool *pool, task_control_t *new_task, int b
 
 	if (threadpool_queue_getsize(&(pool->tasks_queue)) == 1) {
 		/* Notify all worker threads that there are new jobs. */
-		if (pthread_cond_broadcast(&(pool->cond))) {
+		if (pthread_cond_broadcast(&(pool->new_tasks_cond))) {
 			perror("pthread_cond_broadcast: ");
 			if (pthread_mutex_unlock(&(pool->mutex))) {
 				perror("pthread_mutex_unlock: ");
@@ -549,3 +584,42 @@ int threadpool_add_task(struct threadpool *pool, task_control_t *new_task, int b
 
 	return 0;
 }
+
+int threadpool_drain(struct threadpool *pool, int blocking)
+{
+	if (pthread_mutex_lock(&(pool->free_tasks_mutex))) {
+		perror("pthread_mutex_lock: ");
+		return -1;
+	}
+
+	/* Check if the free task queue is full. */
+	while (!threadpool_queue_is_full(&(pool->free_tasks_queue))) {
+		if (!blocking) {
+			/* Return immediately if the command is non blocking. */
+			if (pthread_mutex_unlock(&(pool->free_tasks_mutex))) {
+				perror("pthread_mutex_unlock: ");
+				return -1;
+			}
+
+			return 1;
+		}
+
+		/* blocking is set to 1, wait until free_tasks queue is full */
+		if (pthread_cond_wait(&(pool->tasks_done_cond),&(pool->free_tasks_mutex))) {
+			perror("pthread_cond_wait: ");
+			if (pthread_mutex_unlock(&(pool->free_tasks_mutex))) {
+				perror("pthread_mutex_unlock: ");
+			}
+
+			return -1;
+		}
+	}
+
+	if (pthread_mutex_unlock(&(pool->free_tasks_mutex))) {
+		perror("pthread_mutex_unlock: ");
+		return -1;
+	}
+
+	return 0;
+}
+
