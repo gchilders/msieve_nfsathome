@@ -606,10 +606,6 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 	uint32 root_bytes = (key_bits > 32) ? sizeof(uint64) : sizeof(uint32);
 	float elapsed_ms;
 
-#if 1
-	printf("num_specialq: %u\n", num_specialq);
-#endif
-
 	CUDA_TRY(cuEventRecord(t->start_event, t->stream))
 
 	specialq_array_start(q_array, num_specialq, t->stream);
