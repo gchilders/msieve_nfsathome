@@ -1241,11 +1241,11 @@ gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 		}
 	}
 
-	d->max_sort_entries32 = MIN(30000000, gpu_mem /
+	d->max_sort_entries32 = MIN(50000000, gpu_mem /
 				 (2 * (sizeof(uint32) + 
 				       sizeof(uint32))));
 
-	d->max_sort_entries64 = MIN(20000000, gpu_mem /
+	d->max_sort_entries64 = MIN(35000000, gpu_mem /
 				 (2 * (sizeof(uint32) + 
 				       sizeof(uint64))));
 
