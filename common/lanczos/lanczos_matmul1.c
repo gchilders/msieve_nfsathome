@@ -332,8 +332,11 @@ static void mul_one_block(packed_block_t *curr_block,
 }
 
 /*-------------------------------------------------------------------*/
-void mul_packed_core(thread_data_t *t) {
-
+void mul_packed_core(void *data, int thread_num)
+{
+	la_task_t *task = (la_task_t *)data;
+	packed_matrix_t *p = task->matrix;
+	thread_data_t *t = p->thread_data + task->task_num;
 	uint64 *x = t->x;
 	uint64 *b = t->b;
 	uint32 i;

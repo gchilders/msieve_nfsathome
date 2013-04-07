@@ -89,63 +89,44 @@ static void mul_trans_unpacked(packed_matrix_t *matrix,
 }
 
 /*-------------------------------------------------------------------*/
-static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
-
+static void mul_packed(packed_matrix_t *matrix, 
+			uint64 *x, uint64 *b) 
+{
 	uint32 i;
-	uint32 nrows = matrix->nrows;
+	task_control_t task;
 
 	for (i = 0; i < matrix->num_threads; i++) {
 		thread_data_t *t = matrix->thread_data + i;
 
 		/* use each thread's scratch vector, except the
-		   first thead, which has no scratch vector but
-		   uses b instead */
+		   first thread, which has no scratch vector but
+		   uses b instead. */
 
 		t->x = x;
 		if (i == 0)
 			t->b = b;
-		memset(t->b, 0, nrows * sizeof(uint64));
-
-		/* fire off each part of the matrix multiply
-		   in a separate thread from the thread pool, 
-		   except the last part. The current thread 
-		   does the last partial multiply, and this 
-		   saves one synchronize operation */
-
-		if (i == matrix->num_threads - 1) {
-			mul_packed_core(t);
-		}
-		else {
-			t->command = COMMAND_MATMUL;
-#if defined(WIN32) || defined(_WIN64)
-			SetEvent(t->run_event);
-#else
-			pthread_cond_signal(&t->run_cond);
-			pthread_mutex_unlock(&t->run_lock);
-#endif
-		}
+		memset(t->b, 0, matrix->nrows * sizeof(uint64));
 	}
 
-	/* wait for each thread to finish. All the scratch
-	   vectors used by threads get xor-ed into the final b
-	   vector */
+	/* fire off the tasks and wait for them to finish */
+
+	task.init = NULL;
+	task.run = mul_packed_core;
+	task.shutdown = NULL;
 
 	for (i = 0; i < matrix->num_threads; i++) {
-		thread_data_t *t = matrix->thread_data + i;
-
-		if (i < matrix->num_threads - 1) {
-#if defined(WIN32) || defined(_WIN64)
-			WaitForSingleObject(t->finish_event, INFINITE);
-#else
-			pthread_mutex_lock(&t->run_lock);
-			while (t->command != COMMAND_WAIT)
-				pthread_cond_wait(&t->run_cond, &t->run_lock);
-#endif
-		}
-
-		if (i > 0)
-			accum_xor(b, t->b, nrows);
+		matrix->tasks[i].matrix = matrix;
+		matrix->tasks[i].task_num = i;
+		task.data = matrix->tasks + i;
+		threadpool_add_task(matrix->threadpool, &task, 0);
 	}
+
+	threadpool_drain(matrix->threadpool, 1);
+
+	/* accumulate the results */
+
+	for (i = 1; i < matrix->num_threads; i++)
+		accum_xor(b, matrix->thread_data[i].b, matrix->nrows);
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX)
 	ASM_G volatile ("emms");
@@ -155,61 +136,46 @@ static void mul_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
 }
 
 /*-------------------------------------------------------------------*/
-void mul_trans_packed(packed_matrix_t *matrix, uint64 *x, uint64 *b) {
-
+static void mul_trans_packed(packed_matrix_t *matrix, 
+			uint64 *x, uint64 *b) 
+{
 	uint32 i;
-	uint32 ncols = matrix->ncols;
 	uint64 *tmp_b[MAX_THREADS];
+	task_control_t task;
 
-	memset(b, 0, ncols * sizeof(uint64));
+	memset(b, 0, matrix->ncols * sizeof(uint64));
 
 	for (i = 0; i < matrix->num_threads; i++) {
 		thread_data_t *t = matrix->thread_data + i;
 
 		/* separate threads fill up disjoint portions
-		   of a single b vector, and do not need 
-		   per-thread scratch space */
+		   of a single b vector, and do not need per-thread 
+		   scratch space */
 
 		tmp_b[i] = t->b;
 		t->x = x;
 		t->b = b;
-
-		/* fire off each part of the matrix multiply
-		   in a separate thread from the thread pool, 
-		   except the last part. The current thread 
-		   does the last partial multiply, and this 
-		   saves one synchronize operation */
-
-		if (i == matrix->num_threads - 1) {
-			mul_trans_packed_core(t);
-		}
-		else {
-			t->command = COMMAND_MATMUL_TRANS;
-#if defined(WIN32) || defined(_WIN64)
-			SetEvent(t->run_event);
-#else
-			pthread_cond_signal(&t->run_cond);
-			pthread_mutex_unlock(&t->run_lock);
-#endif
-		}
 	}
 
-	/* wait for each thread to finish */
+	/* fire off the tasks and wait for them to finish */
+
+	task.init = NULL;
+	task.run = mul_trans_packed_core;
+	task.shutdown = NULL;
 
 	for (i = 0; i < matrix->num_threads; i++) {
-		thread_data_t *t = matrix->thread_data + i;
-
-		if (i < matrix->num_threads - 1) {
-#if defined(WIN32) || defined(_WIN64)
-			WaitForSingleObject(t->finish_event, INFINITE);
-#else
-			pthread_mutex_lock(&t->run_lock);
-			while (t->command != COMMAND_WAIT)
-				pthread_cond_wait(&t->run_cond, &t->run_lock);
-#endif
-		}
-		t->b = tmp_b[i];
+		matrix->tasks[i].matrix = matrix;
+		matrix->tasks[i].task_num = i;
+		task.data = matrix->tasks + i;
+		threadpool_add_task(matrix->threadpool, &task, 0);
 	}
+
+	threadpool_drain(matrix->threadpool, 1);
+
+	/* restore the scratch data for each thread */
+
+	for (i = 0; i < matrix->num_threads; i++)
+		matrix->thread_data[i].b = tmp_b[i];
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX)
 	ASM_G volatile ("emms");
@@ -530,124 +496,19 @@ static void matrix_thread_free(thread_data_t *t) {
 }
 
 /*-------------------------------------------------------------------*/
-#if defined(WIN32) || defined(_WIN64)
-static DWORD WINAPI worker_thread_main(LPVOID thread_data) {
-#else
-static void *worker_thread_main(void *thread_data) {
-#endif
-	thread_data_t *t = (thread_data_t *)thread_data;
-
-	while(1) {
-
-		/* wait forever for work to do */
-#if defined(WIN32) || defined(_WIN64)
-		WaitForSingleObject(t->run_event, INFINITE);
-#else
-		pthread_mutex_lock(&t->run_lock);
-		while (t->command == COMMAND_WAIT) {
-			pthread_cond_wait(&t->run_cond, &t->run_lock);
-		}
-#endif
-		/* do work */
-
-		switch (t->command) {
-		case COMMAND_INIT:
-			matrix_thread_init(t);
-			break;
-		case COMMAND_MATMUL:
-			mul_packed_core(t);
-			break;
-		case COMMAND_MATMUL_TRANS:
-			mul_trans_packed_core(t);
-			break;
-		case COMMAND_INNER_PRODUCT:
-			core_64xN_Nx64(t->x, t->b, t->y, t->vsize);
-			break;
-		case COMMAND_OUTER_PRODUCT:
-			core_Nx64_64x64_acc(t->x, t->b, t->y, t->vsize);
-			break;
-		default:
-			goto thread_done;
-		}
-
-		/* signal completion */
-
-		t->command = COMMAND_WAIT;
-#if defined(WIN32) || defined(_WIN64)
-		SetEvent(t->finish_event);
-#else
-		pthread_cond_signal(&t->run_cond);
-		pthread_mutex_unlock(&t->run_lock);
-#endif
-	}
-
-thread_done:
-	matrix_thread_free(t);
-
-#if defined(WIN32) || defined(_WIN64)
-	return 0;
-#else
-	return NULL;
-#endif
-}
-
-/*-------------------------------------------------------------------*/
-static void start_worker_thread(thread_data_t *t, 
-				uint32 is_master_thread) {
-
-	/* create a thread that will handle matrix multiplies 
-	   for block k of the matrix. The last block does 
-	   not get its own thread (the current thread handles it) */
-
-	if (is_master_thread) {
-		matrix_thread_init(t);
-		return;
-	}
-
-	t->command = COMMAND_INIT;
-#if defined(WIN32) || defined(_WIN64)
-	t->run_event = CreateEvent(NULL, FALSE, TRUE, NULL);
-	t->finish_event = CreateEvent(NULL, FALSE, FALSE, NULL);
-	t->thread_id = CreateThread(NULL, 0, worker_thread_main, t, 0, NULL);
-
-	WaitForSingleObject(t->finish_event, INFINITE); /* wait for ready */
-#else
-	pthread_mutex_init(&t->run_lock, NULL);
-	pthread_cond_init(&t->run_cond, NULL);
-
-	pthread_cond_signal(&t->run_cond);
-	pthread_mutex_unlock(&t->run_lock);
-	pthread_create(&t->thread_id, NULL, worker_thread_main, t);
-
-	pthread_mutex_lock(&t->run_lock); /* wait for ready */
-	while (t->command != COMMAND_WAIT)
-		pthread_cond_wait(&t->run_cond, &t->run_lock);
-#endif
-}
-
-/*-------------------------------------------------------------------*/
-static void stop_worker_thread(thread_data_t *t,
-				uint32 is_master_thread)
+static void start_worker_thread(void *data, int thread_num) 
 {
-	if (is_master_thread) {
-		matrix_thread_free(t);
-		return;
-	}
+	packed_matrix_t *p = (packed_matrix_t *)data;
 
-	t->command = COMMAND_END;
-#if defined(WIN32) || defined(_WIN64)
-	SetEvent(t->run_event);
-	WaitForSingleObject(t->thread_id, INFINITE);
-	CloseHandle(t->thread_id);
-	CloseHandle(t->run_event);
-	CloseHandle(t->finish_event);
-#else
-	pthread_cond_signal(&t->run_cond);
-	pthread_mutex_unlock(&t->run_lock);
-	pthread_join(t->thread_id, NULL);
-	pthread_cond_destroy(&t->run_cond);
-	pthread_mutex_destroy(&t->run_lock);
-#endif
+	matrix_thread_init(p->thread_data + thread_num);
+}
+
+/*-------------------------------------------------------------------*/
+static void stop_worker_thread(void *data, int thread_num) 
+{
+	packed_matrix_t *p = (packed_matrix_t *)data;
+
+	matrix_thread_free(p->thread_data + thread_num);
 }
 
 /*-------------------------------------------------------------------*/
@@ -662,6 +523,7 @@ void packed_matrix_init(msieve_obj *obj,
 	uint32 num_threads;
 	uint32 num_nonzero;
 	uint32 num_nonzero_per_thread;
+	thread_control_t control;
 
 	/* initialize */
 
@@ -778,15 +640,16 @@ void packed_matrix_init(msieve_obj *obj,
 
 	p->num_threads = k;
 
-	/* activate the threads one at a time. The last is the
-	   master thread (i.e. not a thread at all). Each thread
-	   packs its own portion of the matrix, so that memory
-	   allocation is local on NUMA architectures */
+	/* start the thread pool. Each thread packs its own 
+	   portion of the matrix, so that memory allocation
+	   is local on NUMA architectures */
 
-	for (i = 0; i < p->num_threads - 1; i++)
-		start_worker_thread(p->thread_data + i, 0);
+	control.init = start_worker_thread;
+	control.shutdown = stop_worker_thread;
+	control.data = p;
 
-	start_worker_thread(p->thread_data + i, 1);
+	p->threadpool = threadpool_init(p->num_threads,
+				p->num_threads, &control);
 }
 
 /*-------------------------------------------------------------------*/
@@ -805,10 +668,7 @@ void packed_matrix_free(packed_matrix_t *p) {
 		/* stop the worker threads; each will free
 		   its own memory */
 
-		for (i = 0; i < p->num_threads - 1; i++)
-			stop_worker_thread(p->thread_data + i, 0);
-
-		stop_worker_thread(p->thread_data + i, 1);
+		threadpool_free(p->threadpool);
 	}
 }
 

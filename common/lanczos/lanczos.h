@@ -16,6 +16,7 @@ $Id$
 #define _COMMON_LANCZOS_LANCZOS_H_
 
 #include <common.h>
+#include <thread.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -83,16 +84,6 @@ typedef struct {
 	uint16 *med_entries;	  /* nonzero entries for medium dense rows */
 } packed_block_t;
 
-enum thread_command {
-	COMMAND_INIT,
-	COMMAND_WAIT,
-	COMMAND_MATMUL,
-	COMMAND_MATMUL_TRANS,
-	COMMAND_INNER_PRODUCT,
-	COMMAND_OUTER_PRODUCT,
-	COMMAND_END
-};
-
 /* struct used by threads for computing partial
    matrix multiplies */
 
@@ -125,21 +116,12 @@ typedef struct {
 	uint64 *y;
 	uint32 vsize;
 
-	/* fields for thread pool synchronization */
-
-	volatile enum thread_command command;
-
-#if defined(WIN32) || defined(_WIN64)
-	HANDLE thread_id;
-	HANDLE run_event;
-	HANDLE finish_event;
-#else
-	pthread_t thread_id;
-	pthread_mutex_t run_lock;
-	pthread_cond_t run_cond;
-#endif
-
 } thread_data_t;
+
+typedef struct {
+	struct packed_matrix_t *matrix;
+	uint32 task_num;
+} la_task_t;
 
 #define MAX_THREADS 32
 #define MIN_NROWS_TO_THREAD 200000
@@ -159,7 +141,9 @@ typedef struct {
 
 	la_col_t *unpacked_cols;  /* used if no packing takes place */
 
+	struct threadpool *threadpool;
 	thread_data_t thread_data[MAX_THREADS];
+	la_task_t tasks[MAX_THREADS];
 
 #ifdef HAVE_MPI
 	uint32 mpi_size;
@@ -206,9 +190,9 @@ void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x,
 /* for big jobs, we use a multithreaded framework that calls
    these two routines for the heavy lifting */
 
-void mul_packed_core(thread_data_t *t);
+void mul_packed_core(void *data, int thread_num);
 
-void mul_trans_packed_core(thread_data_t *t);
+void mul_trans_packed_core(void *data, int thread_num);
 
 /* top-level calls for vector-vector operations */
 

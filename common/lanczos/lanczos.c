@@ -939,9 +939,6 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 	vt_v0[2] = (uint64 *)xmalloc(64 * sizeof(uint64));
 	vt_v0_next = (uint64 *)xmalloc(64 * sizeof(uint64));
 
-	logprintf(obj, "memory use: %.1f MB\n", (double)
-			(packed_matrix_sizeof(packed_matrix)) / 1048576);
-
 	/* initialize */
 
 	*num_deps_found = 0;
@@ -960,6 +957,14 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 		init_lanczos_state(obj, packed_matrix, scratch, x, 
 				v0, vt_v0, v, vt_a_v, vt_a2_v, 
 				winv, packed_matrix->ncols, s, &dim1);
+
+		/* report memory use only after the thread pool for
+		   matrix multiplies has been used, so we know it won't
+		   change afterwards */
+
+		logprintf(obj, "memory use: %.1f MB\n", (double)
+				(packed_matrix_sizeof(packed_matrix)) / 
+					1048576);
 	}
 
 	mask1 = 0;
