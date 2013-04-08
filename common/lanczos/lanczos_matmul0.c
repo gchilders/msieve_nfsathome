@@ -217,7 +217,7 @@ static void mul_trans_packed(packed_matrix_t *matrix,
 }
 
 /*-------------------------------------------------------------------*/
-int compare_row_off(const void *x, const void *y) {
+static int compare_row_off(const void *x, const void *y) {
 	entry_idx_t *xx = (entry_idx_t *)x;
 	entry_idx_t *yy = (entry_idx_t *)y;
 
@@ -236,7 +236,10 @@ static int compare_uint16(const void *x, const void *y) {
         return (int)*xx - (int)*yy;
 }
 
-static void matrix_thread_init(thread_data_t *t) {
+static void matrix_thread_init(void *data, int thread_num) {
+
+	packed_matrix_t *p = (packed_matrix_t *)data;
+	thread_data_t *t = p->thread_data + thread_num;
 
 	uint32 i, j, k, m;
 	uint32 num_row_blocks;
@@ -505,8 +508,10 @@ static void matrix_thread_init(thread_data_t *t) {
 }
 
 /*-------------------------------------------------------------------*/
-static void matrix_thread_free(thread_data_t *t) {
+static void matrix_thread_free(void *data, int thread_num) {
 
+	packed_matrix_t *p = (packed_matrix_t *)data;
+	thread_data_t *t = p->thread_data + thread_num;
 	uint32 i;
 
 	for (i = 0; i < (t->num_dense_rows + 63) / 64; i++)
@@ -525,22 +530,6 @@ static void matrix_thread_free(thread_data_t *t) {
 	free(t->blocks);
 	if (t->my_oid > 0)
 		free(t->b);
-}
-
-/*-------------------------------------------------------------------*/
-static void start_worker_thread(void *data, int thread_num) 
-{
-	packed_matrix_t *p = (packed_matrix_t *)data;
-
-	matrix_thread_init(p->thread_data + thread_num);
-}
-
-/*-------------------------------------------------------------------*/
-static void stop_worker_thread(void *data, int thread_num) 
-{
-	packed_matrix_t *p = (packed_matrix_t *)data;
-
-	matrix_thread_free(p->thread_data + thread_num);
 }
 
 /*-------------------------------------------------------------------*/
@@ -676,8 +665,8 @@ void packed_matrix_init(msieve_obj *obj,
 	   portion of the matrix, so that memory allocation
 	   is local on NUMA architectures */
 
-	control.init = start_worker_thread;
-	control.shutdown = stop_worker_thread;
+	control.init = matrix_thread_init;
+	control.shutdown = matrix_thread_free;
 	control.data = p;
 
 	p->threadpool = threadpool_init(p->num_threads,
