@@ -207,14 +207,18 @@ void tmul_Nx64_64x64_acc(packed_matrix_t *matrix,
 	task.run = outer_thread_run;
 	task.shutdown = NULL;
 
-	for (i = 0; i < matrix->num_threads; i++) {
+	for (i = 0; i < matrix->num_threads - 1; i++) {
 		matrix->tasks[i].matrix = matrix;
 		matrix->tasks[i].task_num = i;
 		task.data = matrix->tasks + i;
 		threadpool_add_task(matrix->threadpool, &task, 0);
 	}
+	matrix->tasks[i].matrix = matrix;
+	matrix->tasks[i].task_num = i;
+	outer_thread_run(matrix->tasks + i, i);
 
-	threadpool_drain(matrix->threadpool, 1);
+	if (i > 0)
+		threadpool_drain(matrix->threadpool, 1);
 
 	for (i = 0; i < matrix->num_threads; i++)
 		matrix->thread_data[i].b = tmp_b[i];
@@ -431,14 +435,18 @@ void tmul_64xN_Nx64(packed_matrix_t *matrix,
 	task.run = inner_thread_run;
 	task.shutdown = NULL;
 
-	for (i = 0; i < matrix->num_threads; i++) {
+	for (i = 0; i < matrix->num_threads - 1; i++) {
 		matrix->tasks[i].matrix = matrix;
 		matrix->tasks[i].task_num = i;
 		task.data = matrix->tasks + i;
 		threadpool_add_task(matrix->threadpool, &task, 0);
 	}
+	matrix->tasks[i].matrix = matrix;
+	matrix->tasks[i].task_num = i;
+	inner_thread_run(matrix->tasks + i, i);
 
-	threadpool_drain(matrix->threadpool, 1);
+	if (i > 0)
+		threadpool_drain(matrix->threadpool, 1);
 
 	/* All the scratch vectors used by threads get 
 	   xor-ed into the final c vector */

@@ -133,16 +133,18 @@ static void mul_packed(packed_matrix_t *matrix,
 	task.run = mul_packed_core;
 	task.shutdown = NULL;
 
-	for (i = 0; i < matrix->num_threads; i++) {
+	for (i = 0; i < matrix->num_threads - 1; i++) {
 		matrix->tasks[i].matrix = matrix;
 		matrix->tasks[i].task_num = i;
 		task.data = matrix->tasks + i;
 		threadpool_add_task(matrix->threadpool, &task, 0);
 	}
+	matrix->tasks[i].matrix = matrix;
+	matrix->tasks[i].task_num = i;
+	mul_packed_core(matrix->tasks + i, i);
 
-	threadpool_drain(matrix->threadpool, 1);
+	if (i > 0) {
 
-	if (i > 1) {
 		/* xor the results; split the vector into pieces
 		   and have each thread handle one piece across
 		   all the copies of b */
@@ -150,14 +152,17 @@ static void mul_packed(packed_matrix_t *matrix,
 		uint32 vsize = matrix->vsize;
 		uint32 off;
 
+		threadpool_drain(matrix->threadpool, 1);
+
 		for (i = off = 0; i < matrix->num_threads; i++, off += vsize)
 			matrix->thread_data[i].vsize = off;
 
 		task.run = b_accum_core;
-		for (i = 0; i < matrix->num_threads; i++) {
+		for (i = 0; i < matrix->num_threads - 1; i++) {
 			task.data = matrix->tasks + i;
 			threadpool_add_task(matrix->threadpool, &task, 0);
 		}
+		b_accum_core(matrix->tasks + i, i);
 
 		threadpool_drain(matrix->threadpool, 1);
 	}
@@ -195,14 +200,18 @@ static void mul_trans_packed(packed_matrix_t *matrix,
 	task.run = mul_trans_packed_core;
 	task.shutdown = NULL;
 
-	for (i = 0; i < matrix->num_threads; i++) {
+	for (i = 0; i < matrix->num_threads - 1; i++) {
 		matrix->tasks[i].matrix = matrix;
 		matrix->tasks[i].task_num = i;
 		task.data = matrix->tasks + i;
 		threadpool_add_task(matrix->threadpool, &task, 0);
 	}
+	matrix->tasks[i].matrix = matrix;
+	matrix->tasks[i].task_num = i;
+	mul_trans_packed_core(matrix->tasks + i, i);
 
-	threadpool_drain(matrix->threadpool, 1);
+	if (i > 0)
+		threadpool_drain(matrix->threadpool, 1);
 
 	/* restore the scratch data for each thread */
 
@@ -669,8 +678,10 @@ void packed_matrix_init(msieve_obj *obj,
 	control.shutdown = matrix_thread_free;
 	control.data = p;
 
-	p->threadpool = threadpool_init(p->num_threads,
-				p->num_threads, &control);
+	if (k > 1) {
+		p->threadpool = threadpool_init(k - 1, k - 1, &control);
+	}
+	matrix_thread_init(p, k - 1);
 }
 
 /*-------------------------------------------------------------------*/
@@ -689,7 +700,10 @@ void packed_matrix_free(packed_matrix_t *p) {
 		/* stop the worker threads; each will free
 		   its own memory */
 
-		threadpool_free(p->threadpool);
+		if (p->num_threads > 1)
+			threadpool_free(p->threadpool);
+
+		matrix_thread_free(p, p->num_threads - 1);
 	}
 }
 
