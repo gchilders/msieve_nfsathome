@@ -352,6 +352,9 @@ void mul_trans_packed_core(void *data, int thread_num)
 	uint64 *b = t->b;
 	uint32 i;
 
+	memset(b + t->col_min, 0, sizeof(uint64) *
+			(t->col_max - t->col_min + 1));
+
 	/* you would think that doing the matrix multiply
 	   in column-major order would be faster, since this would
 	   also minimize dirty cache writes. Except that it's slower;

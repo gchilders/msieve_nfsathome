@@ -341,6 +341,8 @@ void mul_packed_core(void *data, int thread_num)
 	uint64 *b = t->b;
 	uint32 i;
 
+	memset(b, 0, p->nrows * sizeof(uint64));
+
 	/* proceed block by block. We assume that blocks access
 	   the matrix in row-major order; when computing b = A*x
 	   this will write to the same block of b repeatedly, and

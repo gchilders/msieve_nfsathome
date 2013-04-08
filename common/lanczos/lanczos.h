@@ -128,7 +128,7 @@ typedef struct {
 
 /* struct representing a packed matrix */
 
-typedef struct {
+typedef struct packed_matrix_t {
 	uint32 nrows;
 	uint32 max_nrows;
 	uint32 start_row;

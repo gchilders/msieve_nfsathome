@@ -89,6 +89,26 @@ static void mul_trans_unpacked(packed_matrix_t *matrix,
 }
 
 /*-------------------------------------------------------------------*/
+static void b_accum_core(void *data, int thread_num)
+{
+	la_task_t *task = (la_task_t *)data;
+	packed_matrix_t *p = task->matrix;
+	uint32 task_num = task->task_num;
+	uint32 off = p->thread_data[task_num].vsize;
+	uint64 *b = p->thread_data[0].b;
+	uint32 count = p->vsize;
+	uint32 i;
+
+	if (task_num == p->num_threads - 1)
+		count = p->nrows - off;
+
+	for (i = 1; i < p->num_threads; i++) {
+		thread_data_t *t = p->thread_data + i;
+
+		accum_xor(b + off, t->b + off, count);
+	}
+}
+
 static void mul_packed(packed_matrix_t *matrix, 
 			uint64 *x, uint64 *b) 
 {
@@ -105,7 +125,6 @@ static void mul_packed(packed_matrix_t *matrix,
 		t->x = x;
 		if (i == 0)
 			t->b = b;
-		memset(t->b, 0, matrix->nrows * sizeof(uint64));
 	}
 
 	/* fire off the tasks and wait for them to finish */
@@ -123,10 +142,25 @@ static void mul_packed(packed_matrix_t *matrix,
 
 	threadpool_drain(matrix->threadpool, 1);
 
-	/* accumulate the results */
+	if (i > 1) {
+		/* xor the results; split the vector into pieces
+		   and have each thread handle one piece across
+		   all the copies of b */
 
-	for (i = 1; i < matrix->num_threads; i++)
-		accum_xor(b, matrix->thread_data[i].b, matrix->nrows);
+		uint32 vsize = matrix->vsize;
+		uint32 off;
+
+		for (i = off = 0; i < matrix->num_threads; i++, off += vsize)
+			matrix->thread_data[i].vsize = off;
+
+		task.run = b_accum_core;
+		for (i = 0; i < matrix->num_threads; i++) {
+			task.data = matrix->tasks + i;
+			threadpool_add_task(matrix->threadpool, &task, 0);
+		}
+
+		threadpool_drain(matrix->threadpool, 1);
+	}
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX)
 	ASM_G volatile ("emms");
@@ -142,8 +176,6 @@ static void mul_trans_packed(packed_matrix_t *matrix,
 	uint32 i;
 	uint64 *tmp_b[MAX_THREADS];
 	task_control_t task;
-
-	memset(b, 0, matrix->ncols * sizeof(uint64));
 
 	for (i = 0; i < matrix->num_threads; i++) {
 		thread_data_t *t = matrix->thread_data + i;
