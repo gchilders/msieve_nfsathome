@@ -208,13 +208,9 @@ void tmul_Nx64_64x64_acc(packed_matrix_t *matrix,
 	task.shutdown = NULL;
 
 	for (i = 0; i < matrix->num_threads - 1; i++) {
-		matrix->tasks[i].matrix = matrix;
-		matrix->tasks[i].task_num = i;
 		task.data = matrix->tasks + i;
 		threadpool_add_task(matrix->threadpool, &task, 0);
 	}
-	matrix->tasks[i].matrix = matrix;
-	matrix->tasks[i].task_num = i;
 	outer_thread_run(matrix->tasks + i, i);
 
 	if (i > 0)
@@ -436,13 +432,9 @@ void tmul_64xN_Nx64(packed_matrix_t *matrix,
 	task.shutdown = NULL;
 
 	for (i = 0; i < matrix->num_threads - 1; i++) {
-		matrix->tasks[i].matrix = matrix;
-		matrix->tasks[i].task_num = i;
 		task.data = matrix->tasks + i;
 		threadpool_add_task(matrix->threadpool, &task, 0);
 	}
-	matrix->tasks[i].matrix = matrix;
-	matrix->tasks[i].task_num = i;
 	inner_thread_run(matrix->tasks + i, i);
 
 	if (i > 0)

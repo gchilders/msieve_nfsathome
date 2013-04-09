@@ -134,13 +134,9 @@ static void mul_packed(packed_matrix_t *matrix,
 	task.shutdown = NULL;
 
 	for (i = 0; i < matrix->num_threads - 1; i++) {
-		matrix->tasks[i].matrix = matrix;
-		matrix->tasks[i].task_num = i;
 		task.data = matrix->tasks + i;
 		threadpool_add_task(matrix->threadpool, &task, 0);
 	}
-	matrix->tasks[i].matrix = matrix;
-	matrix->tasks[i].task_num = i;
 	mul_packed_core(matrix->tasks + i, i);
 
 	if (i > 0) {
@@ -201,13 +197,9 @@ static void mul_trans_packed(packed_matrix_t *matrix,
 	task.shutdown = NULL;
 
 	for (i = 0; i < matrix->num_threads - 1; i++) {
-		matrix->tasks[i].matrix = matrix;
-		matrix->tasks[i].task_num = i;
 		task.data = matrix->tasks + i;
 		threadpool_add_task(matrix->threadpool, &task, 0);
 	}
-	matrix->tasks[i].matrix = matrix;
-	matrix->tasks[i].task_num = i;
 	mul_trans_packed_core(matrix->tasks + i, i);
 
 	if (i > 0)
@@ -682,6 +674,11 @@ void packed_matrix_init(msieve_obj *obj,
 		p->threadpool = threadpool_init(k - 1, k - 1, &control);
 	}
 	matrix_thread_init(p, k - 1);
+
+	for (i = 0; i < k; i++) {
+		p->tasks[i].matrix = p;
+		p->tasks[i].task_num = i;
+	}
 }
 
 /*-------------------------------------------------------------------*/
