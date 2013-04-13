@@ -27,18 +27,6 @@ static void mul_one_med_block(packed_block_t *curr_block,
 	while (1) {
 		uint64 accum;
 
-#ifdef LARGEBLOCKS
-#if defined(GCC_ASM64X)
-		uint64 i = 0;
-		uint64 row = (entries[0]<<16) | entries[1];
-		uint64 count = entries[2];
-#else
-		uint32 i = 0;
-		uint32 row = (entries[0]<<16) | entries[1];
-		uint32 count = entries[2];
-#endif
-		entries++;	/* we've used an extra word */
-#else
 #if defined(GCC_ASM64X)
 		uint64 i = 0;
 		uint64 row = entries[0];
@@ -47,7 +35,6 @@ static void mul_one_med_block(packed_block_t *curr_block,
 		uint32 i = 0;
 		uint32 row = entries[0];
 		uint32 count = entries[1];
-#endif
 #endif
 
 		if (count == 0)
@@ -218,12 +205,7 @@ static void mul_one_block(packed_block_t *curr_block,
 
 	uint32 i = 0; 
 	uint32 num_entries = curr_block->num_entries;
-#ifdef LARGEBLOCKS
-        uint32 *row_off = curr_block->row_off;
-        uint16 *col_off = curr_block->col_off;
-#else
 	entry_idx_t *entries = curr_block->entries;
-#endif
 
 	/* unroll by 16, i.e. the number of matrix elements
 	   in one cache line (usually). For 32-bit x86, we get
@@ -301,13 +283,8 @@ static void mul_one_block(packed_block_t *curr_block,
 	}
 
 #else
-#ifdef LARGEBLOCKS
-	#define _txor(x) curr_b[row_off[i+x]] ^= \
-				 curr_col[col_off[i+x]]	
-#else
 	#define _txor(x) curr_b[entries[i+x].row_off] ^= \
 				 curr_col[entries[i+x].col_off]
-#endif
 
 	for (i = 0; i < (num_entries & (uint32)(~15)); i += 16) {
 		#ifdef MANUAL_PREFETCH
@@ -323,11 +300,7 @@ static void mul_one_block(packed_block_t *curr_block,
 	#undef _txor
 
 	for (; i < num_entries; i++) {
-#ifdef LARGEBLOCKS
-		curr_b[row_off[i]] ^= curr_col[col_off[i]];
-#else
 		curr_b[entries[i].row_off] ^= curr_col[entries[i].col_off];
-#endif
 	}
 }
 

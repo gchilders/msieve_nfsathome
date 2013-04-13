@@ -231,12 +231,6 @@ static int compare_row_off(const void *x, const void *y) {
 }
 
 /*--------------------------------------------------------------------*/
-static int compare_uint16(const void *x, const void *y) {
-        uint16 *xx = (uint16 *)x;
-        uint16 *yy = (uint16 *)y;
-        return (int)*xx - (int)*yy;
-}
-
 static void matrix_thread_init(void *data, int thread_num) {
 
 	packed_matrix_t *p = (packed_matrix_t *)data;
@@ -247,11 +241,7 @@ static void matrix_thread_init(void *data, int thread_num) {
 	uint32 num_col_blocks;
 	uint32 dense_row_blocks;
 	packed_block_t *curr_stripe;
-#ifdef LARGEBLOCKS
-	uint32 *n_in_a_row;
-#else
 	entry_idx_t *e;
-#endif
 
 	la_col_t *A = t->initial_cols;
 	uint32 col_min = t->col_min;
@@ -301,8 +291,6 @@ static void matrix_thread_init(void *data, int thread_num) {
 	   row indices, the first block has NUM_MEDIUM_ROWS rows
 	   instead of block_size */
 
-	/* with LARGEBLOCKS: blocks are rectangular, up to 2^32 rows, but <2^16 block_col_size */
-
 	num_col_blocks = (ncols + (block_col_size-1)) / block_col_size;
 	num_row_blocks = (nrows - first_block_size +
 				(block_size-1)) / block_size + 1;
@@ -311,10 +299,6 @@ static void matrix_thread_init(void *data, int thread_num) {
 	t->blocks = curr_stripe = (packed_block_t *)xcalloc(
 						(size_t)t->num_blocks,
 						sizeof(packed_block_t));
-
-#ifdef LARGEBLOCKS
-	n_in_a_row = (uint32 *)xmalloc(block_size*sizeof(uint32));
-#endif
 
 	/* we convert the sparse part of the matrix to packed
 	   format one stripe at a time. This limits the worst-
@@ -372,18 +356,9 @@ static void matrix_thread_init(void *data, int thread_num) {
 		   slowdown */
 
 		for (j = 0, b = curr_stripe; j < num_row_blocks; j++) {
-#ifdef LARGEBLOCKS
-			b->row_off = (uint32 *)xmalloc(
-						b->num_entries_alloc *
-						sizeof(uint32));
-			b->col_off = (uint16 *)xmalloc(
-						b->num_entries_alloc *
-						sizeof(uint16));
-#else
 			b->entries = (entry_idx_t *)xmalloc(
 						b->num_entries_alloc *
 						sizeof(entry_idx_t));
-#endif
 			b += num_col_blocks;
 		}
 
@@ -396,14 +371,9 @@ static void matrix_thread_init(void *data, int thread_num) {
 				while (index >= b->start_row + b->num_rows)
 					b += num_col_blocks;
 
-#ifdef LARGEBLOCKS
-				b->row_off[b->num_entries] = index - b->start_row;
-				b->col_off[b->num_entries++] = j;
-#else
 				e = b->entries + b->num_entries++;
 				e->row_off = index - b->start_row;
 				e->col_off = j;
-#endif
 			}
 
 			free(c->data);
@@ -415,56 +385,6 @@ static void matrix_thread_init(void *data, int thread_num) {
 		   first block are stored by row, and all rows
 		   are concatenated into a single 16-bit array */
 
-#ifdef LARGEBLOCKS
-		/* SB: instead of qsort, we will count all entries for each row; 
-		   then rolling-sum the offsets,
-		   then put them in place, and finally qsort each chunk */
-
-		b = curr_stripe;
-		memset(n_in_a_row, 0, block_size*sizeof(uint32));
-
-		for (j = 0; j < b->num_entries; j++)
-			n_in_a_row[b->row_off[j]]++;
-                for (j = k = 0; j < block_size; j++)
-                        if(n_in_a_row[j]) k++;
-
-		/* we need a 16-bit word for each element and two more
-		   16-bit words at the start of each of the k packed
-		   arrays making up med_entries. The first extra word
-		   gives the row number and the second gives the number
-		   of entries in that row. We also need a few extra words 
-		   at the array end because the multiply code uses a 
-		   software pipeline and would fetch off the end of 
-		   med_entries otherwise */
-
-		/* SB: +1 more 16-bit word for high address of row_off */
-
-		b->med_entries = (uint16 *)xmalloc((b->num_entries + 
-					3 * k + 12) * sizeof(uint16));
-		for (j = k = 0; j < block_size; j++) if((m=n_in_a_row[j])) {
-			b->med_entries[k++] = j >> 16;
-			b->med_entries[k++] = j & 0xFFFF; /* row_off in two */
-			b->med_entries[k++] = m;
-			n_in_a_row[j] = k; /* now reused and keeps offsets for writing */
-			k += m;
-		}
-		b->med_entries[k] = b->med_entries[k+1] = b->med_entries[k+2] = 0;
-
-		/* put all elements in their places, using the prepared offsets */
-		for (j = 0; j < b->num_entries; j++) {
-                        b->med_entries[n_in_a_row[b->row_off[j]]++] = b->col_off[j];
-		}
-
-		free(b->row_off);
-		b->row_off = NULL;
-		free(b->col_off);
-		b->col_off = NULL;
-
-		/* ok, let's also qsort each chunk; it helps the cache */
-		for (k = 3; (m = b->med_entries[k-1]); k += m+3) {
-			qsort(b->med_entries+k, m, sizeof(uint16), compare_uint16);
-		}
-#else
 		b = curr_stripe;
 		e = b->entries;
 		qsort(e, (size_t)b->num_entries, 
@@ -501,11 +421,7 @@ static void matrix_thread_init(void *data, int thread_num) {
 		b->med_entries[k] = b->med_entries[k+1] = 0;
 		free(b->entries);
 		b->entries = NULL;
-#endif
 	}
-#ifdef LARGEBLOCKS
-	free(n_in_a_row);
-#endif
 }
 
 /*-------------------------------------------------------------------*/
@@ -520,12 +436,7 @@ static void matrix_thread_free(void *data, int thread_num) {
 	free(t->dense_blocks);
 
 	for (i = 0; i < t->num_blocks; i++) {
-#ifdef LARGEBLOCKS
-		free(t->blocks[i].row_off);
-		free(t->blocks[i].col_off);
-#else
 		free(t->blocks[i].entries);
-#endif
 		free(t->blocks[i].med_entries);
 	}
 	free(t->blocks);
@@ -590,11 +501,7 @@ void packed_matrix_init(msieve_obj *obj,
 
 	block_size = obj->cache_size2 / (3 * sizeof(uint64));
 	block_size = MIN(block_size, max_nrows / 2.5);
-#ifdef LARGEBLOCKS
-	block_size = MIN(block_size, 0x40000);	/* this may vary by CPU types */
-#else
 	block_size = MIN(block_size, 65536);
-#endif
 	if (block_size == 0)
 		block_size = 32768;
 
@@ -740,15 +647,9 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 
 			for (j = 0; j < t->num_blocks; j++) {
 				packed_block_t *b = t->blocks + j;
-#ifdef LARGEBLOCKS
-				if (b->row_off) {
-					mem_use += b->num_entries *
-							3 * sizeof(uint16);
-#else
 				if (b->entries) {
 					mem_use += b->num_entries *
 							sizeof(entry_idx_t);
-#endif
 				}
 				else {
 					mem_use += (b->num_entries + 

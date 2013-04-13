@@ -56,11 +56,7 @@ extern "C" {
    The two fields are the row and column offsets
    from the top left corner of the block */
 
-#ifdef LARGEBLOCKS
-typedef uint32 med_off_t;
-#else
 typedef uint16 med_off_t;
-#endif
 
 typedef struct {
 	med_off_t row_off;
@@ -75,12 +71,7 @@ typedef struct {
 	uint32 num_rows;
 	uint32 num_entries;       /* number of nonzero matrix entries */
 	uint32 num_entries_alloc; /* nonzero matrix entries allocated */
-#ifdef LARGEBLOCKS
-	uint32 *row_off;
-	uint16 *col_off;
-#else
 	entry_idx_t *entries;     /* nonzero entries */
-#endif
 	uint16 *med_entries;	  /* nonzero entries for medium dense rows */
 } packed_block_t;
 
