@@ -22,7 +22,7 @@ $Id$
 static void mul_one_med_block(packed_block_t *curr_block,
 			uint64 *curr_col, uint64 *curr_b) {
 
-	uint16 *entries = curr_block->med_entries;
+	uint16 *entries = curr_block->d.med_entries;
 
 	while (1) {
 		uint64 accum;
@@ -205,7 +205,7 @@ static void mul_one_block(packed_block_t *curr_block,
 
 	uint32 i = 0; 
 	uint32 num_entries = curr_block->num_entries;
-	entry_idx_t *entries = curr_block->entries;
+	entry_idx_t *entries = curr_block->d.entries;
 
 	/* unroll by 16, i.e. the number of matrix elements
 	   in one cache line (usually). For 32-bit x86, we get
@@ -307,38 +307,63 @@ static void mul_one_block(packed_block_t *curr_block,
 /*-------------------------------------------------------------------*/
 void mul_packed_core(void *data, int thread_num)
 {
+	/* we skip the first matrix row, since it is handled 
+	   in the dense function below */
+
+	uint32 i;
+	la_task_t *task = (la_task_t *)data;
+	packed_matrix_t *p = task->matrix;
+	uint32 b_off = p->first_block_size +
+			p->block_size * (task->task_num - 1);
+	uint64 *x = p->x;
+	uint64 *b = p->b + b_off;
+	packed_block_t *curr_block = p->blocks +
+			p->num_block_cols * task->task_num;
+
+	memset(b, 0, MIN(p->block_size, p->nrows - b_off) * sizeof(uint64));
+
+	for (i = 0; i < p->num_block_cols; i++) {
+		mul_one_block(curr_block, x, b);
+		curr_block++;
+		x += p->block_size;
+	}
+}
+/*-------------------------------------------------------------------*/
+void mul_packed_small_core(void *data, int thread_num)
+{
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
 	thread_data_t *t = p->thread_data + task->task_num;
-	uint64 *x = t->x;
-	uint64 *b = t->b;
+
+	uint32 last_task = (task->task_num == p->num_threads - 1);
+	uint32 num_blocks = p->num_block_cols / p->num_threads;
+	uint32 block_off = num_blocks * task->task_num;
+	uint32 off = p->block_size * block_off;
+	uint32 vsize = num_blocks * p->block_size;
+	uint64 *x = p->x + off;
+	uint64 *b = t->tmp_b;
+	packed_block_t *curr_block = p->blocks + block_off;
 	uint32 i;
 
-	memset(b, 0, p->nrows * sizeof(uint64));
+	memset(b, 0, p->first_block_size * sizeof(uint64));
 
-	/* proceed block by block. We assume that blocks access
-	   the matrix in row-major order; when computing b = A*x
-	   this will write to the same block of b repeatedly, and
-	   will read from all of x. This reduces the number of
-	   dirty cache writebacks, improving performance slightly */
+	if (p->num_threads == 1) {
+		vsize = p->ncols;
+	}
+	else if (last_task) {
+		num_blocks = p->num_block_cols - block_off;
+		vsize = p->ncols - off;
+	}
 
-	for (i = 0; i < t->num_blocks; i++) {
-		packed_block_t *curr_block = t->blocks + i;
-		if (curr_block->med_entries)
-			mul_one_med_block(curr_block, 
-					x + curr_block->start_col,
-					b + curr_block->start_row);
-		else
-			mul_one_block(curr_block, 
-					x + curr_block->start_col,
-					b + curr_block->start_row);
+	for (i = 0; i < num_blocks; i++) {
+		mul_one_med_block(curr_block, x, b);
+		curr_block++;
+		x += p->block_size;
 	}
 
 	/* multiply the densest few rows by x (in batches of 64 rows) */
 
-	for (i = 0; i < (t->num_dense_rows + 63) / 64; i++) {
-		mul_64xN_Nx64(t->dense_blocks[i], 
-				x + t->blocks[0].start_col, 
-				b + 64 * i, t->ncols);
-	}
+	for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)
+		mul_64xN_Nx64(p->dense_blocks[i] + off, 
+				p->x + off, b + 64 * i, vsize);
 }

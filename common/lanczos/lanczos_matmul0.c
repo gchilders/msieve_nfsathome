@@ -16,8 +16,8 @@ $Id$
 
 /*-------------------------------------------------------------------*/
 static void mul_unpacked(packed_matrix_t *matrix,
-			  uint64 *x, uint64 *b) {
-
+			  uint64 *x, uint64 *b) 
+{
 	uint32 ncols = matrix->ncols;
 	uint32 num_dense_rows = matrix->num_dense_rows;
 	la_col_t *A = matrix->unpacked_cols;
@@ -53,8 +53,8 @@ static void mul_unpacked(packed_matrix_t *matrix,
 
 /*-------------------------------------------------------------------*/
 static void mul_trans_unpacked(packed_matrix_t *matrix,
-				uint64 *x, uint64 *b) {
-
+				uint64 *x, uint64 *b) 
+{
 	uint32 ncols = matrix->ncols;
 	uint32 num_dense_rows = matrix->num_dense_rows;
 	la_col_t *A = matrix->unpacked_cols;
@@ -89,78 +89,49 @@ static void mul_trans_unpacked(packed_matrix_t *matrix,
 }
 
 /*-------------------------------------------------------------------*/
-static void b_accum_core(void *data, int thread_num)
-{
-	la_task_t *task = (la_task_t *)data;
-	packed_matrix_t *p = task->matrix;
-	uint32 task_num = task->task_num;
-	uint32 off = p->thread_data[task_num].vsize;
-	uint64 *b = p->thread_data[0].b;
-	uint32 count = p->vsize;
-	uint32 i;
-
-	if (task_num == p->num_threads - 1)
-		count = p->nrows - off;
-
-	for (i = 1; i < p->num_threads; i++) {
-		thread_data_t *t = p->thread_data + i;
-
-		accum_xor(b + off, t->b + off, count);
-	}
-}
-
 static void mul_packed(packed_matrix_t *matrix, 
 			uint64 *x, uint64 *b) 
 {
 	uint32 i;
 	task_control_t task;
 
-	for (i = 0; i < matrix->num_threads; i++) {
-		thread_data_t *t = matrix->thread_data + i;
+	matrix->x = x;
+	matrix->b = b;
 
-		/* use each thread's scratch vector, except the
-		   first thread, which has no scratch vector but
-		   uses b instead. */
-
-		t->x = x;
-		if (i == 0)
-			t->b = b;
-	}
-
-	/* fire off the tasks and wait for them to finish */
+	/* start accumulating the dense matrix multiply results;
+	   each thread has scratch space for these, so we don't have
+	   to wait for the tasks to finish */
 
 	task.init = NULL;
-	task.run = mul_packed_core;
+	task.run = mul_packed_small_core;
 	task.shutdown = NULL;
 
-	for (i = 0; i < matrix->num_threads - 1; i++) {
+	for (i = 0; i < matrix->num_threads; i++) {
 		task.data = matrix->tasks + i;
-		threadpool_add_task(matrix->threadpool, &task, 0);
+		threadpool_add_task(matrix->threadpool, &task, 1);
 	}
-	mul_packed_core(matrix->tasks + i, i);
 
-	if (i > 0) {
+	/* switch to the sparse blocks; each task takes a
+	   whole block row of the matrix */
 
-		/* xor the results; split the vector into pieces
-		   and have each thread handle one piece across
-		   all the copies of b */
+	task.run = mul_packed_core;
 
-		uint32 vsize = matrix->vsize;
-		uint32 off;
+	for (i = 1; i < matrix->num_block_rows; i++) {
+		task.data = matrix->tasks + i + matrix->num_threads;
+		threadpool_add_task(matrix->threadpool, &task, 1);
+	}
 
-		threadpool_drain(matrix->threadpool, 1);
+	threadpool_drain(matrix->threadpool, 1);
 
-		for (i = off = 0; i < matrix->num_threads; i++, off += vsize)
-			matrix->thread_data[i].vsize = off;
+	/* xor the small vectors from each thread */
 
-		task.run = b_accum_core;
-		for (i = 0; i < matrix->num_threads - 1; i++) {
-			task.data = matrix->tasks + i;
-			threadpool_add_task(matrix->threadpool, &task, 0);
-		}
-		b_accum_core(matrix->tasks + i, i);
+	memcpy(b, matrix->thread_data[0].tmp_b, 
+			matrix->first_block_size *
+			sizeof(uint64));
 
-		threadpool_drain(matrix->threadpool, 1);
+	for (i = 1; i < matrix->num_threads; i++) {
+		accum_xor(b, matrix->thread_data[i].tmp_b, 
+				matrix->first_block_size);
 	}
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX)
@@ -175,40 +146,39 @@ static void mul_trans_packed(packed_matrix_t *matrix,
 			uint64 *x, uint64 *b) 
 {
 	uint32 i;
-	uint64 *tmp_b[MAX_THREADS];
 	task_control_t task;
 
-	for (i = 0; i < matrix->num_threads; i++) {
-		thread_data_t *t = matrix->thread_data + i;
+	matrix->x = x;
+	matrix->b = b;
 
-		/* separate threads fill up disjoint portions
-		   of a single b vector, and do not need per-thread 
-		   scratch space */
-
-		tmp_b[i] = t->b;
-		t->x = x;
-		t->b = b;
-	}
-
-	/* fire off the tasks and wait for them to finish */
+	/* start accumulating sparse multiply blocks; each task 
+	   takes a whole block column of the matrix */
 
 	task.init = NULL;
 	task.run = mul_trans_packed_core;
 	task.shutdown = NULL;
 
-	for (i = 0; i < matrix->num_threads - 1; i++) {
-		task.data = matrix->tasks + i;
-		threadpool_add_task(matrix->threadpool, &task, 0);
+	for (i = 0; i < matrix->num_block_cols; i++) {
+		task.data = matrix->tasks + i + matrix->num_threads;
+		threadpool_add_task(matrix->threadpool, &task, 1);
 	}
-	mul_trans_packed_core(matrix->tasks + i, i);
 
-	if (i > 0)
+	threadpool_drain(matrix->threadpool, 1);
+
+	if (matrix->num_dense_rows) {
+		/* add in the dense matrix multiply blocks; these don't 
+		   use scratch space, but need all of b to accumulate 
+		   results so we have to wait until all tasks finish */
+
+		task.run = mul_trans_packed_small_core;
+
+		for (i = 0; i < matrix->num_threads; i++) {
+			task.data = matrix->tasks + i;
+			threadpool_add_task(matrix->threadpool, &task, 1);
+		}
+
 		threadpool_drain(matrix->threadpool, 1);
-
-	/* restore the scratch data for each thread */
-
-	for (i = 0; i < matrix->num_threads; i++)
-		matrix->thread_data[i].b = tmp_b[i];
+	}
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX)
 	ASM_G volatile ("emms");
@@ -231,55 +201,83 @@ static int compare_row_off(const void *x, const void *y) {
 }
 
 /*--------------------------------------------------------------------*/
-static void matrix_thread_init(void *data, int thread_num) {
-
-	packed_matrix_t *p = (packed_matrix_t *)data;
-	thread_data_t *t = p->thread_data + thread_num;
-
-	uint32 i, j, k, m;
-	uint32 num_row_blocks;
-	uint32 num_col_blocks;
-	uint32 dense_row_blocks;
-	packed_block_t *curr_stripe;
+static void pack_med_block(packed_block_t *b)
+{
+	uint32 j, k, m;
+	uint16 *med_entries;
 	entry_idx_t *e;
 
-	la_col_t *A = t->initial_cols;
-	uint32 col_min = t->col_min;
-	uint32 col_max = t->col_max;
-	uint32 nrows = t->nrows_in;
-	uint32 ncols = col_max - col_min + 1;
-	uint32 block_size = t->block_size;
-	uint32 block_col_size = MIN(block_size, 0xFFFF);
-	uint32 num_dense_rows = t->num_dense_rows;
-	uint32 first_block_size = t->first_block_size;
+	/* convert the first block in the stripe to a somewhat-
+	   compressed format. Entries in this first block are stored 
+	   by row, and all rows are concatenated into a single 
+	   16-bit array */
 
-	t->nrows = nrows;
-	t->ncols = ncols;
+	e = b->d.entries;
+	qsort(e, (size_t)b->num_entries, 
+			sizeof(entry_idx_t), compare_row_off);
+	for (j = k = 1; j < b->num_entries; j++) {
+		if (e[j].row_off != e[j-1].row_off)
+			k++;
+	}
 
-	/* each thread needs scratch space to store
-	   matrix products. The first thread doesn't need
-	   scratch space, it's provided by calling code */
+	/* we need a 16-bit word for each element and two more
+	   16-bit words at the start of each of the k packed
+	   arrays making up med_entries. The first extra word
+	   gives the row number and the second gives the number
+	   of entries in that row. We also need a few extra words 
+	   at the array end because the multiply code uses a 
+	   software pipeline and would fetch off the end of 
+	   med_entries otherwise */
 
-	if (t->my_oid > 0)
-		t->b = (uint64 *)xmalloc(MAX(nrows, ncols) * 
-					sizeof(uint64));
+	med_entries = (uint16 *)xmalloc((b->num_entries + 
+					2 * k + 8) * sizeof(uint16));
+	j = k = 0;
+	while (j < b->num_entries) {
+		for (m = 0; j + m < b->num_entries; m++) {
+			if (m > 0 && e[j+m].row_off != e[j+m-1].row_off)
+				break;
+			med_entries[k+m+2] = e[j+m].col_off;
+		}
+		med_entries[k] = e[j].row_off;
+		med_entries[k+1] = m;
+		j += m;
+		k += m + 2;
+	}
+	med_entries[k] = med_entries[k+1] = 0;
+	free(b->d.entries);
+	b->d.med_entries = med_entries;
+}
+
+/*--------------------------------------------------------------------*/
+static void pack_matrix_core(packed_matrix_t *p, la_col_t *A)
+{
+	uint32 i, j, k;
+	uint32 dense_row_blocks;
+	packed_block_t *curr_stripe;
+
+	uint32 ncols = p->ncols;
+	uint32 block_size = p->block_size;
+	uint32 num_block_rows = p->num_block_rows;
+	uint32 num_block_cols = p->num_block_cols;
+	uint32 num_dense_rows = p->num_dense_rows;
+	uint32 first_block_size = p->first_block_size;
 
 	/* pack the dense rows 64 at a time */
 
 	dense_row_blocks = (num_dense_rows + 63) / 64;
 	if (dense_row_blocks) {
-		t->dense_blocks = (uint64 **)xmalloc(dense_row_blocks *
+		p->dense_blocks = (uint64 **)xmalloc(dense_row_blocks *
 						sizeof(uint64 *));
 		for (i = 0; i < dense_row_blocks; i++) {
-			t->dense_blocks[i] = (uint64 *)xmalloc(ncols *
+			p->dense_blocks[i] = (uint64 *)xmalloc(ncols *
 							sizeof(uint64));
 		}
 
 		for (i = 0; i < ncols; i++) {
-			la_col_t *c = A + col_min + i;
+			la_col_t *c = A + i;
 			uint32 *src = c->data + c->weight;
 			for (j = 0; j < dense_row_blocks; j++) {
-				t->dense_blocks[j][i] = 
+				p->dense_blocks[j][i] = 
 						(uint64)src[2 * j + 1] << 32 |
 						(uint64)src[2 * j];
 			}
@@ -287,92 +285,73 @@ static void matrix_thread_init(void *data, int thread_num) {
 	}
 
 	/* allocate blocks in row-major order; a 'stripe' is
-	   a vertical column of blocks. If packing the lowest
-	   row indices, the first block has NUM_MEDIUM_ROWS rows
-	   instead of block_size */
+	   a vertical column of blocks. The first block in each
+	   column has first_block_size rows instead of block_size */
 
-	num_col_blocks = (ncols + (block_col_size-1)) / block_col_size;
-	num_row_blocks = (nrows - first_block_size +
-				(block_size-1)) / block_size + 1;
-
-	t->num_blocks = num_row_blocks * num_col_blocks;
-	t->blocks = curr_stripe = (packed_block_t *)xcalloc(
-						(size_t)t->num_blocks,
+	p->blocks = curr_stripe = (packed_block_t *)xcalloc(
+						(size_t)num_block_rows *
+						        num_block_cols,
 						sizeof(packed_block_t));
 
 	/* we convert the sparse part of the matrix to packed
 	   format one stripe at a time. This limits the worst-
 	   case memory use of the packing process */
 
-	for (i = 0; i < num_col_blocks; i++, curr_stripe++) {
+	for (i = 0; i < num_block_cols; i++, curr_stripe++) {
 
-		uint32 curr_cols = MIN(block_col_size, ncols - i * block_col_size);
+		uint32 curr_cols = MIN(block_size, ncols - i * block_size);
 		packed_block_t *b;
-
-		/* initialize the blocks in stripe i */
-
-		for (j = 0, b = curr_stripe; j < num_row_blocks; j++) {
-
-			if (j == 0) {
-				b->start_row = 0;
-				b->num_rows = first_block_size;
-			}
-			else {
-				b->start_row = first_block_size +
-						(j - 1) * block_size;
-				b->num_rows = block_size;
-			}
-
-			b->start_col = col_min + i * block_col_size;
-			b += num_col_blocks;
-		}
 
 		/* count the number of nonzero entries in each block */
 
 		for (j = 0; j < curr_cols; j++) {
-			la_col_t *c = A + col_min + i * block_col_size + j;
+			la_col_t *c = A + i * block_size + j;
+			uint32 limit = first_block_size;
 
 			for (k = 0, b = curr_stripe; k < c->weight; k++) {
 				uint32 index = c->data[k];
 
-				while (index >= b->start_row + b->num_rows)
-					b += num_col_blocks;
-				b->num_entries_alloc++;
+				while (index >= limit) {
+					b += num_block_cols;
+					limit += block_size;
+				}
+				b->num_entries++;
 			}
 		}
 
 		/* concatenate the nonzero elements of the matrix
-		   columns corresponding to this stripe. Note that
-		   the ordering of elements within a single block
-		   is arbitrary, and it's possible that some non-
-		   default ordering can enhance performance. However,
-		   I've tried a few different ideas and they're much
-		   slower than just storing the nonzeros in the order
-		   in which they occur in the unpacked matrix 
+		   columns corresponding to this stripe.
 		   
 		   We technically can combine the previous pass through
 		   the columns with this pass, but on some versions of
 		   libc the number of reallocations causes an incredible
 		   slowdown */
 
-		for (j = 0, b = curr_stripe; j < num_row_blocks; j++) {
-			b->entries = (entry_idx_t *)xmalloc(
-						b->num_entries_alloc *
+		for (j = 0, b = curr_stripe; j < num_block_rows; 
+						j++, b += num_block_cols) {
+			b->d.entries = (entry_idx_t *)xmalloc(
+						b->num_entries *
 						sizeof(entry_idx_t));
-			b += num_col_blocks;
+			b->num_entries = 0;
 		}
 
 		for (j = 0; j < curr_cols; j++) {
-			la_col_t *c = A + col_min + i * block_col_size + j;
+			la_col_t *c = A + i * block_size + j;
+			uint32 limit = first_block_size;
+			uint32 start_row = 0;
 
 			for (k = 0, b = curr_stripe; k < c->weight; k++) {
+				entry_idx_t *e;
 				uint32 index = c->data[k];
 
-				while (index >= b->start_row + b->num_rows)
-					b += num_col_blocks;
+				while (index >= limit) {
+					b += num_block_cols;
+					start_row = limit;
+					limit += block_size;
+				}
 
-				e = b->entries + b->num_entries++;
-				e->row_off = index - b->start_row;
+				e = b->d.entries + b->num_entries++;
+				e->row_off = index - start_row;
 				e->col_off = j;
 			}
 
@@ -380,48 +359,22 @@ static void matrix_thread_init(void *data, int thread_num) {
 			c->data = NULL;
 		}
 
-		/* convert the first block in the stripe to
-		   a somewhat-compressed format. Entries in this
-		   first block are stored by row, and all rows
-		   are concatenated into a single 16-bit array */
-
-		b = curr_stripe;
-		e = b->entries;
-		qsort(e, (size_t)b->num_entries, 
-				sizeof(entry_idx_t), compare_row_off);
-		for (j = k = 1; j < b->num_entries; j++) {
-			if (e[j].row_off != e[j-1].row_off)
-				k++;
-		}
-
-		/* we need a 16-bit word for each element and two more
-		   16-bit words at the start of each of the k packed
-		   arrays making up med_entries. The first extra word
-		   gives the row number and the second gives the number
-		   of entries in that row. We also need a few extra words 
-		   at the array end because the multiply code uses a 
-		   software pipeline and would fetch off the end of 
-		   med_entries otherwise */
-
-		b->med_entries = (med_off_t *)xmalloc((b->num_entries + 
-						2 * k + 8) * sizeof(med_off_t));
-		j = k = 0;
-		while (j < b->num_entries) {
-			for (m = 0; j + m < b->num_entries; m++) {
-				if (m > 0 && 
-				    e[j+m].row_off != e[j+m-1].row_off)
-					break;
-				b->med_entries[k+m+2] = e[j+m].col_off;
-			}
-			b->med_entries[k] = e[j].row_off;
-			b->med_entries[k+1] = m;
-			j += m;
-			k += m + 2;
-		}
-		b->med_entries[k] = b->med_entries[k+1] = 0;
-		free(b->entries);
-		b->entries = NULL;
+		pack_med_block(curr_stripe);
 	}
+}
+
+/*--------------------------------------------------------------------*/
+static void matrix_thread_init(void *data, int thread_num) {
+
+	packed_matrix_t *p = (packed_matrix_t *)data;
+	thread_data_t *t = p->thread_data + thread_num;
+
+	/* we use this scratch vector for both matrix multiplies
+	   and vector-vector operations; it has to be large enough
+	   to support both */
+
+	t->tmp_b = (uint64 *)xmalloc(MAX(8 * 256, p->first_block_size) *
+					sizeof(uint64));
 }
 
 /*-------------------------------------------------------------------*/
@@ -429,19 +382,8 @@ static void matrix_thread_free(void *data, int thread_num) {
 
 	packed_matrix_t *p = (packed_matrix_t *)data;
 	thread_data_t *t = p->thread_data + thread_num;
-	uint32 i;
 
-	for (i = 0; i < (t->num_dense_rows + 63) / 64; i++)
-		free(t->dense_blocks[i]);
-	free(t->dense_blocks);
-
-	for (i = 0; i < t->num_blocks; i++) {
-		free(t->blocks[i].entries);
-		free(t->blocks[i].med_entries);
-	}
-	free(t->blocks);
-	if (t->my_oid > 0)
-		free(t->b);
+	free(t->tmp_b);
 }
 
 /*-------------------------------------------------------------------*/
@@ -451,11 +393,9 @@ void packed_matrix_init(msieve_obj *obj,
 			uint32 ncols, uint32 max_ncols, uint32 start_col, 
 			uint32 num_dense_rows, uint32 first_block_size) {
 
-	uint32 i, j, k;
+	uint32 i;
 	uint32 block_size;
 	uint32 num_threads;
-	uint32 num_nonzero;
-	uint32 num_nonzero_per_thread;
 	thread_control_t control;
 
 	/* initialize */
@@ -483,108 +423,48 @@ void packed_matrix_init(msieve_obj *obj,
 	if (max_nrows <= MIN_NROWS_TO_PACK)
 		return;
 
-	p->unpacked_cols = NULL;
-
-	/* decide on the block size. We want to split the
-	   cache into thirds; one third for x, one third for
-	   b and the last third for streaming access to 
-	   each block. If the matrix is small, adjust the
-	   block size so that the matrix is divided 2.5
-	   ways in each dimension.
-	  
-	   Note that the following does not compensate for
-	   having multiple threads. If each thread gets a 
-	   separate processor, no compensation is needed.
-	   This could conceivably cause problems if multiple 
-	   cores share the same cache, but multicore processors 
-	   typically have pretty big caches anyway */
-
-	block_size = obj->cache_size2 / (3 * sizeof(uint64));
-	block_size = MIN(block_size, max_nrows / 2.5);
-	block_size = MIN(block_size, 65536);
-	if (block_size == 0)
-		block_size = 32768;
-
-	logprintf(obj, "using block size %u for "
-			"processor cache size %u kB\n", 
-				block_size, obj->cache_size2 / 1024);
-
 	/* determine the number of threads to use */
 
 	num_threads = obj->num_threads;
 	if (num_threads < 2 || max_nrows < MIN_NROWS_TO_THREAD)
 		num_threads = 1;
+
 	p->num_threads = num_threads = MIN(num_threads, MAX_THREADS);
-	p->vsize = ncols / p->num_threads;
+	p->vsize = ncols / num_threads;
+	p->unpacked_cols = NULL;
+	p->block_size = block_size = 8192;
+	p->num_block_cols = (ncols + block_size - 1) / block_size;
+	p->num_block_rows = 1 + (nrows - first_block_size + 
+				block_size - 1) / block_size;
+	p->first_block_size = first_block_size;
 
-	/* compute the number of nonzero elements in the submatrix
-	   given to each thread; overestimate the number slightly
-	   so that we don't have one thread with almost no columns */
+	logprintf(obj, "using block size %u for "
+			"processor cache size %u kB\n", 
+				block_size, obj->cache_size2 / 1024);
 
-	for (i = num_nonzero = 0; i < ncols; i++)
-		num_nonzero += A[i].weight;
-	num_nonzero_per_thread = num_nonzero / num_threads + 1;
+	/* do the core work of packing the matrix */
 
-	/* divide the matrix into groups of columns, one group
-	   per thread, and pack each group separately */
+	pack_matrix_core(p, A);
 
-	for (i = j = k = num_nonzero = 0; i < ncols; i++) {
-
-		/* last thread gets the rest */
-		if (i == ncols - 1 || k + 1 == p->num_threads) {
-			thread_data_t *t = p->thread_data + k;
-
-			t->my_oid = k++;
-			t->initial_cols = A;
-			t->col_min = j;
-			t->col_max = ncols - 1;
-			t->nrows_in = nrows;
-			t->block_size = block_size;
-			t->first_block_size = first_block_size;
-			t->num_dense_rows = num_dense_rows;
-			break;
-		}
-
-		num_nonzero += A[i].weight;
-
-		if (num_nonzero >= (k + 1) * num_nonzero_per_thread) {
-			thread_data_t *t = p->thread_data + k;
-
-			t->my_oid = k++;
-			t->initial_cols = A;
-			t->col_min = j;
-			t->col_max = i;
-			t->nrows_in = nrows;
-			t->block_size = block_size;
-			t->first_block_size = first_block_size;
-			t->num_dense_rows = num_dense_rows;
-			if(num_nonzero - A[i].weight / 2 > k * num_nonzero_per_thread)
-				t->col_max--;
-			j = t->col_max + 1;
-		}
-	}
-
-	/* update the number of threads, in case it's 
-	   not what we estimated */
-
-	p->num_threads = k;
-
-	/* start the thread pool. Each thread packs its own 
-	   portion of the matrix, so that memory allocation
-	   is local on NUMA architectures */
+	/* start the thread pool */
 
 	control.init = matrix_thread_init;
 	control.shutdown = matrix_thread_free;
 	control.data = p;
 
-	if (k > 1) {
-		p->threadpool = threadpool_init(k - 1, k - 1, &control);
-	}
-	matrix_thread_init(p, k - 1);
+	p->threadpool = threadpool_init(num_threads, 200, &control);
 
-	for (i = 0; i < k; i++) {
+	/* pre-generate the structures to drive the thread pool */
+
+	p->tasks = (la_task_t *)xmalloc(sizeof(la_task_t) *
+					(p->num_block_cols + p->num_threads));
+	for (i = 0; i < p->num_threads; i++) {
 		p->tasks[i].matrix = p;
 		p->tasks[i].task_num = i;
+	}
+	for (; i < p->num_threads + p->num_block_cols; i++) {
+		p->tasks[i].matrix = p;
+		p->tasks[i].task_num = i - p->num_threads;
 	}
 }
 
@@ -601,13 +481,16 @@ void packed_matrix_free(packed_matrix_t *p) {
 		}
 	}
 	else {
-		/* stop the worker threads; each will free
-		   its own memory */
+		threadpool_free(p->threadpool);
 
-		if (p->num_threads > 1)
-			threadpool_free(p->threadpool);
+		for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)
+			free(p->dense_blocks[i]);
 
-		matrix_thread_free(p, p->num_threads - 1);
+		for (i = 0; i < p->num_block_rows * p->num_block_cols; i++) 
+			free(p->blocks[i].d.entries);
+
+		free(p->blocks);
+		free(p->tasks);
 	}
 }
 
@@ -635,27 +518,27 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 		}
 	}
 	else {
-		mem_use += MAX(p->nrows, p->ncols) * sizeof(uint64) *
-				(p->num_threads - 1);
+		uint32 num_blocks = p->num_block_rows * 
+					p->num_block_cols;
 
-		for (i = 0; i < p->num_threads; i++) {
-			thread_data_t *t = p->thread_data + i;
+		mem_use += sizeof(uint64) * p->num_threads * p->first_block_size;
 
-			mem_use += t->num_blocks * sizeof(packed_block_t) +
-				   t->ncols * sizeof(uint64) *
-					((t->num_dense_rows + 63) / 64);
+		mem_use += sizeof(packed_block_t) * num_blocks;
 
-			for (j = 0; j < t->num_blocks; j++) {
-				packed_block_t *b = t->blocks + j;
-				if (b->entries) {
-					mem_use += b->num_entries *
-							sizeof(entry_idx_t);
-				}
-				else {
-					mem_use += (b->num_entries + 
-						    2 * NUM_MEDIUM_ROWS) * 
-							sizeof(uint16);
-				}
+		mem_use += p->ncols * sizeof(uint64) *
+				((p->num_dense_rows + 63) / 64);
+
+		for (j = 0; j < num_blocks; j++) {
+			packed_block_t *b = p->blocks + j;
+
+			if (j < p->num_block_cols) {
+				mem_use += (b->num_entries + 
+					    2 * p->first_block_size) * 
+						sizeof(uint16);
+			}
+			else {
+				mem_use += b->num_entries *
+						sizeof(entry_idx_t);
 			}
 		}
 	}

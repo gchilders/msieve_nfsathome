@@ -168,7 +168,6 @@ void tmul_Nx64_64x64_acc(packed_matrix_t *matrix,
 
 	uint32 i, j, k;
 	uint64 c[8 * 256];
-	uint64 *tmp_b[MAX_THREADS];
 	uint32 vsize = matrix->vsize;
 	uint32 off;
 	task_control_t task;
@@ -193,7 +192,6 @@ void tmul_Nx64_64x64_acc(packed_matrix_t *matrix,
 
 		thread_data_t *t = matrix->thread_data + i;
 
-		tmp_b[i] = t->b;
 		t->x = v + off;
 		t->b = c;
 		t->y = y + off;
@@ -215,9 +213,6 @@ void tmul_Nx64_64x64_acc(packed_matrix_t *matrix,
 
 	if (i > 0)
 		threadpool_drain(matrix->threadpool, 1);
-
-	for (i = 0; i < matrix->num_threads; i++)
-		matrix->thread_data[i].b = tmp_b[i];
 }
 
 /*-------------------------------------------------------------------*/
@@ -391,7 +386,7 @@ static void inner_thread_run(void *data, int thread_num)
 	packed_matrix_t *p = task->matrix;
 	thread_data_t *t = p->thread_data + task->task_num;
 
-	core_64xN_Nx64(t->x, t->b, t->y, t->vsize);
+	core_64xN_Nx64(t->x, t->tmp_b, t->y, t->vsize);
 }
 
 void tmul_64xN_Nx64(packed_matrix_t *matrix,
@@ -411,10 +406,6 @@ void tmul_64xN_Nx64(packed_matrix_t *matrix,
 	for (i = off = 0; i < matrix->num_threads; i++, off += vsize) {
 		thread_data_t *t = matrix->thread_data + i;
 
-		/* use each thread's scratch vector, except the
-		   first thead, which has no scratch vector but
-		   uses one we supply */
-
 		t->x = x + off;
 		t->y = y + off;
 
@@ -422,9 +413,6 @@ void tmul_64xN_Nx64(packed_matrix_t *matrix,
 			t->vsize = n - off;
 		else
 			t->vsize = vsize;
-
-		if (i == 0)
-			t->b = c;
 	}
 
 	task.init = NULL;
@@ -443,9 +431,12 @@ void tmul_64xN_Nx64(packed_matrix_t *matrix,
 	/* All the scratch vectors used by threads get 
 	   xor-ed into the final c vector */
 
+	memcpy(c, matrix->thread_data[0].tmp_b, 
+			8 * 256 * sizeof(uint64));
+
 	for (i = 1; i < matrix->num_threads; i++) {
 		thread_data_t *t = matrix->thread_data + i;
-		uint64 *curr_c = t->b;
+		uint64 *curr_c = t->tmp_b;
 
 		accum_xor(c, curr_c, 8 * 256);
 	}
