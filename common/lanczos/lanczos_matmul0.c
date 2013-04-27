@@ -102,6 +102,8 @@ static void mul_packed(packed_matrix_t *matrix,
 	   each thread has scratch space for these, so we don't have
 	   to wait for the tasks to finish */
 
+	uint64 start_clocks = read_clock();
+
 	task.init = NULL;
 	task.run = mul_packed_small_core;
 	task.shutdown = NULL;
@@ -134,6 +136,8 @@ static void mul_packed(packed_matrix_t *matrix,
 				matrix->first_block_size);
 	}
 
+	printf("%.3lf\n", (double)(read_clock() - start_clocks) / 2e9);
+
 #if defined(GCC_ASM32A) && defined(HAS_MMX)
 	ASM_G volatile ("emms");
 #elif defined(MSC_ASM32A) && defined(HAS_MMX)
@@ -145,25 +149,37 @@ static void mul_packed(packed_matrix_t *matrix,
 static void mul_trans_packed(packed_matrix_t *matrix, 
 			uint64 *x, uint64 *b) 
 {
-	uint32 i;
+	uint32 i, j, k;
 	task_control_t task;
+
+	uint64 start_clocks = read_clock();
 
 	matrix->x = x;
 	matrix->b = b;
-
-	/* start accumulating sparse multiply blocks; each task 
-	   takes a whole block column of the matrix */
 
 	task.init = NULL;
 	task.run = mul_trans_packed_core;
 	task.shutdown = NULL;
 
-	for (i = 0; i < matrix->num_block_cols; i++) {
-		task.data = matrix->tasks + i + matrix->num_threads;
-		threadpool_add_task(matrix->threadpool, &task, 1);
-	}
+	for (i = 0; i < matrix->num_superblock_rows; i++) {
+		for (j = 0; j < matrix->num_superblock_cols; j++) {
 
-	threadpool_drain(matrix->threadpool, 1);
+			matrix->sb_r = i;
+			matrix->sb_c = j;
+
+			for (k = 0; k < matrix->num_threads - 1; k++) {
+				task.data = matrix->tasks + k;
+				threadpool_add_task(matrix->threadpool, &task, 1);
+			}
+
+			task.data = matrix->tasks + k;
+			mul_trans_packed_core(matrix->tasks + k, k);
+
+			if (k) {
+				threadpool_drain(matrix->threadpool, 1);
+			}
+		}
+	}
 
 	if (matrix->num_dense_rows) {
 		/* add in the dense matrix multiply blocks; these don't 
@@ -179,6 +195,8 @@ static void mul_trans_packed(packed_matrix_t *matrix,
 
 		threadpool_drain(matrix->threadpool, 1);
 	}
+
+	printf("%.3lf\n", (double)(read_clock() - start_clocks) / 2e9);
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX)
 	ASM_G volatile ("emms");
@@ -395,6 +413,7 @@ void packed_matrix_init(msieve_obj *obj,
 
 	uint32 i;
 	uint32 block_size;
+	uint32 superblock_size;
 	uint32 num_threads;
 	thread_control_t control;
 
@@ -429,18 +448,58 @@ void packed_matrix_init(msieve_obj *obj,
 	if (num_threads < 2 || max_nrows < MIN_NROWS_TO_THREAD)
 		num_threads = 1;
 
+	/* determine the block sizes. We assume that the largest
+	   cache in the system is unified and shared across all
+	   threads. When performing matrix multiplies 'A*x=b', 
+	   we choose the block size small enough so that one block
+	   of b fits in L1 cache, and choose the superblock size
+	   to be small enough so that a superblock's worth of x
+	   and b take up 2/3 of the largest cache in the system.
+	   
+	   Making the block size too small increases memory use
+	   and puts more pressure on the larger caches, while
+	   making the superblock too small reduces the effectiveness
+	   of L1 cache and increases the synchronization overhead
+	   in multithreaded runs */
+
+	block_size = 8192;
+	superblock_size = obj->cache_size2 / (3 * sizeof(uint64));
+
+	/* possibly override from the command line */
+
+	if (obj->nfs_args != NULL) {
+
+		const char *tmp;
+
+		tmp = strstr(obj->nfs_args, "la_block=");
+		if (tmp != NULL)
+			block_size = atoi(tmp + 9);
+
+		tmp = strstr(obj->nfs_args, "la_superblock=");
+		if (tmp != NULL)
+			superblock_size = atoi(tmp + 14);
+	}
+
+	logprintf(obj, "using block size %u and superblock size %u for "
+			"processor cache size %u kB\n", 
+				block_size, superblock_size,
+				obj->cache_size2 / 1024);
+
 	p->num_threads = num_threads = MIN(num_threads, MAX_THREADS);
 	p->vsize = ncols / num_threads;
 	p->unpacked_cols = NULL;
-	p->block_size = block_size = 8192;
+	p->first_block_size = first_block_size;
+
+	p->block_size = block_size;
 	p->num_block_cols = (ncols + block_size - 1) / block_size;
 	p->num_block_rows = 1 + (nrows - first_block_size + 
 				block_size - 1) / block_size;
-	p->first_block_size = first_block_size;
 
-	logprintf(obj, "using block size %u for "
-			"processor cache size %u kB\n", 
-				block_size, obj->cache_size2 / 1024);
+	p->superblock_size = (superblock_size + block_size - 1) / block_size;
+	p->num_superblock_cols = (p->num_block_cols + p->superblock_size - 1) / 
+					p->superblock_size;
+	p->num_superblock_rows = (p->num_block_rows - 1 + p->superblock_size - 1) / 
+					p->superblock_size;
 
 	/* do the core work of packing the matrix */
 
@@ -457,12 +516,12 @@ void packed_matrix_init(msieve_obj *obj,
 	/* pre-generate the structures to drive the thread pool */
 
 	p->tasks = (la_task_t *)xmalloc(sizeof(la_task_t) *
-					(p->num_block_cols + p->num_threads));
+					(p->num_block_cols + 1 + p->num_threads));
 	for (i = 0; i < p->num_threads; i++) {
 		p->tasks[i].matrix = p;
 		p->tasks[i].task_num = i;
 	}
-	for (; i < p->num_threads + p->num_block_cols; i++) {
+	for (; i < p->num_threads + p->num_block_cols + 1; i++) {
 		p->tasks[i].matrix = p;
 		p->tasks[i].task_num = i - p->num_threads;
 	}

@@ -121,6 +121,14 @@ typedef struct packed_matrix_t {
 	uint32 block_size;
 	uint32 num_block_rows;
 	uint32 num_block_cols;
+
+	uint32 superblock_size;  /* in units of blocks */
+	uint32 num_superblock_rows;
+	uint32 num_superblock_cols;
+
+	uint32 sb_r; /* coordinates of current superblock */
+	uint32 sb_c;
+
 	uint32 first_block_size;/* block size for the smallest row numbers */
 
 	uint64 **dense_blocks;  /* for holding dense matrix rows; 

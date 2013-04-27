@@ -320,22 +320,39 @@ void mul_trans_packed_core(void *data, int thread_num)
 {
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
-	packed_block_t *curr_block = p->blocks + task->task_num;
-	uint32 b_off = p->block_size * task->task_num;
-	uint64 *x = p->x;
-	uint64 *b = p->b + b_off;
-	uint32 i;
 
-	memset(b, 0, MIN(p->block_size, p->ncols - b_off) * sizeof(uint64));
+	uint32 start_block_r = 1 + p->sb_r * p->superblock_size;
+	uint32 start_block_c = p->sb_c * p->superblock_size;
+	uint32 num_blocks_r = MIN(p->superblock_size, 
+				p->num_block_rows - start_block_r);
+	uint32 num_blocks_c = MIN(p->superblock_size, 
+				p->num_block_cols - start_block_c);
 
-	mul_trans_one_med_block(curr_block, x, b);
-	curr_block += p->num_block_cols;
-	x += p->first_block_size;
+	packed_block_t *start_block = p->blocks + start_block_c +
+				start_block_r * p->num_block_cols;
+	uint64 *x = p->x + (start_block_r - 1) * p->block_size +
+				p->first_block_size;
+	uint32 i, j;
 
-	for (i = 1; i < p->num_block_rows; i++) {
-		mul_trans_one_block(curr_block, x, b);
-		curr_block += p->num_block_cols;
-		x += p->block_size;
+	for (i = task->task_num; i < num_blocks_c; i += p->num_threads) {
+
+		packed_block_t *curr_block = start_block + i;
+		uint32 b_off = (start_block_c + i) * p->block_size;
+		uint64 *curr_x = x;
+		uint64 *b = p->b + b_off;
+
+		if (start_block_r == 1) {
+			memset(b, 0, MIN(p->block_size, p->ncols - b_off) * 
+						sizeof(uint64));
+			mul_trans_one_med_block(curr_block - 
+					p->num_block_cols, p->x, b);
+		}
+
+		for (j = 0; j < num_blocks_r; j++) {
+			mul_trans_one_block(curr_block, curr_x, b);
+			curr_block += p->num_block_cols;
+			curr_x += p->block_size;
+		}
 	}
 }
 /*-------------------------------------------------------------------*/
