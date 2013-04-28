@@ -108,10 +108,13 @@ static void mul_packed(packed_matrix_t *matrix,
 	task.run = mul_packed_small_core;
 	task.shutdown = NULL;
 
-	for (i = 0; i < matrix->num_threads; i++) {
+	for (i = 0; i < matrix->num_threads - 1; i++) {
 		task.data = matrix->tasks + i;
 		threadpool_add_task(matrix->threadpool, &task, 1);
 	}
+
+	task.data = matrix->tasks + i;
+	mul_packed_small_core(matrix->tasks + i, i);
 
 	/* switch to the sparse blocks */
 
@@ -200,12 +203,17 @@ static void mul_trans_packed(packed_matrix_t *matrix,
 
 		task.run = mul_trans_packed_small_core;
 
-		for (i = 0; i < matrix->num_threads; i++) {
+		for (i = 0; i < matrix->num_threads - 1; i++) {
 			task.data = matrix->tasks + i;
 			threadpool_add_task(matrix->threadpool, &task, 1);
 		}
 
-		threadpool_drain(matrix->threadpool, 1);
+		task.data = matrix->tasks + i;
+		mul_trans_packed_small_core(matrix->tasks + i, i);
+
+		if (i) {
+			threadpool_drain(matrix->threadpool, 1);
+		}
 	}
 
 	printf("%.3lf\n", (double)(read_clock() - start_clocks) / 2e9);
