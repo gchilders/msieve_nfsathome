@@ -92,7 +92,7 @@ static void mul_trans_unpacked(packed_matrix_t *matrix,
 static void mul_packed(packed_matrix_t *matrix, 
 			uint64 *x, uint64 *b) 
 {
-	uint32 i;
+	uint32 i, j, k;
 	task_control_t task;
 
 	matrix->x = x;
@@ -113,17 +113,29 @@ static void mul_packed(packed_matrix_t *matrix,
 		threadpool_add_task(matrix->threadpool, &task, 1);
 	}
 
-	/* switch to the sparse blocks; each task takes a
-	   whole block row of the matrix */
+	/* switch to the sparse blocks */
 
 	task.run = mul_packed_core;
 
-	for (i = 1; i < matrix->num_block_rows; i++) {
-		task.data = matrix->tasks + i + matrix->num_threads;
-		threadpool_add_task(matrix->threadpool, &task, 1);
-	}
+	for (i = 0; i < matrix->num_superblock_rows; i++) {
+		for (j = 0; j < matrix->num_superblock_cols; j++) {
 
-	threadpool_drain(matrix->threadpool, 1);
+			matrix->sb_r = i;
+			matrix->sb_c = j;
+
+			for (k = 0; k < matrix->num_threads - 1; k++) {
+				task.data = matrix->tasks + k;
+				threadpool_add_task(matrix->threadpool, &task, 1);
+			}
+
+			task.data = matrix->tasks + k;
+			mul_packed_core(matrix->tasks + k, k);
+
+			if (k) {
+				threadpool_drain(matrix->threadpool, 1);
+			}
+		}
+	}
 
 	/* xor the small vectors from each thread */
 
@@ -454,7 +466,7 @@ void packed_matrix_init(msieve_obj *obj,
 	   we choose the block size small enough so that one block
 	   of b fits in L1 cache, and choose the superblock size
 	   to be small enough so that a superblock's worth of x
-	   and b take up 2/3 of the largest cache in the system.
+	   or b takes up 3/4 of the largest cache in the system.
 	   
 	   Making the block size too small increases memory use
 	   and puts more pressure on the larger caches, while
@@ -463,7 +475,7 @@ void packed_matrix_init(msieve_obj *obj,
 	   in multithreaded runs */
 
 	block_size = 8192;
-	superblock_size = obj->cache_size2 / (3 * sizeof(uint64));
+	superblock_size = 3 * obj->cache_size2 / (4 * sizeof(uint64));
 
 	/* possibly override from the command line */
 

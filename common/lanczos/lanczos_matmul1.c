@@ -310,22 +310,39 @@ void mul_packed_core(void *data, int thread_num)
 	/* we skip the first matrix row, since it is handled 
 	   in the dense function below */
 
-	uint32 i;
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
-	uint32 b_off = p->first_block_size +
-			p->block_size * (task->task_num - 1);
-	uint64 *x = p->x;
-	uint64 *b = p->b + b_off;
-	packed_block_t *curr_block = p->blocks +
-			p->num_block_cols * task->task_num;
 
-	memset(b, 0, MIN(p->block_size, p->nrows - b_off) * sizeof(uint64));
+	uint32 start_block_r = 1 + p->sb_r * p->superblock_size;
+	uint32 start_block_c = p->sb_c * p->superblock_size;
+	uint32 num_blocks_r = MIN(p->superblock_size, 
+				p->num_block_rows - start_block_r);
+	uint32 num_blocks_c = MIN(p->superblock_size, 
+				p->num_block_cols - start_block_c);
 
-	for (i = 0; i < p->num_block_cols; i++) {
-		mul_one_block(curr_block, x, b);
-		curr_block++;
-		x += p->block_size;
+	packed_block_t *start_block = p->blocks + start_block_c +
+				start_block_r * p->num_block_cols;
+	uint64 *x = p->x + start_block_c * p->block_size;
+	uint32 i, j;
+
+	for (i = task->task_num; i < num_blocks_r; i += p->num_threads) {
+
+		packed_block_t *curr_block = start_block + i * p->num_block_cols;
+		uint64 *curr_x = x;
+		uint32 b_off = (start_block_r - 1 + i) * p->block_size +
+				p->first_block_size;
+		uint64 *b = p->b + b_off;
+
+		if (start_block_c == 0) {
+			memset(b, 0, MIN(p->block_size, p->nrows - b_off) * 
+						sizeof(uint64));
+		}
+
+		for (j = 0; j < num_blocks_c; j++) {
+			mul_one_block(curr_block, curr_x, b);
+			curr_block++;
+			curr_x += p->block_size;
+		}
 	}
 }
 /*-------------------------------------------------------------------*/
