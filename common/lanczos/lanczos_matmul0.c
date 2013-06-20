@@ -560,6 +560,7 @@ void packed_matrix_free(packed_matrix_t *p) {
 		}
 	}
 	else {
+		threadpool_drain(p->threadpool, 1);
 		threadpool_free(p->threadpool);
 
 		for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)

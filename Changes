@@ -1,5 +1,14 @@
 Version 1.52:
+	- Added the ability to start the NFS linear algebra after using
+		the CADO-NFS suite for filtering (thanks Paul Zimmermann)
 	- Fixed a bug in the MPI code that makes Nx1 and 1xN grids work again
+	- Fixed 32-bit overflow problems in the NFS square root (thanks Greg 
+		Childers)
+	- Fixed problems parsing arguments in the NFS square root (thanks
+		Carlos Pinho)
+	- Fixed a typo in the threadpool that caused races when shutting down
+	- Turned off asm in QS when compiling debug builds
+	- Fixed Windows CPU time measurement (thanks Roman Rusakov)
 
 
 Version 1.51: 2/17/13
