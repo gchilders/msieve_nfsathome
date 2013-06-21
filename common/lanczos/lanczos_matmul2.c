@@ -321,8 +321,10 @@ void mul_trans_packed_core(void *data, int thread_num)
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
 
-	uint32 start_block_r = 1 + p->sb_r * p->superblock_size;
-	uint32 start_block_c = p->sb_c * p->superblock_size;
+	uint32 sb_r = task->sb.row_off;
+	uint32 sb_c = task->sb.col_off;
+	uint32 start_block_r = 1 + sb_r * p->superblock_size;
+	uint32 start_block_c = sb_c * p->superblock_size;
 	uint32 num_blocks_r = MIN(p->superblock_size, 
 				p->num_block_rows - start_block_r);
 	uint32 num_blocks_c = MIN(p->superblock_size, 

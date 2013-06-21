@@ -91,6 +91,7 @@ typedef struct {
 typedef struct {
 	struct packed_matrix_t *matrix;
 	uint32 task_num;
+	entry_idx_t sb;
 } la_task_t;
 
 #define MAX_THREADS 32
@@ -125,9 +126,6 @@ typedef struct packed_matrix_t {
 	uint32 superblock_size;  /* in units of blocks */
 	uint32 num_superblock_rows;
 	uint32 num_superblock_cols;
-
-	uint32 sb_r; /* coordinates of current superblock */
-	uint32 sb_c;
 
 	uint32 first_block_size;/* block size for the smallest row numbers */
 
