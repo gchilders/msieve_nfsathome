@@ -92,8 +92,8 @@ static void mul_trans_unpacked(packed_matrix_t *matrix,
 static void mul_packed(packed_matrix_t *matrix, 
 			uint64 *x, uint64 *b) 
 {
-	uint32 i, j, k;
-	task_control_t task;
+	uint32 i, j;
+	task_control_t task = {NULL, NULL, NULL, NULL};
 
 	matrix->x = x;
 	matrix->b = b;
@@ -102,40 +102,29 @@ static void mul_packed(packed_matrix_t *matrix,
 	   each thread has scratch space for these, so we don't have
 	   to wait for the tasks to finish */
 
-	uint64 start_clocks = read_clock();
-
-	task.init = NULL;
 	task.run = mul_packed_small_core;
-	task.shutdown = NULL;
 
 	for (i = 0; i < matrix->num_threads - 1; i++) {
 		task.data = matrix->tasks + i;
 		threadpool_add_task(matrix->threadpool, &task, 1);
 	}
-
-	task.data = matrix->tasks + i;
 	mul_packed_small_core(matrix->tasks + i, i);
 
 	/* switch to the sparse blocks */
 
 	task.run = mul_packed_core;
 
-	for (j = 0; j < matrix->num_superblock_cols; j++) {
-		for (i = 0; i < matrix->num_superblock_rows; i++) {
+	for (i = 0; i < matrix->num_superblock_cols; i++) {
 
-			la_task_t *t = matrix->tasks + matrix->num_threads + 
-					matrix->num_threads *
-					(i * matrix->num_superblock_cols + j);
+		la_task_t *t = matrix->tasks + matrix->num_threads * (1 + i);
 				
-			for (k = 0; k < matrix->num_threads - 1; k++) {
-				task.data = t + k;
-				threadpool_add_task(matrix->threadpool, &task, 1);
-			}
-
-			task.data = t + k;
-			mul_packed_core(t + k, k);
+		for (j = 0; j < matrix->num_threads - 1; j++) {
+			task.data = t + j;
+			threadpool_add_task(matrix->threadpool, &task, 1);
 		}
-		if (k) {
+
+		mul_packed_core(t + j, j);
+		if (j) {
 			threadpool_drain(matrix->threadpool, 1);
 		}
 	}
@@ -156,42 +145,31 @@ static void mul_packed(packed_matrix_t *matrix,
 #elif defined(MSC_ASM32A) && defined(HAS_MMX)
 	ASM_M emms
 #endif
-	printf("%.3lf\n", (double)(read_clock() - start_clocks) / 2e9);
-
 }
 
 /*-------------------------------------------------------------------*/
 static void mul_trans_packed(packed_matrix_t *matrix, 
 			uint64 *x, uint64 *b) 
 {
-	uint32 i, j, k;
-	task_control_t task;
-
-	uint64 start_clocks = read_clock();
+	uint32 i, j;
+	task_control_t task = {NULL, NULL, NULL, NULL};
 
 	matrix->x = x;
 	matrix->b = b;
 
-	task.init = NULL;
 	task.run = mul_trans_packed_core;
-	task.shutdown = NULL;
 
 	for (i = 0; i < matrix->num_superblock_rows; i++) {
-		for (j = 0; j < matrix->num_superblock_cols; j++) {
 
-			la_task_t *t = matrix->tasks + matrix->num_threads + 
-					matrix->num_threads *
-					(i * matrix->num_superblock_cols + j);
+		la_task_t *t = matrix->tasks + matrix->num_threads * (1 + i);
 				
-			for (k = 0; k < matrix->num_threads - 1; k++) {
-				task.data = t + k;
-				threadpool_add_task(matrix->threadpool, &task, 1);
-			}
-
-			task.data = t + k;
-			mul_trans_packed_core(t + k, k);
+		for (j = 0; j < matrix->num_threads - 1; j++) {
+			task.data = t + j;
+			threadpool_add_task(matrix->threadpool, &task, 1);
 		}
-		if (k) {
+
+		mul_trans_packed_core(t + j, j);
+		if (j) {
 			threadpool_drain(matrix->threadpool, 1);
 		}
 	}
@@ -208,9 +186,7 @@ static void mul_trans_packed(packed_matrix_t *matrix,
 			threadpool_add_task(matrix->threadpool, &task, 1);
 		}
 
-		task.data = matrix->tasks + i;
 		mul_trans_packed_small_core(matrix->tasks + i, i);
-
 		if (i) {
 			threadpool_drain(matrix->threadpool, 1);
 		}
@@ -221,8 +197,6 @@ static void mul_trans_packed(packed_matrix_t *matrix,
 #elif defined(MSC_ASM32A) && defined(HAS_MMX)
 	ASM_M emms
 #endif
-
-	printf("%.3lf\n", (double)(read_clock() - start_clocks) / 2e9);
 }
 
 /*-------------------------------------------------------------------*/
@@ -431,7 +405,7 @@ void packed_matrix_init(msieve_obj *obj,
 			uint32 ncols, uint32 max_ncols, uint32 start_col, 
 			uint32 num_dense_rows, uint32 first_block_size) {
 
-	uint32 i, j, k;
+	uint32 i, j;
 	uint32 block_size;
 	uint32 superblock_size;
 	uint32 num_threads;
@@ -532,32 +506,29 @@ void packed_matrix_init(msieve_obj *obj,
 	control.data = p;
 
 	if (num_threads > 1) {
-		p->threadpool = threadpool_init(num_threads - 1, 200, &control);
+		p->threadpool = threadpool_init(num_threads - 1, 
+						200, &control);
 	}
 	matrix_thread_init(p, num_threads - 1);
 
 	/* pre-generate the structures to drive the thread pool */
 
-	p->tasks = (la_task_t *)xmalloc(sizeof(la_task_t) *
-					(p->num_threads + 
-					p->num_threads * p->num_superblock_rows * 
-					p->num_superblock_cols));
+	p->tasks = (la_task_t *)xmalloc(sizeof(la_task_t) * 
+					p->num_threads * 
+					(2 + p->num_superblock_cols));
+
 	for (i = 0; i < p->num_threads; i++) {
 		p->tasks[i].matrix = p;
 		p->tasks[i].task_num = i;
 	}
-	for (i = 0; i < p->num_superblock_rows; i++) {
-		for (j = 0; j < p->num_superblock_cols; j++) {
+	for (i = 0; i < p->num_superblock_cols + 1; i++) {
 
-			la_task_t *t = p->tasks + p->num_threads + p->num_threads * 
-					(i * p->num_superblock_cols + j);
+		la_task_t *t = p->tasks + p->num_threads * (1 + i);
 
-			for (k = 0; k < p->num_threads; k++) {
-				t[k].matrix = p;
-				t[k].task_num = k;
-				t[k].sb.row_off = i;
-				t[k].sb.col_off = j;
-			}
+		for (j = 0; j < p->num_threads; j++) {
+			t[j].matrix = p;
+			t[j].task_num = j;
+			t[j].block_num = i;
 		}
 	}
 }

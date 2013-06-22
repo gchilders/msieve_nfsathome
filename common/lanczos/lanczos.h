@@ -91,7 +91,7 @@ typedef struct {
 typedef struct {
 	struct packed_matrix_t *matrix;
 	uint32 task_num;
-	entry_idx_t sb;
+	uint32 block_num;
 } la_task_t;
 
 #define MAX_THREADS 32
