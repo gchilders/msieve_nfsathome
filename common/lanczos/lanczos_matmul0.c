@@ -531,7 +531,10 @@ void packed_matrix_init(msieve_obj *obj,
 	control.shutdown = matrix_thread_free;
 	control.data = p;
 
-	p->threadpool = threadpool_init(num_threads, 200, &control);
+	if (num_threads > 1) {
+		p->threadpool = threadpool_init(num_threads - 1, 200, &control);
+	}
+	matrix_thread_init(p, num_threads - 1);
 
 	/* pre-generate the structures to drive the thread pool */
 
@@ -572,8 +575,11 @@ void packed_matrix_free(packed_matrix_t *p) {
 		}
 	}
 	else {
-		threadpool_drain(p->threadpool, 1);
-		threadpool_free(p->threadpool);
+		if (p->num_threads > 1) {
+			threadpool_drain(p->threadpool, 1);
+			threadpool_free(p->threadpool);
+		}
+		matrix_thread_free(p, p->num_threads - 1);
 
 		for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)
 			free(p->dense_blocks[i]);
