@@ -155,11 +155,8 @@ typedef struct packed_matrix_t {
 	int32 row_offsets[MAX_MPI_GRID_DIM];
 	int32 subcol_counts[MAX_MPI_GRID_DIM];
 	int32 subcol_offsets[MAX_MPI_GRID_DIM];    
-	int32 subrow_counts[MAX_MPI_GRID_DIM];
-	int32 subrow_offsets[MAX_MPI_GRID_DIM]; 
 
 	uint32 nsubcols;
-	uint32 nsubrows;
 #endif
 
 } packed_matrix_t;
@@ -175,8 +172,7 @@ void packed_matrix_free(packed_matrix_t *packed_matrix);
 
 size_t packed_matrix_sizeof(packed_matrix_t *packed_matrix);
 
-void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, 
-			uint64 *b, uint64 *scratch);
+void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, uint64 *scratch);
 
 void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x, 
 			uint64 *b, uint64 *scratch);

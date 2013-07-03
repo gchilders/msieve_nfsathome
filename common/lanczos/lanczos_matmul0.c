@@ -566,10 +566,11 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 
 	/* account for the vectors used in the lanczos iteration */
 
-	if (p->start_row + p->start_col == 0)
-		mem_use = 7 * p->max_ncols;
-	else
-		mem_use = 7 * MAX(p->nrows, p->ncols);
+#ifdef HAVE_MPI
+	mem_use = (6 * p->nsubcols + 2 * MAX(p->nrows, p->ncols)) * sizeof(uint64);
+#else
+	mem_use = 7 * p->max_ncols * sizeof(uint64);
+#endif
 
 	/* and for the matrix */
 
@@ -611,12 +612,12 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 
 /*-------------------------------------------------------------------*/
 void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, 
-			uint64 *b, uint64 *scratch) {
+			uint64 *scratch) {
     
-	/* Multiply the vector x[] by the matrix A (stored
-	   columnwise) and put the result in b[]. The MPI 
-	   version needs a scratch array because MPI reduction
-	   operations apparently cannot be performed in-place */
+	/* Multiply the vector x[] by the matrix A and put the 
+	   result in scratch[]. The MPI version needs an extra
+	   scratch array because MPI reduction operations really
+	   want to be out-of-place */
 
 #ifdef HAVE_MPI
 	uint64 *scratch2 = scratch + MAX(A->ncols, A->nrows);
@@ -624,9 +625,9 @@ void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x,
 	if (A->mpi_size <= 1) {
 #endif
 		if (A->unpacked_cols)
-			mul_unpacked(A, x, b);
+			mul_unpacked(A, x, scratch);
 		else
-			mul_packed(A, x, b);
+			mul_packed(A, x, scratch);
 #ifdef HAVE_MPI
 		return;
 	}
@@ -638,10 +639,13 @@ void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x,
 		
 	mul_packed(A, scratch, scratch2);
 	
-	/* make each MPI row combine and scatter its own part of A^T * A*x */
+	/* make each MPI row combine all of its vectors. The
+	   matrix-vector product is redundantly stored in each
+	   MPI column, but this routine is called very rarely
+	   so it's not worth removing the rdundancy */
 	
-	global_xor_scatter(scratch2, b, scratch, A->nrows, A->mpi_ncols,
-			A->mpi_la_col_rank, A->mpi_la_row_grid);
+	global_xor(scratch2, scratch, A->nrows, A->mpi_ncols,
+			   A->mpi_la_col_rank, A->mpi_la_row_grid);
 
 #endif
 }
