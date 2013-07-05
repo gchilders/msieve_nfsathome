@@ -111,11 +111,8 @@ COMMON_SRCS = \
 	common/filter/singleton.c \
 	common/lanczos/lanczos.c \
 	common/lanczos/lanczos_io.c \
-	common/lanczos/lanczos_matmul0.c \
-	common/lanczos/lanczos_matmul1.c \
-	common/lanczos/lanczos_matmul2.c \
+	common/lanczos/lanczos_matmul.c \
 	common/lanczos/lanczos_pre.c \
-	common/lanczos/lanczos_vv.c \
 	common/lanczos/matmul_util.c \
 	common/smallfact/gmp_ecm.c \
 	common/smallfact/smallfact.c \
@@ -138,6 +135,18 @@ COMMON_SRCS = \
 	common/strtoll.c \
 	common/thread.c \
 	common/util.c
+
+ifeq ($(CUDA),1)
+else
+	COMMON_SRCS += \
+		common/lanczos/cpu/lanczos_matmul0.c \
+		common/lanczos/cpu/lanczos_matmul1.c \
+		common/lanczos/cpu/lanczos_matmul2.c \
+		common/lanczos/cpu/lanczos_vv.c
+
+	COMMON_HDR += \
+		common/lanczos/cpu/lanczos_cpu.h
+endif
 
 COMMON_OBJS = $(COMMON_SRCS:.c=.o)
 

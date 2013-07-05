@@ -16,7 +16,6 @@ $Id$
 #define _COMMON_LANCZOS_LANCZOS_H_
 
 #include <common.h>
-#include <thread.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -71,29 +70,6 @@ typedef struct {
 	} d;
 } packed_block_t;
 
-/* struct used by threads for computing partial
-   matrix multiplies */
-
-typedef struct {
-	/* items for matrix-vector operations */
-
-	uint64 *tmp_b;
-
-	/* items for vector-vector operations */
-
-	uint64 *x;
-	uint64 *b;
-	uint64 *y;
-	uint32 vsize;
-
-} thread_data_t;
-
-typedef struct {
-	struct packed_matrix_t *matrix;
-	uint32 task_num;
-	uint32 block_num;
-} la_task_t;
-
 #define MAX_THREADS 32
 #define MIN_NROWS_TO_THREAD 200000
 
@@ -116,9 +92,6 @@ typedef struct packed_matrix_t {
 
 	/* used for block matrix multiplies */
 
-	uint64 *x; /* vector to multiply */
-	uint64 *b; /* vector for result */
-
 	uint32 block_size;
 	uint32 num_block_rows;
 	uint32 num_block_cols;
@@ -134,10 +107,7 @@ typedef struct packed_matrix_t {
 				   64 matrix rows */
 	packed_block_t *blocks; /* sparse part of matrix, in block format */
 
-
-	struct threadpool *threadpool;
-	thread_data_t thread_data[MAX_THREADS];
-	la_task_t *tasks;
+	void * extra; /* implementation-specific stuff */
 
 #ifdef HAVE_MPI
 	uint32 mpi_size;
@@ -170,23 +140,25 @@ void packed_matrix_init(msieve_obj *obj,
 
 void packed_matrix_free(packed_matrix_t *packed_matrix);
 
+void matrix_extra_init(msieve_obj *obj, 
+			packed_matrix_t *packed_matrix);
+
+void matrix_extra_free(packed_matrix_t *packed_matrix);
+
 size_t packed_matrix_sizeof(packed_matrix_t *packed_matrix);
 
-void mul_MxN_Nx64(packed_matrix_t *A, void *x, void *scratch);
+/* top-level calls for matrix multiplies */
+
+void mul_MxN_Nx64(packed_matrix_t *A, 
+			void *x, void *scratch);
 
 void mul_sym_NxN_Nx64(packed_matrix_t *A, void *x, 
 			void *b, void *scratch);
 
-/* for big jobs, we use a multithreaded framework that calls
-   these routines for the heavy lifting */
+/* implementation-specifc matrix-vector product */
 
-void mul_packed_core(void *data, int thread_num);
-
-void mul_packed_small_core(void *data, int thread_num);
-
-void mul_trans_packed_core(void *data, int thread_num);
-
-void mul_trans_packed_small_core(void *data, int thread_num);
+void mul_core(packed_matrix_t *A, void *x, void *b);
+void mul_trans_core(packed_matrix_t *A, void *x, void *b);
 
 #ifdef HAVE_MPI
 void global_xor(void *send_buf, void *recv_buf, 
@@ -217,19 +189,11 @@ void v_clear(void *v, uint32 n);
 void v_xor(void *dest, void *src, uint32 n);
 void v_mask(void *v, uint64 mask, uint32 n);
 
-/* multi-threaded plus MPI */
-
 void v_mul_Nx64_64x64_acc(packed_matrix_t *A, void *v, uint64 *x, 
 			void *y, uint32 n);
 
 void v_mul_64xN_Nx64(packed_matrix_t *A, void *x, void *y, 
 			uint64 *xy, uint32 n);
-
-/* single-threaded */
-
-void mul_Nx64_64x64_acc(uint64 *v, uint64 *x, uint64 *y, uint32 n);
-
-void mul_64xN_Nx64(uint64 *x, uint64 *y, uint64 *xy, uint32 n);
 
 #ifdef __cplusplus
 }

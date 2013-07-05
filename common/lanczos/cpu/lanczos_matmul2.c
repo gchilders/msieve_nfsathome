@@ -12,7 +12,7 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#include "lanczos.h"
+#include "lanczos_cpu.h"
 
 	/* code for handling transposed matrix multiplies 
 	   when the matrix is in packed format */
@@ -320,6 +320,7 @@ void mul_trans_packed_core(void *data, int thread_num)
 {
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
+	cpudata_t *cpudata = (cpudata_t *)p->extra;
 
 	uint32 start_block_r = 1 + task->block_num * p->superblock_size;
 	uint32 num_blocks_r = MIN(p->superblock_size, 
@@ -327,7 +328,7 @@ void mul_trans_packed_core(void *data, int thread_num)
 
 	packed_block_t *start_block = p->blocks + 
 				start_block_r * p->num_block_cols;
-	uint64 *x = p->x + (start_block_r - 1) * p->block_size +
+	uint64 *x = cpudata->x + (start_block_r - 1) * p->block_size +
 				p->first_block_size;
 	uint32 i, j;
 
@@ -337,13 +338,13 @@ void mul_trans_packed_core(void *data, int thread_num)
 		packed_block_t *curr_block = start_block + i;
 		uint32 b_off = i * p->block_size;
 		uint64 *curr_x = x;
-		uint64 *b = p->b + b_off;
+		uint64 *b = cpudata->b + b_off;
 
 		if (start_block_r == 1) {
 			memset(b, 0, MIN(p->block_size, p->ncols - b_off) * 
 						sizeof(uint64));
 			mul_trans_one_med_block(curr_block - 
-					p->num_block_cols, p->x, b);
+					p->num_block_cols, cpudata->x, b);
 		}
 
 		for (j = 0; j < num_blocks_r; j++) {
@@ -364,10 +365,11 @@ void mul_trans_packed_small_core(void *data, int thread_num)
 
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
+	cpudata_t *cpudata = (cpudata_t *)p->extra;
 	uint32 vsize = p->ncols / p->num_threads;
 	uint32 off = vsize * task->task_num;
-	uint64 *x = p->x;
-	uint64 *b = p->b + off;
+	uint64 *x = cpudata->x;
+	uint64 *b = cpudata->b + off;
 	uint32 i;
 
 	if (p->num_threads == 1)

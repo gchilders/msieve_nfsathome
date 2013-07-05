@@ -15,197 +15,6 @@ $Id$
 #include "lanczos.h"
 
 /*-------------------------------------------------------------------*/
-static void mul_unpacked(packed_matrix_t *matrix,
-			  uint64 *x, uint64 *b) 
-{
-	uint32 ncols = matrix->ncols;
-	uint32 num_dense_rows = matrix->num_dense_rows;
-	la_col_t *A = matrix->unpacked_cols;
-	uint32 i, j;
-
-	memset(b, 0, ncols * sizeof(uint64));
-	
-	for (i = 0; i < ncols; i++) {
-		la_col_t *col = A + i;
-		uint32 *row_entries = col->data;
-		uint64 tmp = x[i];
-
-		for (j = 0; j < col->weight; j++) {
-			b[row_entries[j]] ^= tmp;
-		}
-	}
-
-	if (num_dense_rows) {
-		for (i = 0; i < ncols; i++) {
-			la_col_t *col = A + i;
-			uint32 *row_entries = col->data + col->weight;
-			uint64 tmp = x[i];
-	
-			for (j = 0; j < num_dense_rows; j++) {
-				if (row_entries[j / 32] & 
-						((uint32)1 << (j % 32))) {
-					b[j] ^= tmp;
-				}
-			}
-		}
-	}
-}
-
-/*-------------------------------------------------------------------*/
-static void mul_trans_unpacked(packed_matrix_t *matrix,
-				uint64 *x, uint64 *b) 
-{
-	uint32 ncols = matrix->ncols;
-	uint32 num_dense_rows = matrix->num_dense_rows;
-	la_col_t *A = matrix->unpacked_cols;
-	uint32 i, j;
-
-	for (i = 0; i < ncols; i++) {
-		la_col_t *col = A + i;
-		uint32 *row_entries = col->data;
-		uint64 accum = 0;
-
-		for (j = 0; j < col->weight; j++) {
-			accum ^= x[row_entries[j]];
-		}
-		b[i] = accum;
-	}
-
-	if (num_dense_rows) {
-		for (i = 0; i < ncols; i++) {
-			la_col_t *col = A + i;
-			uint32 *row_entries = col->data + col->weight;
-			uint64 accum = b[i];
-	
-			for (j = 0; j < num_dense_rows; j++) {
-				if (row_entries[j / 32] &
-						((uint32)1 << (j % 32))) {
-					accum ^= x[j];
-				}
-			}
-			b[i] = accum;
-		}
-	}
-}
-
-/*-------------------------------------------------------------------*/
-static void mul_packed(packed_matrix_t *matrix, 
-			uint64 *x, uint64 *b) 
-{
-	uint32 i, j;
-	task_control_t task = {NULL, NULL, NULL, NULL};
-
-	matrix->x = x;
-	matrix->b = b;
-
-	/* start accumulating the dense matrix multiply results;
-	   each thread has scratch space for these, so we don't have
-	   to wait for the tasks to finish */
-
-	task.run = mul_packed_small_core;
-
-	for (i = 0; i < matrix->num_threads - 1; i++) {
-		task.data = matrix->tasks + i;
-		threadpool_add_task(matrix->threadpool, &task, 1);
-	}
-	mul_packed_small_core(matrix->tasks + i, i);
-
-	/* switch to the sparse blocks */
-
-	task.run = mul_packed_core;
-
-	for (i = 0; i < matrix->num_superblock_cols; i++) {
-
-		la_task_t *t = matrix->tasks;
-				
-		for (j = 0; j < matrix->num_threads; j++)
-			t[j].block_num = i;
-
-		for (j = 0; j < matrix->num_threads - 1; j++) {
-			task.data = t + j;
-			threadpool_add_task(matrix->threadpool, &task, 1);
-		}
-
-		mul_packed_core(t + j, j);
-		if (j) {
-			threadpool_drain(matrix->threadpool, 1);
-		}
-	}
-
-	/* xor the small vectors from each thread */
-
-	memcpy(b, matrix->thread_data[0].tmp_b, 
-			matrix->first_block_size *
-			sizeof(uint64));
-
-	for (i = 1; i < matrix->num_threads; i++) {
-		v_xor(b, matrix->thread_data[i].tmp_b, 
-				matrix->first_block_size);
-	}
-
-#if defined(GCC_ASM32A) && defined(HAS_MMX)
-	ASM_G volatile ("emms");
-#elif defined(MSC_ASM32A) && defined(HAS_MMX)
-	ASM_M emms
-#endif
-}
-
-/*-------------------------------------------------------------------*/
-static void mul_trans_packed(packed_matrix_t *matrix, 
-			uint64 *x, uint64 *b) 
-{
-	uint32 i, j;
-	task_control_t task = {NULL, NULL, NULL, NULL};
-
-	matrix->x = x;
-	matrix->b = b;
-
-	task.run = mul_trans_packed_core;
-
-	for (i = 0; i < matrix->num_superblock_rows; i++) {
-
-		la_task_t *t = matrix->tasks;
-				
-		for (j = 0; j < matrix->num_threads; j++)
-			t[j].block_num = i;
-
-		for (j = 0; j < matrix->num_threads - 1; j++) {
-			task.data = t + j;
-			threadpool_add_task(matrix->threadpool, &task, 1);
-		}
-
-		mul_trans_packed_core(t + j, j);
-		if (j) {
-			threadpool_drain(matrix->threadpool, 1);
-		}
-	}
-
-	if (matrix->num_dense_rows) {
-		/* add in the dense matrix multiply blocks; these don't 
-		   use scratch space, but need all of b to accumulate 
-		   results so we have to wait until all tasks finish */
-
-		task.run = mul_trans_packed_small_core;
-
-		for (i = 0; i < matrix->num_threads - 1; i++) {
-			task.data = matrix->tasks + i;
-			threadpool_add_task(matrix->threadpool, &task, 1);
-		}
-
-		mul_trans_packed_small_core(matrix->tasks + i, i);
-		if (i) {
-			threadpool_drain(matrix->threadpool, 1);
-		}
-	}
-
-#if defined(GCC_ASM32A) && defined(HAS_MMX)
-	ASM_G volatile ("emms");
-#elif defined(MSC_ASM32A) && defined(HAS_MMX)
-	ASM_M emms
-#endif
-}
-
-/*-------------------------------------------------------------------*/
 static int compare_row_off(const void *x, const void *y) {
 	entry_idx_t *xx = (entry_idx_t *)x;
 	entry_idx_t *yy = (entry_idx_t *)y;
@@ -381,29 +190,6 @@ static void pack_matrix_core(packed_matrix_t *p, la_col_t *A)
 	}
 }
 
-/*--------------------------------------------------------------------*/
-static void matrix_thread_init(void *data, int thread_num) {
-
-	packed_matrix_t *p = (packed_matrix_t *)data;
-	thread_data_t *t = p->thread_data + thread_num;
-
-	/* we use this scratch vector for both matrix multiplies
-	   and vector-vector operations; it has to be large enough
-	   to support both */
-
-	t->tmp_b = (uint64 *)xmalloc(MAX(64, p->first_block_size) *
-					sizeof(uint64));
-}
-
-/*-------------------------------------------------------------------*/
-static void matrix_thread_free(void *data, int thread_num) {
-
-	packed_matrix_t *p = (packed_matrix_t *)data;
-	thread_data_t *t = p->thread_data + thread_num;
-
-	free(t->tmp_b);
-}
-
 /*-------------------------------------------------------------------*/
 void packed_matrix_init(msieve_obj *obj,
 			packed_matrix_t *p, la_col_t *A,
@@ -415,7 +201,6 @@ void packed_matrix_init(msieve_obj *obj,
 	uint32 block_size;
 	uint32 superblock_size;
 	uint32 num_threads;
-	thread_control_t control;
 
 	/* initialize */
 
@@ -498,40 +283,22 @@ void packed_matrix_init(msieve_obj *obj,
 	p->superblock_size = (superblock_size + block_size - 1) / block_size;
 	p->num_superblock_cols = (p->num_block_cols + p->superblock_size - 1) / 
 					p->superblock_size;
-	p->num_superblock_rows = (p->num_block_rows - 1 + p->superblock_size - 1) / 
-					p->superblock_size;
+	p->num_superblock_rows = (p->num_block_rows - 1 + 
+				p->superblock_size - 1) / p->superblock_size;
 
 	/* do the core work of packing the matrix */
 
 	pack_matrix_core(p, A);
 
-	/* start the thread pool */
-
-	control.init = matrix_thread_init;
-	control.shutdown = matrix_thread_free;
-	control.data = p;
-
-	if (num_threads > 1) {
-		p->threadpool = threadpool_init(num_threads - 1, 
-						200, &control);
-	}
-	matrix_thread_init(p, num_threads - 1);
-
-	/* pre-generate the structures to drive the thread pool */
-
-	p->tasks = (la_task_t *)xmalloc(sizeof(la_task_t) * 
-					p->num_threads);
-
-	for (i = 0; i < p->num_threads; i++) {
-		p->tasks[i].matrix = p;
-		p->tasks[i].task_num = i;
-	}
+	matrix_extra_init(obj, p);
 }
 
 /*-------------------------------------------------------------------*/
 void packed_matrix_free(packed_matrix_t *p) {
 
 	uint32 i;
+
+	matrix_extra_free(p);
 
 	if (p->unpacked_cols) {
 		la_col_t *A = p->unpacked_cols;
@@ -541,20 +308,14 @@ void packed_matrix_free(packed_matrix_t *p) {
 		}
 	}
 	else {
-		if (p->num_threads > 1) {
-			threadpool_drain(p->threadpool, 1);
-			threadpool_free(p->threadpool);
-		}
-		matrix_thread_free(p, p->num_threads - 1);
-
 		for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)
 			free(p->dense_blocks[i]);
 
 		for (i = 0; i < p->num_block_rows * p->num_block_cols; i++) 
 			free(p->blocks[i].d.entries);
 
+		free(p->dense_blocks);
 		free(p->blocks);
-		free(p->tasks);
 	}
 }
 
@@ -586,7 +347,8 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 		uint32 num_blocks = p->num_block_rows * 
 					p->num_block_cols;
 
-		mem_use += sizeof(uint64) * p->num_threads * p->first_block_size;
+		mem_use += sizeof(uint64) * p->num_threads * 
+				p->first_block_size;
 
 		mem_use += sizeof(packed_block_t) * num_blocks;
 
@@ -627,10 +389,7 @@ void mul_MxN_Nx64(packed_matrix_t *A, void *x_in,
 
 	if (A->mpi_size <= 1) {
 #endif
-		if (A->unpacked_cols)
-			mul_unpacked(A, x, scratch);
-		else
-			mul_packed(A, x, scratch);
+		mul_core(A, x, scratch);
 #ifdef HAVE_MPI
 		return;
 	}
@@ -640,7 +399,7 @@ void mul_MxN_Nx64(packed_matrix_t *A, void *x_in,
 	global_allgather(x, scratch, A->ncols, A->mpi_nrows, 
 			A->mpi_la_row_rank, A->mpi_la_col_grid);
 		
-	mul_packed(A, scratch, scratch2);
+	mul_core(A, scratch, scratch2);
 	
 	/* make each MPI row combine all of its vectors. The
 	   matrix-vector product is redundantly stored in each
@@ -671,14 +430,8 @@ void mul_sym_NxN_Nx64(packed_matrix_t *A, void *x_in,
         
 	if (A->mpi_size <= 1) {
 #endif
-		if (A->unpacked_cols) {
-			mul_unpacked(A, x, scratch);
-			mul_trans_unpacked(A, scratch, b);
-		}
-		else {
-			mul_packed(A, x, scratch);
-			mul_trans_packed(A, scratch, b);
-		}
+		mul_core(A, x, scratch);
+		mul_trans_core(A, scratch, b);
 #ifdef HAVE_MPI
 		return;
 	}
@@ -688,14 +441,14 @@ void mul_sym_NxN_Nx64(packed_matrix_t *A, void *x_in,
 	global_allgather(x, scratch, A->ncols, A->mpi_nrows, 
 			A->mpi_la_row_rank, A->mpi_la_col_grid);
 	
-	mul_packed(A, scratch, scratch2);
+	mul_core(A, scratch, scratch2);
 		
 	/* make each MPI row combine its own part of A*x */
 	
 	global_xor(scratch2, scratch, A->nrows, A->mpi_ncols,
 			   A->mpi_la_col_rank, A->mpi_la_row_grid);
 		
-	mul_trans_packed(A, scratch, scratch2);
+	mul_trans_core(A, scratch, scratch2);
 		
 	/* make each MPI row combine and scatter its own part of A^T * A*x */
 		

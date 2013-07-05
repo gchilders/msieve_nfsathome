@@ -12,7 +12,7 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#include "lanczos.h"
+#include "lanczos_cpu.h"
 
 	/* code for handling matrix multiplies when the
 	   matrix is in packed format */
@@ -312,6 +312,7 @@ void mul_packed_core(void *data, int thread_num)
 
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
+	cpudata_t *cpudata = (cpudata_t *)p->extra;
 
 	uint32 start_block_c = task->block_num * p->superblock_size;
 	uint32 num_blocks_c = MIN(p->superblock_size, 
@@ -319,7 +320,7 @@ void mul_packed_core(void *data, int thread_num)
 
 	packed_block_t *start_block = p->blocks + start_block_c +
 					p->num_block_cols;
-	uint64 *x = p->x + start_block_c * p->block_size;
+	uint64 *x = cpudata->x + start_block_c * p->block_size;
 	uint32 i, j;
 
 	for (i = task->task_num; i < p->num_block_rows - 1; 
@@ -329,7 +330,7 @@ void mul_packed_core(void *data, int thread_num)
 					i * p->num_block_cols;
 		uint64 *curr_x = x;
 		uint32 b_off = i * p->block_size + p->first_block_size;
-		uint64 *b = p->b + b_off;
+		uint64 *b = cpudata->b + b_off;
 
 		if (start_block_c == 0) {
 			memset(b, 0, MIN(p->block_size, p->nrows - b_off) * 
@@ -349,14 +350,15 @@ void mul_packed_small_core(void *data, int thread_num)
 {
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
-	thread_data_t *t = p->thread_data + task->task_num;
+	cpudata_t *cpudata = (cpudata_t *)p->extra;
+	thread_data_t *t = cpudata->thread_data + task->task_num;
 
 	uint32 last_task = (task->task_num == p->num_threads - 1);
 	uint32 num_blocks = p->num_block_cols / p->num_threads;
 	uint32 block_off = num_blocks * task->task_num;
 	uint32 off = p->block_size * block_off;
 	uint32 vsize = num_blocks * p->block_size;
-	uint64 *x = p->x + off;
+	uint64 *x = cpudata->x + off;
 	uint64 *b = t->tmp_b;
 	packed_block_t *curr_block = p->blocks + block_off;
 	uint32 i;
@@ -381,5 +383,5 @@ void mul_packed_small_core(void *data, int thread_num)
 
 	for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)
 		mul_64xN_Nx64(p->dense_blocks[i] + off, 
-				p->x + off, b + 64 * i, vsize);
+				cpudata->x + off, b + 64 * i, vsize);
 }

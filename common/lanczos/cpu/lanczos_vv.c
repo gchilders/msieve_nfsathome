@@ -12,7 +12,7 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#include "lanczos.h"
+#include "lanczos_cpu.h"
 
 /*-------------------------------------------------------------------*/
 void *v_alloc(uint32 n) {
@@ -268,7 +268,6 @@ void mul_Nx64_64x64_acc(uint64 *v, uint64 *x,
 	   This code multiplies v[][] by the 64x64 matrix 
 	   x[][], then XORs the n x 64 result into y[][] */
 
-	uint32 i;
 	uint64 c[8 * 256];
 
 	mul_Nx64_64x64_precomp(c, x);
@@ -281,7 +280,8 @@ static void outer_thread_run(void *data, int thread_num)
 {
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
-	thread_data_t *t = p->thread_data + task->task_num;
+	cpudata_t *cpudata = (cpudata_t *)p->extra;
+	thread_data_t *t = cpudata->thread_data + task->task_num;
 
 	core_Nx64_64x64_acc(t->x, t->b, t->y, t->vsize);
 }
@@ -290,6 +290,7 @@ void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix,
 			void *v_in, uint64 *x,
 			void *y_in, uint32 n) {
 
+	cpudata_t *cpudata = (cpudata_t *)matrix->extra;
 	uint64 *v = (uint64 *)v_in;
 	uint64 *y = (uint64 *)y_in;
 	uint32 i;
@@ -302,7 +303,7 @@ void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix,
 
 	for (i = off = 0; i < matrix->num_threads; i++, off += vsize) {
 
-		thread_data_t *t = matrix->thread_data + i;
+		thread_data_t *t = cpudata->thread_data + i;
 
 		t->x = v + off;
 		t->b = c;
@@ -316,13 +317,13 @@ void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix,
 	task.run = outer_thread_run;
 
 	for (i = 0; i < matrix->num_threads - 1; i++) {
-		task.data = matrix->tasks + i;
-		threadpool_add_task(matrix->threadpool, &task, 0);
+		task.data = cpudata->tasks + i;
+		threadpool_add_task(cpudata->threadpool, &task, 0);
 	}
-	outer_thread_run(matrix->tasks + i, i);
+	outer_thread_run(cpudata->tasks + i, i);
 
 	if (i > 0)
-		threadpool_drain(matrix->threadpool, 1);
+		threadpool_drain(cpudata->threadpool, 1);
 }
 
 /*-------------------------------------------------------------------*/
@@ -500,7 +501,8 @@ static void inner_thread_run(void *data, int thread_num)
 {
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
-	thread_data_t *t = p->thread_data + task->task_num;
+	cpudata_t *cpudata = (cpudata_t *)p->extra;
+	thread_data_t *t = cpudata->thread_data + task->task_num;
 
 	mul_64xN_Nx64(t->x, t->y, t->tmp_b, t->vsize);
 }
@@ -510,6 +512,7 @@ void v_mul_64xN_Nx64(packed_matrix_t *matrix,
 		   uint64 *xy, uint32 n) {
 
 
+	cpudata_t *cpudata = (cpudata_t *)matrix->extra;
 	uint64 *x = (uint64 *)x_in;
 	uint64 *y = (uint64 *)y_in;
 	uint32 i;
@@ -521,7 +524,7 @@ void v_mul_64xN_Nx64(packed_matrix_t *matrix,
 #endif
 
 	for (i = off = 0; i < matrix->num_threads; i++, off += vsize) {
-		thread_data_t *t = matrix->thread_data + i;
+		thread_data_t *t = cpudata->thread_data + i;
 
 		t->x = x + off;
 		t->y = y + off;
@@ -535,22 +538,22 @@ void v_mul_64xN_Nx64(packed_matrix_t *matrix,
 	task.run = inner_thread_run;
 
 	for (i = 0; i < matrix->num_threads - 1; i++) {
-		task.data = matrix->tasks + i;
-		threadpool_add_task(matrix->threadpool, &task, 0);
+		task.data = cpudata->tasks + i;
+		threadpool_add_task(cpudata->threadpool, &task, 0);
 	}
-	inner_thread_run(matrix->tasks + i, i);
+	inner_thread_run(cpudata->tasks + i, i);
 
 	/* All the scratch vectors used by threads get 
 	   xor-ed into the final xy vector */
 
-	memcpy(xy, matrix->thread_data[i].tmp_b, 
+	memcpy(xy, cpudata->thread_data[i].tmp_b, 
 			64 * sizeof(uint64));
 
 	if (i > 0) {
-		threadpool_drain(matrix->threadpool, 1);
+		threadpool_drain(cpudata->threadpool, 1);
 
 		for (i = 0; i < matrix->num_threads - 1; i++) {
-			thread_data_t *t = matrix->thread_data + i;
+			thread_data_t *t = cpudata->thread_data + i;
 
 			v_xor(xy, t->tmp_b, 64);
 		}
