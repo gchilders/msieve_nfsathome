@@ -14,25 +14,6 @@ $Id$
 
 #include "lanczos.h"
 
-void accum_xor(uint64 *dest, uint64 *src, uint32 n) {
-
-	uint32 i;
-
-	for (i = 0; i < (n & ~7); i += 8) {
-		dest[i + 0] ^= src[i + 0];
-		dest[i + 1] ^= src[i + 1];
-		dest[i + 2] ^= src[i + 2];
-		dest[i + 3] ^= src[i + 3];
-		dest[i + 4] ^= src[i + 4];
-		dest[i + 5] ^= src[i + 5];
-		dest[i + 6] ^= src[i + 6];
-		dest[i + 7] ^= src[i + 7];
-	}
-	for (; i < n; i++)
-		dest[i] ^= src[i];
-}
-
-
 #ifdef HAVE_MPI
 
 	/* The following is a functional replacement for
@@ -115,8 +96,8 @@ static void global_xor_async(uint64 *send_buf, uint64 *recv_buf,
 
 		/* combine the new chunk with our own */
 
-		accum_xor(curr_buf + m * chunk,
-			  send_buf + m * chunk, size);
+		v_xor(curr_buf + m * chunk,
+		      send_buf + m * chunk, size);
 		
 		/* now wait for the send to end */
 
@@ -158,10 +139,13 @@ static void global_xor_async(uint64 *send_buf, uint64 *recv_buf,
 }
 
 /*------------------------------------------------------------------*/
-void global_xor(uint64 *send_buf, uint64 *recv_buf, 
+void global_xor(void *send_buf_in, void *recv_buf_in, 
 		uint32 total_size, uint32 num_nodes, 
 		uint32 my_id, MPI_Comm comm) {
 	
+	uint64 *send_buf = (uint64 *)send_buf_in;
+	uint64 *recv_buf = (uint64 *)recv_buf_in;
+
 	/* only get fancy for large buffers; even the
 	   fancy method is only faster when many nodes 
 	   are involved */
@@ -198,11 +182,15 @@ void global_chunk_info(uint32 total_size, uint32 num_nodes,
 }
 
 /*------------------------------------------------------------------*/
-void global_xor_scatter(uint64 *send_buf, uint64 *recv_buf, 
-			uint64 *scratch, uint32 total_size, 
+void global_xor_scatter(void *send_buf_in, void *recv_buf_in, 
+			void *scratch_in, uint32 total_size, 
 			uint32 num_nodes, uint32 my_id, 
 			MPI_Comm comm) {
 	
+	uint64 *send_buf = (uint64 *)send_buf_in;
+	uint64 *recv_buf = (uint64 *)recv_buf_in;
+	uint64 *scratch = (uint64 *)scratch_in;
+
 	uint32 i;
 	uint32 m, size, chunk, remainder;
 	uint32 next_id, prev_id;
@@ -258,7 +246,7 @@ void global_xor_scatter(uint64 *send_buf, uint64 *recv_buf,
         
 		/* combine the new chunk with our own */
         
-		accum_xor(send_buf + m * chunk, scratch, size);
+		v_xor(send_buf + m * chunk, scratch, size);
 		
 		/* now wait for the send to end */
         
@@ -288,7 +276,7 @@ void global_xor_scatter(uint64 *send_buf, uint64 *recv_buf,
     
 	/* combine the new chunk with our own */
     
-   	accum_xor(recv_buf, send_buf + m * chunk, size);
+   	v_xor(recv_buf, send_buf + m * chunk, size);
     
 	/* now wait for the send to end */
     
@@ -296,10 +284,13 @@ void global_xor_scatter(uint64 *send_buf, uint64 *recv_buf,
 }
 
 /*------------------------------------------------------------------*/
-void global_allgather(uint64 *send_buf, uint64 *recv_buf, 
+void global_allgather(void *send_buf_in, void *recv_buf_in, 
                         uint32 total_size, uint32 num_nodes, 
                         uint32 my_id, MPI_Comm comm) {
 	
+	uint64 *send_buf = (uint64 *)send_buf_in;
+	uint64 *recv_buf = (uint64 *)recv_buf_in;
+
 	uint32 i;
 	uint32 size, chunk, remainder;
 	uint32 next_id, prev_id;

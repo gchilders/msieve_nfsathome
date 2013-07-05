@@ -15,6 +15,76 @@ $Id$
 #include "lanczos.h"
 
 /*-------------------------------------------------------------------*/
+void *v_alloc(uint32 n) {
+
+	return malloc(n * sizeof(uint64));
+}
+
+void v_free(void *v) {
+
+	free(v);
+}
+
+void v_copyin(void *dest, uint64 *src, uint32 n) {
+
+	memcpy(dest, src, n * sizeof(uint64));
+}
+
+void v_copy(void *dest, void *src, uint32 n) {
+
+	memcpy(dest, src, n * sizeof(uint64));
+}
+
+void v_copyout(uint64 *dest, void *src, uint32 n) {
+
+	memcpy(dest, src, n * sizeof(uint64));
+}
+
+void v_clear(void *v, uint32 n) {
+
+	memset(v, 0, n * sizeof(uint64));
+}
+
+void v_xor(void *dest_in, void *src_in, uint32 n) {
+
+	uint64 *src = (uint64 *)src_in;
+	uint64 *dest = (uint64 *)dest_in;
+	uint32 i;
+
+	for (i = 0; i < (n & ~7); i += 8) {
+		dest[i + 0] ^= src[i + 0];
+		dest[i + 1] ^= src[i + 1];
+		dest[i + 2] ^= src[i + 2];
+		dest[i + 3] ^= src[i + 3];
+		dest[i + 4] ^= src[i + 4];
+		dest[i + 5] ^= src[i + 5];
+		dest[i + 6] ^= src[i + 6];
+		dest[i + 7] ^= src[i + 7];
+	}
+	for (; i < n; i++)
+		dest[i] ^= src[i];
+}
+
+void v_mask(void *v_in, uint64 mask, uint32 n) {
+
+	uint64 *v = (uint64 *)v_in;
+	uint32 i;
+
+	for (i = 0; i < (n & ~7); i += 8) {
+		v[i + 0] &= mask;
+		v[i + 1] &= mask;
+		v[i + 2] &= mask;
+		v[i + 3] &= mask;
+		v[i + 4] &= mask;
+		v[i + 5] &= mask;
+		v[i + 6] &= mask;
+		v[i + 7] &= mask;
+	}
+	for (; i < n; i++)
+		v[i] &= mask;
+}
+
+/*-------------------------------------------------------------------*/
 static void core_Nx64_64x64_acc(uint64 *v, uint64 *c,
 			uint64 *y, uint32 n) {
 
@@ -216,10 +286,12 @@ static void outer_thread_run(void *data, int thread_num)
 	core_Nx64_64x64_acc(t->x, t->b, t->y, t->vsize);
 }
 
-void tmul_Nx64_64x64_acc(packed_matrix_t *matrix, 
-			uint64 *v, uint64 *x,
-			uint64 *y, uint32 n) {
+void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix, 
+			void *v_in, uint64 *x,
+			void *y_in, uint32 n) {
 
+	uint64 *v = (uint64 *)v_in;
+	uint64 *y = (uint64 *)y_in;
 	uint32 i;
 	uint64 c[8 * 256];
 	uint32 vsize = matrix->vsize;
@@ -433,12 +505,14 @@ static void inner_thread_run(void *data, int thread_num)
 	mul_64xN_Nx64(t->x, t->y, t->tmp_b, t->vsize);
 }
 
-void tmul_64xN_Nx64(packed_matrix_t *matrix,
-		   uint64 *x, uint64 *y,
+void v_mul_64xN_Nx64(packed_matrix_t *matrix,
+		   void *x_in, void *y_in,
 		   uint64 *xy, uint32 n) {
 
 
-	uint32 i, j;
+	uint64 *x = (uint64 *)x_in;
+	uint64 *y = (uint64 *)y_in;
+	uint32 i;
 	uint32 vsize = matrix->vsize;
 	uint32 off;
 	task_control_t task = {NULL, NULL, NULL, NULL};
@@ -478,7 +552,7 @@ void tmul_64xN_Nx64(packed_matrix_t *matrix,
 		for (i = 0; i < matrix->num_threads - 1; i++) {
 			thread_data_t *t = matrix->thread_data + i;
 
-			accum_xor(xy, t->tmp_b, 64);
+			v_xor(xy, t->tmp_b, 64);
 		}
 	}
 

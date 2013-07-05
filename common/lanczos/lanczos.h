@@ -172,10 +172,10 @@ void packed_matrix_free(packed_matrix_t *packed_matrix);
 
 size_t packed_matrix_sizeof(packed_matrix_t *packed_matrix);
 
-void mul_MxN_Nx64(packed_matrix_t *A, uint64 *x, uint64 *scratch);
+void mul_MxN_Nx64(packed_matrix_t *A, void *x, void *scratch);
 
-void mul_sym_NxN_Nx64(packed_matrix_t *A, uint64 *x, 
-			uint64 *b, uint64 *scratch);
+void mul_sym_NxN_Nx64(packed_matrix_t *A, void *x, 
+			void *b, void *scratch);
 
 /* for big jobs, we use a multithreaded framework that calls
    these routines for the heavy lifting */
@@ -188,41 +188,48 @@ void mul_trans_packed_core(void *data, int thread_num);
 
 void mul_trans_packed_small_core(void *data, int thread_num);
 
-/* top-level calls for vector-vector operations */
-
-/* multi-threaded plus MPI */
-
-void tmul_Nx64_64x64_acc(packed_matrix_t *A, uint64 *v, uint64 *x, 
-			uint64 *y, uint32 n);
-
-void tmul_64xN_Nx64(packed_matrix_t *A, uint64 *x, uint64 *y, 
-			uint64 *xy, uint32 n);
-
 #ifdef HAVE_MPI
-void global_xor(uint64 *send_buf, uint64 *recv_buf, 
+void global_xor(void *send_buf, void *recv_buf, 
 		uint32 bufsize, uint32 mpi_nodes, 
 		uint32 mpi_rank, MPI_Comm comm);
 
 void global_chunk_info(uint32 total_size, uint32 num_nodes, 
 		uint32 my_id, uint32 *chunk_size, uint32 *chunk_start);
 
-void global_allgather(uint64 *send_buf, uint64 *recv_buf, 
+void global_allgather(void *send_buf, void *recv_buf, 
                         uint32 bufsize, uint32 mpi_nodes, 
                         uint32 mpi_rank, MPI_Comm comm);
 
-void global_xor_scatter(uint64 *send_buf, uint64 *recv_buf, 
-			uint64 *scratch, uint32 bufsize, 
+void global_xor_scatter(void *send_buf, void *recv_buf, 
+			void *scratch, uint32 bufsize, 
 			uint32 mpi_nodes, uint32 mpi_rank, 
 			MPI_Comm comm);
 #endif
+
+/* top-level calls for vector-vector operations */
+
+void *v_alloc(uint32 n);
+void v_free(void *v);
+void v_copyin(void *dest, uint64 *src, uint32 n);
+void v_copy(void *dest, void *src, uint32 n);
+void v_copyout(uint64 *dest, void *src, uint32 n);
+void v_clear(void *v, uint32 n);
+void v_xor(void *dest, void *src, uint32 n);
+void v_mask(void *v, uint64 mask, uint32 n);
+
+/* multi-threaded plus MPI */
+
+void v_mul_Nx64_64x64_acc(packed_matrix_t *A, void *v, uint64 *x, 
+			void *y, uint32 n);
+
+void v_mul_64xN_Nx64(packed_matrix_t *A, void *x, void *y, 
+			uint64 *xy, uint32 n);
 
 /* single-threaded */
 
 void mul_Nx64_64x64_acc(uint64 *v, uint64 *x, uint64 *y, uint32 n);
 
 void mul_64xN_Nx64(uint64 *x, uint64 *y, uint64 *xy, uint32 n);
-
-void accum_xor(uint64 *dest, uint64 *src, uint32 n);
 
 #ifdef __cplusplus
 }
