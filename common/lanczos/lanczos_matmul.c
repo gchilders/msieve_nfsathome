@@ -232,7 +232,7 @@ void packed_matrix_init(msieve_obj *obj,
 
 	p->num_threads = num_threads = MIN(num_threads, MAX_THREADS);
 
-	if (max_nrows <= MIN_NROWS_TO_PACK) {
+/*XXX 	if (max_nrows <= MIN_NROWS_TO_PACK) */ {
 		matrix_extra_init(obj, p);
 		return;
 	}
@@ -376,19 +376,16 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 }
 
 /*-------------------------------------------------------------------*/
-void mul_MxN_Nx64(packed_matrix_t *A, void *x_in, 
-			void *scratch_in) {
+void mul_MxN_Nx64(packed_matrix_t *A, void *x, 
+			void *scratch) {
     
 	/* Multiply the vector x[] by the matrix A and put the 
 	   result in scratch[]. The MPI version needs an extra
 	   scratch array because MPI reduction operations really
 	   want to be out-of-place */
 
-	uint64 *x = (uint64 *)x_in;
-	uint64 *scratch = (uint64 *)scratch_in;
-
 #ifdef HAVE_MPI
-	uint64 *scratch2 = scratch + MAX(A->ncols, A->nrows);
+	uint64 *scratch2 = (uint64 *)scratch + MAX(A->ncols, A->nrows);
 
 	if (A->mpi_size <= 1) {
 #endif
@@ -416,20 +413,16 @@ void mul_MxN_Nx64(packed_matrix_t *A, void *x_in,
 }
 
 /*-------------------------------------------------------------------*/
-void mul_sym_NxN_Nx64(packed_matrix_t *A, void *x_in, 
-			void *b_in, void *scratch_in) {
+void mul_sym_NxN_Nx64(packed_matrix_t *A, void *x, 
+			void *b, void *scratch) {
 
 	/* Multiply x by A and write to scratch, then
 	   multiply scratch by the transpose of A and
 	   write to b. x may alias b, but the two must
 	   be distinct from scratch */
 
-	uint64 *x = (uint64 *)x_in;
-	uint64 *b = (uint64 *)b_in;
-	uint64 *scratch = (uint64 *)scratch_in;
-
 #ifdef HAVE_MPI
-	uint64 *scratch2 = scratch + MAX(A->ncols, A->nrows);
+	uint64 *scratch2 = (uint64 *)scratch + MAX(A->ncols, A->nrows);
         
 	if (A->mpi_size <= 1) {
 #endif

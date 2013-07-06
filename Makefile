@@ -137,6 +137,13 @@ COMMON_SRCS = \
 	common/util.c
 
 ifeq ($(CUDA),1)
+	COMMON_SRCS += \
+		common/lanczos/gpu/lanczos_matmul_gpu.c \
+		common/lanczos/gpu/lanczos_vv.c
+
+	COMMON_HDR += \
+		common/lanczos/gpu/lanczos_gpu.h
+
 else
 	COMMON_SRCS += \
 		common/lanczos/cpu/lanczos_matmul0.c \
