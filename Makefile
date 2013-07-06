@@ -101,6 +101,13 @@ COMMON_HDR = \
 	include/thread.h \
 	include/util.h
 
+COMMON_GPU_HDR = \
+	common/lanczos/gpu/lanczos_kernel.cu \
+	common/lanczos/gpu/lanczos_gpu.h
+
+COMMON_NOGPU_HDR = \
+	common/lanczos/cpu/lanczos_cpu.h
+
 COMMON_SRCS = \
 	common/filter/clique.c \
 	common/filter/filter.c \
@@ -136,26 +143,30 @@ COMMON_SRCS = \
 	common/thread.c \
 	common/util.c
 
-ifeq ($(CUDA),1)
-	COMMON_SRCS += \
+COMMON_GPU_SRCS = \
 		common/lanczos/gpu/lanczos_matmul_gpu.c \
 		common/lanczos/gpu/lanczos_vv.c
 
-	COMMON_HDR += \
-		common/lanczos/gpu/lanczos_gpu.h
-
-else
-	COMMON_SRCS += \
+COMMON_NOGPU_SRCS = \
 		common/lanczos/cpu/lanczos_matmul0.c \
 		common/lanczos/cpu/lanczos_matmul1.c \
 		common/lanczos/cpu/lanczos_matmul2.c \
 		common/lanczos/cpu/lanczos_vv.c
 
-	COMMON_HDR += \
-		common/lanczos/cpu/lanczos_cpu.h
+ifeq ($(CUDA),1)
+	COMMON_SRCS += $(COMMON_GPU_SRCS)
+	COMMON_HDR += $(COMMON_GPU_HDR)
+	GPU_OBJS += \
+		lanczos_kernel_sm11.ptx \
+		lanczos_kernel_sm20.ptx
+else
+	COMMON_SRCS += $(COMMON_NOGPU_SRCS)
+	COMMON_HDR += $(COMMON_NOGPU_HDR)
 endif
 
 COMMON_OBJS = $(COMMON_SRCS:.c=.o)
+COMMON_GPU_OBJS = $(COMMON_GPU_SRCS:.c=.o)
+COMMON_NOGPU_OBJS = $(COMMON_NOGPU_SRCS:.c=.o)
 
 #---------------------------------- QS file lists -------------------------
 
@@ -179,14 +190,6 @@ QS_OBJS = \
 	mpqs/sqrt.qo \
 	mpqs/sieve_core_generic_32k.qo \
 	mpqs/sieve_core_generic_64k.qo
-
-#---------------------------------- GPU file lists -------------------------
-
-GPU_OBJS = \
-	stage1_core_sm11.ptx \
-	stage1_core_sm13.ptx \
-	stage1_core_sm20.ptx \
-	b40c/built
 
 #---------------------------------- NFS file lists -------------------------
 
@@ -241,28 +244,28 @@ NFS_SRCS = \
 	gnfs/gnfs.c \
 	gnfs/relation.c
 
-NFS_OBJS = $(NFS_SRCS:.c=.no)
-
 NFS_GPU_SRCS = \
 	gnfs/poly/stage1/stage1_sieve_gpu.c
-
-NFS_GPU_OBJS = $(NFS_GPU_SRCS:.c=.no)
 
 NFS_NOGPU_SRCS = \
 	gnfs/poly/stage1/stage1_sieve_cpu.c
 
-NFS_NOGPU_OBJS = $(NFS_NOGPU_SRCS:.c=.no)
-
 ifeq ($(CUDA),1)
 	NFS_HDR += $(NFS_GPU_HDR)
 	NFS_SRCS += $(NFS_GPU_SRCS)
-	NFS_OBJS += $(NFS_GPU_OBJS)
+	GPU_OBJS += \
+		stage1_core_sm11.ptx \
+		stage1_core_sm13.ptx \
+		stage1_core_sm20.ptx \
+		b40c/built
 else
 	NFS_HDR += $(NFS_NOGPU_HDR)
 	NFS_SRCS += $(NFS_NOGPU_SRCS)
-	NFS_OBJS += $(NFS_NOGPU_OBJS)
-	GPU_OBJS =
 endif
+
+NFS_OBJS = $(NFS_SRCS:.c=.no)
+NFS_GPU_OBJS = $(NFS_GPU_SRCS:.c=.no)
+NFS_NOGPU_OBJS = $(NFS_NOGPU_SRCS:.c=.no)
 
 #---------------------------------- make targets -------------------------
 
@@ -286,7 +289,8 @@ all: $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(GPU_OBJS)
 clean:
 	cd b40c && make clean WIN=$(WIN) && cd ..
 	rm -f msieve msieve.exe libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
-		$(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) *.ptx
+		$(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) \
+		$(COMMON_GPU_OBJS) $(COMMON_NOGPU_OBJS) *.ptx
 
 #----------------------------------------- build rules ----------------------
 
@@ -324,6 +328,12 @@ stage1_core_sm13.ptx: $(NFS_GPU_HDR)
 	$(NVCC) -arch sm_13 -ptx -o $@ $<
 
 stage1_core_sm20.ptx: $(NFS_GPU_HDR)
+	$(NVCC) -arch sm_20 -ptx -o $@ $<
+
+lanczos_kernel_sm11.ptx: $(COMMON_GPU_HDR)
+	$(NVCC) -arch sm_11 -ptx -o $@ $<
+
+lanczos_kernel_sm20.ptx: $(COMMON_GPU_HDR)
 	$(NVCC) -arch sm_20 -ptx -o $@ $<
 
 b40c/built:

@@ -180,7 +180,7 @@ void global_xor_scatter(void *send_buf, void *recv_buf,
 
 /* top-level calls for vector-vector operations */
 
-void *v_alloc(uint32 n);
+void *v_alloc(uint32 n, void *extra);
 void v_free(void *v);
 void v_copyin(void *dest, uint64 *src, uint32 n);
 void v_copy(void *dest, void *src, uint32 n);

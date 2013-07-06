@@ -15,7 +15,7 @@ $Id$
 #include "lanczos_cpu.h"
 
 /*-------------------------------------------------------------------*/
-void *v_alloc(uint32 n) {
+void *v_alloc(uint32 n, void *extra) {
 
 	return malloc(n * sizeof(uint64));
 }

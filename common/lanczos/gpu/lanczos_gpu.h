@@ -15,6 +15,7 @@ $Id$
 #ifndef _COMMON_LANCZOS_GPU_LANCZOS_GPU_H_
 #define _COMMON_LANCZOS_GPU_LANCZOS_GPU_H_
 
+#include <cuda_xface.h>
 #include "../lanczos.h"
 
 #ifdef __cplusplus
@@ -25,7 +26,29 @@ extern "C" {
 
 typedef struct {
 
+	gpu_info_t *gpu_info;
+
+	CUcontext gpu_context;
+	CUmodule gpu_module;
+
+	gpu_launch_t *launch;
 } gpudata_t;
+
+
+typedef struct {
+	gpudata_t *gpudata;
+	uint64 *host_vec;
+	CUdeviceptr gpu_vec;
+} gpuvec_t;
+
+#define LANCZOS_GPU_DEBUG
+
+/* ordinal list of GPU kernels */
+enum {
+	GPU_K_MASK = 0,
+	GPU_K_XOR,
+	NUM_GPU_FUNCTIONS /* must be last */
+};
 
 
 #ifdef __cplusplus

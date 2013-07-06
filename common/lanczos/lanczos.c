@@ -873,18 +873,19 @@ static uint64 * block_lanczos_core(msieve_obj *obj,
 	   and for scatter-gather operations */
 
 	scratch = v_alloc(2 * MAX(packed_matrix->nrows, 
-				packed_matrix->ncols));
+				packed_matrix->ncols),
+			  packed_matrix->extra);
 #else	
 	/* without MPI, all vectors are the maximum size */
-	scratch = v_alloc(n);
+	scratch = v_alloc(n, packed_matrix->extra);
 #endif    
 
-	v[0] = v_alloc(n);
-	v[1] = v_alloc(n);
-	v[2] = v_alloc(n);
-	vnext = v_alloc(n);
-	x = v_alloc(n);
-	v0 = v_alloc(n);
+	v[0] = v_alloc(n, packed_matrix->extra);
+	v[1] = v_alloc(n, packed_matrix->extra);
+	v[2] = v_alloc(n, packed_matrix->extra);
+	vnext = v_alloc(n, packed_matrix->extra);
+	x = v_alloc(n, packed_matrix->extra);
+	v0 = v_alloc(n, packed_matrix->extra);
     
 	/* 64x64 data */
 
