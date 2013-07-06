@@ -224,14 +224,18 @@ void packed_matrix_init(msieve_obj *obj,
 	p->mpi_la_col_grid = obj->mpi_la_col_grid;
 #endif
 
-	if (max_nrows <= MIN_NROWS_TO_PACK)
-		return;
-
 	/* determine the number of threads to use */
 
 	num_threads = obj->num_threads;
 	if (num_threads < 2 || max_nrows < MIN_NROWS_TO_THREAD)
 		num_threads = 1;
+
+	p->num_threads = num_threads = MIN(num_threads, MAX_THREADS);
+
+	if (max_nrows <= MIN_NROWS_TO_PACK) {
+		matrix_extra_init(obj, p);
+		return;
+	}
 
 	/* determine the block sizes. We assume that the largest
 	   cache in the system is unified and shared across all
@@ -270,7 +274,6 @@ void packed_matrix_init(msieve_obj *obj,
 				block_size, superblock_size,
 				obj->cache_size2 / 1024);
 
-	p->num_threads = num_threads = MIN(num_threads, MAX_THREADS);
 	p->vsize = ncols / num_threads;
 	p->unpacked_cols = NULL;
 	p->first_block_size = first_block_size;

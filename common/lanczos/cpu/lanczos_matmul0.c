@@ -267,19 +267,16 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p) {
 /*-------------------------------------------------------------------*/
 void matrix_extra_free(packed_matrix_t *p) {
 
-	if (p->unpacked_cols == NULL) {
+	cpudata_t *cpudata = (cpudata_t *)p->extra;
 
-		cpudata_t *cpudata = (cpudata_t *)p->extra;
-
-		if (p->num_threads > 1) {
-			threadpool_drain(cpudata->threadpool, 1);
-			threadpool_free(cpudata->threadpool);
-		}
-		matrix_thread_free(p, p->num_threads - 1);
-
-		free(cpudata->tasks);
-		free(cpudata);
+	if (p->num_threads > 1) {
+		threadpool_drain(cpudata->threadpool, 1);
+		threadpool_free(cpudata->threadpool);
 	}
+	matrix_thread_free(p, p->num_threads - 1);
+
+	free(cpudata->tasks);
+	free(cpudata);
 }
 
 /*-------------------------------------------------------------------*/
