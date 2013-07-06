@@ -12,6 +12,7 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
+typedef unsigned char uint8;
 typedef int int32;
 typedef unsigned int uint32;
 typedef unsigned long long uint64;
@@ -43,6 +44,28 @@ lanczos_kernel_xor(uint64 *dest, uint64 *src, uint32 n)
 
 	for (i = my_threadid; i < n; i += num_threads)
 		dest[i] ^= src[i];
+}
+
+/*------------------------------------------------------------------------*/
+__global__ void
+lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
+			uint64 *lookup, uint32 n)
+{
+	uint32 i;
+	uint32 num_threads = gridDim.x * blockDim.x;
+	uint32 my_threadid = blockIdx.x * blockDim.x + threadIdx.x;
+
+	for (i = my_threadid; i < n; i += num_threads) {
+		uint64 word = v[i];
+		y[i] ^=  lookup[ 0*256 + ((uint8)(word >>  0)) ]
+		       ^ lookup[ 1*256 + ((uint8)(word >>  8)) ]
+		       ^ lookup[ 2*256 + ((uint8)(word >> 16)) ]
+		       ^ lookup[ 3*256 + ((uint8)(word >> 24)) ]
+		       ^ lookup[ 4*256 + ((uint8)(word >> 32)) ]
+		       ^ lookup[ 5*256 + ((uint8)(word >> 40)) ]
+		       ^ lookup[ 6*256 + ((uint8)(word >> 48)) ]
+		       ^ lookup[ 7*256 + ((uint8)(word >> 56)) ];
+	}
 }
 
 #ifdef __cplusplus

@@ -290,34 +290,51 @@ static void mul_Nx64_64x64_precomp(uint64 *c, uint64 *x) {
 }
 
 /*-------------------------------------------------------------------*/
-void mul_Nx64_64x64_acc(uint64 *v, uint64 *x,
-			uint64 *y, uint32 n) {
-
-	/* let v[][] be a n x 64 matrix with elements in GF(2), 
-	   represented as an array of n 64-bit words. Let c[][]
-	   be an 8 x 256 scratch matrix of 64-bit words.
-	   This code multiplies v[][] by the 64x64 matrix 
-	   x[][], then XORs the n x 64 result into y[][] */
-
-	uint64 c[8 * 256];
-
-	mul_Nx64_64x64_precomp(c, x);
-
-	core_Nx64_64x64_acc(v, c, y, n);
-}
-
-/*-------------------------------------------------------------------*/
 void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix, 
 			void *v_in, uint64 *x,
 			void *y_in, uint32 n) {
 
-	gpudata_t *gpudata = (gpudata_t *)matrix->extra;
+	uint64 c[8 * 256];
 	gpuvec_t *v = (gpuvec_t *)v_in;
 	gpuvec_t *y = (gpuvec_t *)y_in;
+	gpudata_t *d = (gpudata_t *)matrix->extra;
+	gpu_launch_t *launch = d->launch + GPU_K_INNER_PROD;
+	gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
+	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
+				launch->threads_per_block;
 
-	mul_Nx64_64x64_acc(v->host_vec, x, y->host_vec, n);
+	mul_Nx64_64x64_precomp(c, x);
 
-	CUDA_TRY(cuMemcpyHtoD(y->gpu_vec, y->host_vec, n * sizeof(uint64)))
+	CUDA_TRY(cuMemcpyHtoD(d->v_scratch, c, 
+				256 * 8 * sizeof(uint64)))
+
+	gpu_args[0].ptr_arg = (void *)(size_t)y->gpu_vec;
+	gpu_args[1].ptr_arg = (void *)(size_t)v->gpu_vec;
+	gpu_args[2].ptr_arg = (void *)(size_t)d->v_scratch;
+	gpu_args[3].uint32_arg = n;
+	gpu_launch_set(launch, gpu_args);
+
+	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
+
+#ifdef LANCZOS_GPU_DEBUG
+	{
+		uint64 *tmp = (uint64 *)xmalloc(n * sizeof(uint64));
+		uint32 i;
+
+		core_Nx64_64x64_acc(v->host_vec, c, y->host_vec, n);
+		CUDA_TRY(cuMemcpyDtoH(tmp, y->gpu_vec, n * sizeof(uint64)))
+
+		for (i = 0; i < n; i++) {
+			if (y->host_vec[i] != tmp[i]) {
+				printf("error offset %u\n", i);
+				exit(-1);
+			}
+		}
+		free(tmp);
+	}
+#else
+	CUDA_TRY(cuMemcpyDtoH(y->host_vec, y->gpu_vec, n * sizeof(uint64)))
+#endif
 }
 
 /*-------------------------------------------------------------------*/

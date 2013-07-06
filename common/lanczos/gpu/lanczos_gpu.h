@@ -32,6 +32,8 @@ typedef struct {
 	CUmodule gpu_module;
 
 	gpu_launch_t *launch;
+
+	CUdeviceptr v_scratch;
 } gpudata_t;
 
 
@@ -47,6 +49,7 @@ typedef struct {
 enum {
 	GPU_K_MASK = 0,
 	GPU_K_XOR,
+	GPU_K_INNER_PROD,
 	NUM_GPU_FUNCTIONS /* must be last */
 };
 

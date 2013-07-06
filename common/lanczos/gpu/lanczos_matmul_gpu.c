@@ -92,6 +92,7 @@ static const char * gpu_kernel_names[] =
 {
 	"lanczos_kernel_mask",
 	"lanczos_kernel_xor",
+	"lanczos_kernel_inner_prod",
 };
 
 static const gpu_arg_type_list_t gpu_kernel_args[] = 
@@ -104,8 +105,18 @@ static const gpu_arg_type_list_t gpu_kernel_args[] =
 		  GPU_ARG_UINT32,
 		}
 	},
+	/* lanczos_kernel_xor */
 	{ 3,
 		{
+		  GPU_ARG_PTR,
+		  GPU_ARG_PTR,
+		  GPU_ARG_UINT32,
+		}
+	},
+	/* lanczos_kernel_inner_prod */
+	{ 4,
+		{
+		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
 		  GPU_ARG_UINT32,
@@ -151,6 +162,8 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p) {
 			CU_CTX_BLOCKING_SYNC,
 			d->gpu_info->device_handle))
 
+//	CUDA_TRY(cuCtxSetCacheConfig(CU_FUNC_CACHE_PREFER_L1))
+
 	/* load kernels */
 
 	if (d->gpu_info->compute_version_major >= 2)
@@ -173,6 +186,10 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p) {
 					launch->threads_per_block, 1, 1))
 	}
 
+	/* allocate scratch arrays */
+
+	CUDA_TRY(cuMemAlloc(&d->v_scratch, 256 * 8 * sizeof(uint64)))
+
 	p->extra = d;
 }
 
@@ -180,6 +197,8 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p) {
 void matrix_extra_free(packed_matrix_t *p) {
 
 	gpudata_t *d = (gpudata_t *)p->extra;
+
+	CUDA_TRY(cuMemFree(d->v_scratch))
 
 	free(d->launch);
 
