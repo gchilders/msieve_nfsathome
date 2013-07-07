@@ -47,6 +47,14 @@ lanczos_kernel_xor(uint64 *dest, uint64 *src, uint32 n)
 }
 
 /*------------------------------------------------------------------------*/
+texture<uint2, cudaTextureType1D, cudaReadModeElementType> inner_tex;
+
+__device__ uint64
+uint2_to_uint64(uint2 v)
+{
+	return (uint64)v.y << 32 | v.x;
+}
+
 __global__ void
 lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
 			uint64 *lookup, uint32 n)
@@ -57,14 +65,22 @@ lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
 
 	for (i = my_threadid; i < n; i += num_threads) {
 		uint64 word = v[i];
-		y[i] ^=  lookup[ 0*256 + ((uint8)(word >>  0)) ]
-		       ^ lookup[ 1*256 + ((uint8)(word >>  8)) ]
-		       ^ lookup[ 2*256 + ((uint8)(word >> 16)) ]
-		       ^ lookup[ 3*256 + ((uint8)(word >> 24)) ]
-		       ^ lookup[ 4*256 + ((uint8)(word >> 32)) ]
-		       ^ lookup[ 5*256 + ((uint8)(word >> 40)) ]
-		       ^ lookup[ 6*256 + ((uint8)(word >> 48)) ]
-		       ^ lookup[ 7*256 + ((uint8)(word >> 56)) ];
+		y[i] ^=  uint2_to_uint64(tex1Dfetch(inner_tex, 
+					0*256 + (int)((word >>  0) & 0xff)))
+		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
+					1*256 + (int)((word >>  8) & 0xff)))
+		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
+					2*256 + (int)((word >> 16) & 0xff)))
+		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
+					3*256 + (int)((word >> 24) & 0xff)))
+		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
+					4*256 + (int)((word >> 32) & 0xff)))
+		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
+					5*256 + (int)((word >> 40) & 0xff)))
+		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
+					6*256 + (int)((word >> 48) & 0xff)))
+		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
+					7*256 + (int)((word >> 56) & 0xff)));
 	}
 }
 

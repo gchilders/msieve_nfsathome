@@ -33,7 +33,10 @@ typedef struct {
 
 	gpu_launch_t *launch;
 
+	/* inner product data */
+
 	CUdeviceptr v_scratch;
+	CUtexref inner_texref;
 } gpudata_t;
 
 

@@ -182,6 +182,8 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p) {
 		gpu_launch_init(d->gpu_module, gpu_kernel_names[i],
 				gpu_kernel_args + i, launch);
 
+		launch->threads_per_block = MIN(256, launch->threads_per_block);
+
 		CUDA_TRY(cuFuncSetBlockShape(launch->kernel_func,
 					launch->threads_per_block, 1, 1))
 	}
@@ -190,6 +192,19 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p) {
 
 	CUDA_TRY(cuMemAlloc(&d->v_scratch, 256 * 8 * sizeof(uint64)))
 
+	/* set the texture reference used by the inner product */
+	
+	CUDA_TRY(cuModuleGetTexRef(&d->inner_texref, 
+				d->gpu_module, "inner_tex"))
+
+	CUDA_TRY(cuTexRefSetAddress(NULL, d->inner_texref, 
+				d->v_scratch, 256 * 8 * sizeof(uint64)))
+
+	CUDA_TRY(cuTexRefSetFlags(d->inner_texref, 
+				CU_TRSF_READ_AS_INTEGER))
+
+	CUDA_TRY(cuTexRefSetFormat(d->inner_texref,
+				CU_AD_FORMAT_UNSIGNED_INT32, 2))
 	p->extra = d;
 }
 
