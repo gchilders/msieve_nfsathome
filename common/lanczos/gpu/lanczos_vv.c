@@ -305,12 +305,12 @@ void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix,
 
 	mul_Nx64_64x64_precomp(c, x);
 
-	CUDA_TRY(cuMemcpyHtoD(d->v_scratch, c, 
+	CUDA_TRY(cuMemcpyHtoD(d->inner_scratch, c, 
 				256 * 8 * sizeof(uint64)))
 
 	gpu_args[0].ptr_arg = (void *)(size_t)y->gpu_vec;
 	gpu_args[1].ptr_arg = (void *)(size_t)v->gpu_vec;
-	gpu_args[2].ptr_arg = (void *)(size_t)d->v_scratch;
+	gpu_args[2].ptr_arg = (void *)(size_t)d->inner_scratch;
 	gpu_args[3].uint32_arg = n;
 	gpu_launch_set(launch, gpu_args);
 
@@ -513,9 +513,45 @@ void v_mul_64xN_Nx64(packed_matrix_t *matrix,
 		   uint64 *xy, uint32 n) {
 
 
-	gpudata_t *gpudata = (gpudata_t *)matrix->extra;
 	gpuvec_t *x = (gpuvec_t *)x_in;
 	gpuvec_t *y = (gpuvec_t *)y_in;
+	gpudata_t *d = (gpudata_t *)matrix->extra;
+	gpu_launch_t *launch = d->launch + GPU_K_OUTER_PROD;
+	gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
+	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
+				launch->threads_per_block;
 
-	mul_64xN_Nx64(x->host_vec, y->host_vec, xy, n);
+	CUDA_TRY(cuMemsetD8(d->outer_scratch, 0, 64 * sizeof(uint64)));
+
+	gpu_args[0].ptr_arg = (void *)(size_t)x->gpu_vec;
+	gpu_args[1].ptr_arg = (void *)(size_t)y->gpu_vec;
+	gpu_args[2].ptr_arg = (void *)(size_t)d->outer_scratch;
+	gpu_args[3].uint32_arg = n;
+	gpu_launch_set(launch, gpu_args);
+
+	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
+
+#ifdef LANCZOS_GPU_DEBUG
+	{
+		uint64 c[8 * 256];
+		uint64 tmp[64];
+		uint32 i;
+
+		core_64xN_Nx64(x->host_vec, c, y->host_vec, n);
+
+		mul_64xN_Nx64_postproc(c, xy);
+
+		CUDA_TRY(cuMemcpyDtoH(tmp, d->outer_scratch, 
+					64 * sizeof(uint64)))
+
+		for (i = 0; i < 64; i++) {
+			if (xy[i] != tmp[i]) {
+				printf("error offset %u\n", i);
+				exit(-1);
+			}
+		}
+	}
+#else
+	CUDA_TRY(cuMemcpyDtoH(xy, d->outer_scratch, 64 * sizeof(uint64)))
+#endif
 }

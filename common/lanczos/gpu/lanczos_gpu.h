@@ -35,8 +35,13 @@ typedef struct {
 
 	/* inner product data */
 
-	CUdeviceptr v_scratch;
+	CUdeviceptr inner_scratch;
 	CUtexref inner_texref;
+
+	/* outer product data */
+
+	CUdeviceptr outer_scratch;
+
 } gpudata_t;
 
 
@@ -53,6 +58,7 @@ enum {
 	GPU_K_MASK = 0,
 	GPU_K_XOR,
 	GPU_K_INNER_PROD,
+	GPU_K_OUTER_PROD,
 	NUM_GPU_FUNCTIONS /* must be last */
 };
 

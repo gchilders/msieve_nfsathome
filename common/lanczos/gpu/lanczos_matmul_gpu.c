@@ -93,6 +93,7 @@ static const char * gpu_kernel_names[] =
 	"lanczos_kernel_mask",
 	"lanczos_kernel_xor",
 	"lanczos_kernel_inner_prod",
+	"lanczos_kernel_outer_prod",
 };
 
 static const gpu_arg_type_list_t gpu_kernel_args[] = 
@@ -114,6 +115,15 @@ static const gpu_arg_type_list_t gpu_kernel_args[] =
 		}
 	},
 	/* lanczos_kernel_inner_prod */
+	{ 4,
+		{
+		  GPU_ARG_PTR,
+		  GPU_ARG_PTR,
+		  GPU_ARG_PTR,
+		  GPU_ARG_UINT32,
+		}
+	},
+	/* lanczos_kernel_outer_prod */
 	{ 4,
 		{
 		  GPU_ARG_PTR,
@@ -190,7 +200,8 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p) {
 
 	/* allocate scratch arrays */
 
-	CUDA_TRY(cuMemAlloc(&d->v_scratch, 256 * 8 * sizeof(uint64)))
+	CUDA_TRY(cuMemAlloc(&d->inner_scratch, 256 * 8 * sizeof(uint64)))
+	CUDA_TRY(cuMemAlloc(&d->outer_scratch, 64 * sizeof(uint64)))
 
 	/* set the texture reference used by the inner product */
 	
@@ -198,7 +209,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p) {
 				d->gpu_module, "inner_tex"))
 
 	CUDA_TRY(cuTexRefSetAddress(NULL, d->inner_texref, 
-				d->v_scratch, 256 * 8 * sizeof(uint64)))
+				d->inner_scratch, 256 * 8 * sizeof(uint64)))
 
 	CUDA_TRY(cuTexRefSetFlags(d->inner_texref, 
 				CU_TRSF_READ_AS_INTEGER))
@@ -213,7 +224,8 @@ void matrix_extra_free(packed_matrix_t *p) {
 
 	gpudata_t *d = (gpudata_t *)p->extra;
 
-	CUDA_TRY(cuMemFree(d->v_scratch))
+	CUDA_TRY(cuMemFree(d->inner_scratch))
+	CUDA_TRY(cuMemFree(d->outer_scratch))
 
 	free(d->launch);
 
