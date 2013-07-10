@@ -494,20 +494,6 @@ static void mul_64xN_Nx64_postproc(uint64 *c, uint64 *xy) {
 }
 
 /*-------------------------------------------------------------------*/
-void mul_64xN_Nx64(uint64 *x, uint64 *y,
-		   uint64 *xy, uint32 n) {
-
-	/* Let x and y be n x 64 matrices. This routine computes
-	   the 64 x 64 matrix xy[][] given by transpose(x) * y */
-
-	uint64 c[8 * 256];
-
-	core_64xN_Nx64(x, c, y, n);
-
-	mul_64xN_Nx64_postproc(c, xy);
-}
-
-/*-------------------------------------------------------------------*/
 void v_mul_64xN_Nx64(packed_matrix_t *matrix,
 		   void *x_in, void *y_in,
 		   uint64 *xy, uint32 n) {

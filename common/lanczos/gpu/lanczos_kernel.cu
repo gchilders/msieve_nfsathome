@@ -93,55 +93,70 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 			uint32 *xy, uint32 n)
 {
 	uint32 i;
-	uint32 limit;
 	uint32 num_threads = gridDim.x * blockDim.x;
 	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
 	uint32 block_id = threadIdx.x;
-	__shared__ uint64 scratch[MAX_OUTER_THREADS];
+	__shared__ uint64 scratch[3 * MAX_OUTER_THREADS];
+	uint64 *s = scratch + (block_id & ~0x1f);
 
-	/* round n up to the next multiple of the block size;
-	   we have to synchronize across the whole block, which
-	   means the loop below must execute only for whole
-	   blocks */
+	scratch[block_id + 0*MAX_OUTER_THREADS] = 0;
+	scratch[block_id + 1*MAX_OUTER_THREADS] = 0;
+	scratch[block_id + 2*MAX_OUTER_THREADS] = 0;
 
-	scratch[block_id] = 0;
-
-	limit = (n + MAX_OUTER_THREADS - 1) &
-			~(MAX_OUTER_THREADS - 1);
-	__syncthreads();
-
-	for (i = grid_id; i < limit; i += num_threads) {
+	for (i = grid_id; i < n; i += num_threads) {
 
 		uint32 j, k;
-		uint64 xi = 0;
-		uint64 yi = 0;
+		uint64 xi = x[i];
+		uint64 yi = y[i];
 
-		if (i < n) {
-			xi = x[i];
-			yi = y[i];
-		}
+		for (j = 0, k = block_id & 0x1f; j < 32; 
+					j++, k = (k + 1) & 0x1f) {
 
-		for (j = 0, k = block_id & 0x3f; j < 64; 
-					j++, k = (k + 1) & 0x3f) {
+			uint32 off = (xi >> (2 * k)) & 0x3;
+			uint64 tmp = yi;
 
-			uint64 tmp = 0;
-			if ((xi >> k) & (uint64)1)
-				tmp = yi;
+			if (off == 0) {
+				tmp = 0;
+				off = 1;
+			}
 
-			scratch[(block_id & ~0x3f) | k] ^= tmp;
-			__syncthreads();
+			s[k + MAX_OUTER_THREADS * (off - 1)] ^= tmp;
 		}
 	}
 
-	for (i = MAX_OUTER_THREADS / 2; i >= 64; i >>= 1) {
-		if (block_id < i)
-			scratch[block_id] ^= scratch[block_id + i];
+	s = scratch + block_id;
+	__syncthreads();
+	s[0*MAX_OUTER_THREADS] ^= s[2*MAX_OUTER_THREADS];
+	s[1*MAX_OUTER_THREADS] ^= s[2*MAX_OUTER_THREADS];
+	__syncthreads();
+
+	for (i = MAX_OUTER_THREADS / 2; i >= 32; i >>= 1) {
+		if (block_id < i) {
+			s[0*MAX_OUTER_THREADS] ^= s[0*MAX_OUTER_THREADS + i];
+			s[1*MAX_OUTER_THREADS] ^= s[1*MAX_OUTER_THREADS + i];
+		}
 		__syncthreads();
 	}
 
-	if (block_id < 128) {
-		uint32 *s = (uint32 *)scratch;
-		atomicXor(&xy[block_id], s[block_id]);
+	if (block_id < 64) {
+		uint32 *t = (uint32 *)scratch;
+
+		i = 4 * (block_id / 2);
+
+		if (block_id % 2 == 0)
+			atomicXor(&xy[i], t[block_id]);
+		else
+			atomicXor(&xy[i + 1], t[block_id]);
+	}
+	else if (block_id < 128) {
+		uint32 *t = (uint32 *)(scratch + MAX_OUTER_THREADS);
+
+		i = 4 * ((block_id - 64) / 2) + 2;
+
+		if (block_id % 2 == 0)
+			atomicXor(&xy[i], t[block_id - 64]);
+		else
+			atomicXor(&xy[i + 1], t[block_id - 64]);
 	}
 }
 
