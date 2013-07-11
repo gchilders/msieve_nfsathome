@@ -192,7 +192,14 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p) {
 		gpu_launch_init(d->gpu_module, gpu_kernel_names[i],
 				gpu_kernel_args + i, launch);
 
-		launch->threads_per_block = MIN(256, launch->threads_per_block);
+/*		if (i == GPU_K_OUTER_PROD) {
+			launch->threads_per_block = MIN(192, 
+					launch->threads_per_block);
+		}
+		else */{
+			launch->threads_per_block = MIN(256, 
+					launch->threads_per_block);
+		}
 
 		CUDA_TRY(cuFuncSetBlockShape(launch->kernel_func,
 					launch->threads_per_block, 1, 1))

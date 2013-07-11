@@ -87,6 +87,7 @@ lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
 /* thanks to Patrick Stach for ideas on this */
 
 #define MAX_OUTER_THREADS 256
+//#define MAX_OUTER_THREADS 192
 
 __global__ void
 lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
@@ -105,14 +106,18 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 
 	for (i = grid_id; i < n; i += num_threads) {
 
-		uint32 j, k;
+		uint32 j; 
+		uint32 k = block_id & 0x1f;
 		uint64 xi = x[i];
 		uint64 yi = y[i];
 
-		for (j = 0, k = block_id & 0x1f; j < 32; 
-					j++, k = (k + 1) & 0x1f) {
+		if (k != 0)
+			xi = (xi >> (2 * k)) | (xi << (64 - (2 * k)));
 
-			uint32 off = (xi >> (2 * k)) & 0x3;
+#pragma unroll
+		for (j = 0; j < 32; j++) {
+
+			uint32 off = (xi >> (2 * j)) & 0x3;
 			uint64 tmp = yi;
 
 			if (off == 0) {
@@ -120,7 +125,8 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 				off = 1;
 			}
 
-			s[k + MAX_OUTER_THREADS * (off - 1)] ^= tmp;
+			s[((k + j) & 0x1f) + 
+				MAX_OUTER_THREADS * (off - 1)] ^= tmp;
 		}
 	}
 
@@ -130,6 +136,7 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 	s[1*MAX_OUTER_THREADS] ^= s[2*MAX_OUTER_THREADS];
 	__syncthreads();
 
+#if MAX_OUTER_THREADS == 256
 	for (i = MAX_OUTER_THREADS / 2; i >= 32; i >>= 1) {
 		if (block_id < i) {
 			s[0*MAX_OUTER_THREADS] ^= s[0*MAX_OUTER_THREADS + i];
@@ -137,6 +144,22 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 		}
 		__syncthreads();
 	}
+
+#elif MAX_OUTER_THREADS == 192
+	if (block_id < 96) {
+		s[0*MAX_OUTER_THREADS] ^= s[0*MAX_OUTER_THREADS + 96];
+		s[1*MAX_OUTER_THREADS] ^= s[1*MAX_OUTER_THREADS + 96];
+	}
+	__syncthreads();
+
+	if (block_id < 32) {
+		s[0*MAX_OUTER_THREADS] ^= s[0*MAX_OUTER_THREADS + 32] ^
+		                          s[0*MAX_OUTER_THREADS + 64];
+		s[1*MAX_OUTER_THREADS] ^= s[1*MAX_OUTER_THREADS + 32] ^
+		                          s[1*MAX_OUTER_THREADS + 64];
+	}
+	__syncthreads();
+#endif
 
 	if (block_id < 64) {
 		uint32 *t = (uint32 *)scratch;

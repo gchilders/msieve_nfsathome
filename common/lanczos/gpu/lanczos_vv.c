@@ -507,6 +507,9 @@ void v_mul_64xN_Nx64(packed_matrix_t *matrix,
 	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 				launch->threads_per_block;
 
+	num_blocks = MIN(num_blocks, 
+			(uint32)(10 * d->gpu_info->num_compute_units));
+
 	CUDA_TRY(cuMemsetD8(d->outer_scratch, 0, 64 * sizeof(uint64)));
 
 	gpu_args[0].ptr_arg = (void *)(size_t)x->gpu_vec;
@@ -515,7 +518,7 @@ void v_mul_64xN_Nx64(packed_matrix_t *matrix,
 	gpu_args[3].uint32_arg = n;
 	gpu_launch_set(launch, gpu_args);
 
-	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
+	CUDA_TRY(cuLaunchGrid(launch->kernel_func, num_blocks, 1))
 
 #ifdef LANCZOS_GPU_DEBUG
 	{
