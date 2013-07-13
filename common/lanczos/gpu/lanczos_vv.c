@@ -246,7 +246,7 @@ static const uint8 graycode[2 * 256] = {
  132, 3,  133, 0,  135, 1,  134, 0,  130, 2,  131, 0,  129, 1,  128, 0,  
 };
 
-static void mul_Nx64_64x64_precomp(uint64 *c, uint64 *x) {
+static void mul_precomp_256x8(uint64 *c, uint64 *x) {
 
 	/* Let c[][] be an 8 x 256 scratch matrix of 64-bit words;
 	   let x[][] be a 64 x 64 matrix
@@ -289,6 +289,39 @@ static void mul_Nx64_64x64_precomp(uint64 *c, uint64 *x) {
 	}
 }
 
+static void mul_precomp_128x10(uint64 *c, uint64 *x) {
+
+	/* As above, except that the main loop breaks 64-bit
+	   words into 10 groups of 7 bits */
+
+	uint32 i;
+	uint64 c0, c1, c2, c3, c4, c5, c6, c7, c8;
+
+	c0 = c1 = c2 = c3 = c4 = c5 = c6 = c7 = c8 = 0;
+
+	c[0*128] = c[1*128] = c[2*128] = c[3*128] = 
+	c[4*128] = c[5*128] = c[6*128] = c[7*128] = 
+	c[8*128] = 0;
+
+	for (i = 1; i < 128; i++) {
+
+		uint32 word = graycode[2 * i];
+		uint32 bit = graycode[2 * i + 1];
+
+		c0 ^= x[0*7 + bit]; c[0*128 + word] = c0;
+		c1 ^= x[1*7 + bit]; c[1*128 + word] = c1;
+		c2 ^= x[2*7 + bit]; c[2*128 + word] = c2;
+		c3 ^= x[3*7 + bit]; c[3*128 + word] = c3;
+		c4 ^= x[4*7 + bit]; c[4*128 + word] = c4;
+		c5 ^= x[5*7 + bit]; c[5*128 + word] = c5;
+		c6 ^= x[6*7 + bit]; c[6*128 + word] = c6;
+		c7 ^= x[7*7 + bit]; c[7*128 + word] = c7;
+		c8 ^= x[8*7 + bit]; c[8*128 + word] = c8;
+	}
+	c[9*128] = 0;
+	c[9*128 + 1] = x[63];
+}
+
 /*-------------------------------------------------------------------*/
 void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix, 
 			void *v_in, uint64 *x,
@@ -303,10 +336,10 @@ void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix,
 	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 				launch->threads_per_block;
 
-	mul_Nx64_64x64_precomp(c, x);
+	mul_precomp_128x10(c, x);
 
 	CUDA_TRY(cuMemcpyHtoD(d->inner_scratch, c, 
-				256 * 8 * sizeof(uint64)))
+				(128*9+2) * sizeof(uint64)))
 
 	gpu_args[0].ptr_arg = (void *)(size_t)y->gpu_vec;
 	gpu_args[1].ptr_arg = (void *)(size_t)v->gpu_vec;
@@ -320,6 +353,8 @@ void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix,
 	{
 		uint64 *tmp = (uint64 *)xmalloc(n * sizeof(uint64));
 		uint32 i;
+
+		mul_precomp_256x8(c, x);
 
 		core_Nx64_64x64_acc(v->host_vec, c, y->host_vec, n);
 		CUDA_TRY(cuMemcpyDtoH(tmp, y->gpu_vec, n * sizeof(uint64)))

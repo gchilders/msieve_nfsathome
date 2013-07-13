@@ -54,6 +54,37 @@ uint2_to_uint64(uint2 v)
 	return (uint64)v.y << 32 | v.x;
 }
 
+__device__ uint32
+bfe(uint64 x, uint32 pos, uint32 bits)
+{
+#if __CUDA_ARCH__ >= 200
+
+	uint32 res;
+	uint32 hi = (uint32)(x >> 32);
+	uint32 lo = (uint32)x;
+
+	if (pos < 32) {
+	       if (pos + bits > 32) {
+			res = ((lo >> pos) | (hi << (32 - pos))) &
+				((1 << bits) - 1);
+	       }
+	       else {
+			asm("bfe.u32 %0, %1, %2, %3; \n\t"
+				: "=r"(res) : "r"(lo), "r"(pos), "r"(bits));
+	       }
+	}
+	else {
+		asm("bfe.u32 %0, %1, %2, %3; \n\t"
+			: "=r"(res) : "r"(hi), "r"(pos - 32), "r"(bits));
+	}
+
+	return res;
+
+#else
+	return (x >> pos) & ((1 << bits) - 1);
+#endif
+}
+
 __global__ void
 lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
 			uint64 *lookup, uint32 n)
@@ -63,23 +94,30 @@ lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
 	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
 
 	for (i = grid_id; i < n; i += num_threads) {
-		uint64 word = v[i];
-		y[i] ^=  uint2_to_uint64(tex1Dfetch(inner_tex, 
-					0*256 + (int)((word >>  0) & 0xff)))
+
+		uint64 vi = v[i];
+		uint64 yi = y[i];
+		yi ^=  uint2_to_uint64(tex1Dfetch(inner_tex, 
+					0*128 + (int)bfe(vi,  0, 7)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					1*256 + (int)((word >>  8) & 0xff)))
+					1*128 + (int)bfe(vi,  7, 7)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					2*256 + (int)((word >> 16) & 0xff)))
+					2*128 + (int)bfe(vi, 14, 7)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					3*256 + (int)((word >> 24) & 0xff)))
+					3*128 + (int)bfe(vi, 21, 7)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					4*256 + (int)((word >> 32) & 0xff)))
+					4*128 + (int)bfe(vi, 28, 7)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					5*256 + (int)((word >> 40) & 0xff)))
+					5*128 + (int)bfe(vi, 35, 7)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					6*256 + (int)((word >> 48) & 0xff)))
+					6*128 + (int)bfe(vi, 42, 7)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					7*256 + (int)((word >> 56) & 0xff)));
+					7*128 + (int)bfe(vi, 49, 7)))
+		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
+					8*128 + (int)bfe(vi, 56, 7)))
+		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
+					9*128 + (int)bfe(vi, 63, 7)));
+		y[i] = yi;
 	}
 }
 
@@ -87,7 +125,6 @@ lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
 /* thanks to Patrick Stach for ideas on this */
 
 #define MAX_OUTER_THREADS 256
-//#define MAX_OUTER_THREADS 192
 
 __global__ void
 lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
@@ -117,7 +154,7 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 #pragma unroll
 		for (j = 0; j < 32; j++) {
 
-			uint32 off = (xi >> (2 * j)) & 0x3;
+			uint32 off = bfe(xi, 2 * j, 2);
 			uint64 tmp = yi;
 
 			if (off == 0) {
@@ -136,7 +173,6 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 	s[1*MAX_OUTER_THREADS] ^= s[2*MAX_OUTER_THREADS];
 	__syncthreads();
 
-#if MAX_OUTER_THREADS == 256
 	for (i = MAX_OUTER_THREADS / 2; i >= 32; i >>= 1) {
 		if (block_id < i) {
 			s[0*MAX_OUTER_THREADS] ^= s[0*MAX_OUTER_THREADS + i];
@@ -145,21 +181,6 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 		__syncthreads();
 	}
 
-#elif MAX_OUTER_THREADS == 192
-	if (block_id < 96) {
-		s[0*MAX_OUTER_THREADS] ^= s[0*MAX_OUTER_THREADS + 96];
-		s[1*MAX_OUTER_THREADS] ^= s[1*MAX_OUTER_THREADS + 96];
-	}
-	__syncthreads();
-
-	if (block_id < 32) {
-		s[0*MAX_OUTER_THREADS] ^= s[0*MAX_OUTER_THREADS + 32] ^
-		                          s[0*MAX_OUTER_THREADS + 64];
-		s[1*MAX_OUTER_THREADS] ^= s[1*MAX_OUTER_THREADS + 32] ^
-		                          s[1*MAX_OUTER_THREADS + 64];
-	}
-	__syncthreads();
-#endif
 
 	if (block_id < 64) {
 		uint32 *t = (uint32 *)scratch;
