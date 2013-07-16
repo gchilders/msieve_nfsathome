@@ -14,80 +14,6 @@ $Id$
 
 #include "lanczos_gpu.h"
 
-/*-------------------------------------------------------------------*/
-static void mul_unpacked(packed_matrix_t *matrix,
-			  uint64 *x, uint64 *b) 
-{
-	uint32 ncols = matrix->ncols;
-	uint32 num_dense_rows = matrix->num_dense_rows;
-	la_col_t *A = matrix->unpacked_cols;
-	uint32 i, j;
-
-	memset(b, 0, ncols * sizeof(uint64));
-	
-	for (i = 0; i < ncols; i++) {
-		la_col_t *col = A + i;
-		uint32 *row_entries = col->data;
-		uint64 tmp = x[i];
-
-		for (j = 0; j < col->weight; j++) {
-			b[row_entries[j]] ^= tmp;
-		}
-	}
-
-	if (num_dense_rows) {
-		for (i = 0; i < ncols; i++) {
-			la_col_t *col = A + i;
-			uint32 *row_entries = col->data + col->weight;
-			uint64 tmp = x[i];
-	
-			for (j = 0; j < num_dense_rows; j++) {
-				if (row_entries[j / 32] & 
-						((uint32)1 << (j % 32))) {
-					b[j] ^= tmp;
-				}
-			}
-		}
-	}
-}
-
-/*-------------------------------------------------------------------*/
-static void mul_trans_unpacked(packed_matrix_t *matrix,
-				uint64 *x, uint64 *b) 
-{
-	uint32 ncols = matrix->ncols;
-	uint32 num_dense_rows = matrix->num_dense_rows;
-	la_col_t *A = matrix->unpacked_cols;
-	uint32 i, j;
-
-	for (i = 0; i < ncols; i++) {
-		la_col_t *col = A + i;
-		uint32 *row_entries = col->data;
-		uint64 accum = 0;
-
-		for (j = 0; j < col->weight; j++) {
-			accum ^= x[row_entries[j]];
-		}
-		b[i] = accum;
-	}
-
-	if (num_dense_rows) {
-		for (i = 0; i < ncols; i++) {
-			la_col_t *col = A + i;
-			uint32 *row_entries = col->data + col->weight;
-			uint64 accum = b[i];
-	
-			for (j = 0; j < num_dense_rows; j++) {
-				if (row_entries[j / 32] &
-						((uint32)1 << (j % 32))) {
-					accum ^= x[j];
-				}
-			}
-			b[i] = accum;
-		}
-	}
-}
-
 static const char * gpu_kernel_names[] = 
 {
 	"lanczos_kernel_mask",
@@ -115,9 +41,8 @@ static const gpu_arg_type_list_t gpu_kernel_args[] =
 		}
 	},
 	/* lanczos_kernel_inner_prod */
-	{ 4,
+	{ 3,
 		{
-		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
 		  GPU_ARG_UINT32,

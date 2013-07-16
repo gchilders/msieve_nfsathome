@@ -15,6 +15,80 @@ $Id$
 #include "lanczos.h"
 
 /*-------------------------------------------------------------------*/
+void mul_unpacked(packed_matrix_t *matrix,
+			  uint64 *x, uint64 *b) 
+{
+	uint32 ncols = matrix->ncols;
+	uint32 num_dense_rows = matrix->num_dense_rows;
+	la_col_t *A = matrix->unpacked_cols;
+	uint32 i, j;
+
+	memset(b, 0, ncols * sizeof(uint64));
+	
+	for (i = 0; i < ncols; i++) {
+		la_col_t *col = A + i;
+		uint32 *row_entries = col->data;
+		uint64 tmp = x[i];
+
+		for (j = 0; j < col->weight; j++) {
+			b[row_entries[j]] ^= tmp;
+		}
+	}
+
+	if (num_dense_rows) {
+		for (i = 0; i < ncols; i++) {
+			la_col_t *col = A + i;
+			uint32 *row_entries = col->data + col->weight;
+			uint64 tmp = x[i];
+	
+			for (j = 0; j < num_dense_rows; j++) {
+				if (row_entries[j / 32] & 
+						((uint32)1 << (j % 32))) {
+					b[j] ^= tmp;
+				}
+			}
+		}
+	}
+}
+
+/*-------------------------------------------------------------------*/
+void mul_trans_unpacked(packed_matrix_t *matrix,
+				uint64 *x, uint64 *b) 
+{
+	uint32 ncols = matrix->ncols;
+	uint32 num_dense_rows = matrix->num_dense_rows;
+	la_col_t *A = matrix->unpacked_cols;
+	uint32 i, j;
+
+	for (i = 0; i < ncols; i++) {
+		la_col_t *col = A + i;
+		uint32 *row_entries = col->data;
+		uint64 accum = 0;
+
+		for (j = 0; j < col->weight; j++) {
+			accum ^= x[row_entries[j]];
+		}
+		b[i] = accum;
+	}
+
+	if (num_dense_rows) {
+		for (i = 0; i < ncols; i++) {
+			la_col_t *col = A + i;
+			uint32 *row_entries = col->data + col->weight;
+			uint64 accum = b[i];
+	
+			for (j = 0; j < num_dense_rows; j++) {
+				if (row_entries[j / 32] &
+						((uint32)1 << (j % 32))) {
+					accum ^= x[j];
+				}
+			}
+			b[i] = accum;
+		}
+	}
+}
+
+/*-------------------------------------------------------------------*/
 static int compare_row_off(const void *x, const void *y) {
 	entry_idx_t *xx = (entry_idx_t *)x;
 	entry_idx_t *yy = (entry_idx_t *)y;
@@ -232,7 +306,7 @@ void packed_matrix_init(msieve_obj *obj,
 
 	p->num_threads = num_threads = MIN(num_threads, MAX_THREADS);
 
-/*XXX 	if (max_nrows <= MIN_NROWS_TO_PACK) */ {
+/*XXX 	if (max_nrows <= MIN_NROWS_TO_PACK) */{
 		matrix_extra_init(obj, p);
 		return;
 	}
@@ -331,7 +405,8 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 	/* account for the vectors used in the lanczos iteration */
 
 #ifdef HAVE_MPI
-	mem_use = (6 * p->nsubcols + 2 * MAX(p->nrows, p->ncols)) * sizeof(uint64);
+	mem_use = (6 * p->nsubcols + 2 * 
+			MAX(p->nrows, p->ncols)) * sizeof(uint64);
 #else
 	mem_use = 7 * p->max_ncols * sizeof(uint64);
 #endif

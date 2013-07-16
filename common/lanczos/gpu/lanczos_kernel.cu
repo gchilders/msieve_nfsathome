@@ -86,8 +86,7 @@ bfe(uint64 x, uint32 pos, uint32 bits)
 }
 
 __global__ void
-lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
-			uint64 *lookup, uint32 n)
+lanczos_kernel_inner_prod(uint64 *y, uint64 *v, uint32 n)
 {
 	uint32 i;
 	uint32 num_threads = gridDim.x * blockDim.x;
@@ -98,25 +97,27 @@ lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
 		uint64 vi = v[i];
 		uint64 yi = y[i];
 		yi ^=  uint2_to_uint64(tex1Dfetch(inner_tex, 
-					0*128 + (int)bfe(vi,  0, 7)))
+					0*64 + (int)bfe(vi,  0, 6)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					1*128 + (int)bfe(vi,  7, 7)))
+					1*64 + (int)bfe(vi,  6, 6)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					2*128 + (int)bfe(vi, 14, 7)))
+					2*64 + (int)bfe(vi, 12, 6)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					3*128 + (int)bfe(vi, 21, 7)))
+					3*64 + (int)bfe(vi, 18, 6)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					4*128 + (int)bfe(vi, 28, 7)))
+					4*64 + (int)bfe(vi, 24, 6)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					5*128 + (int)bfe(vi, 35, 7)))
+					5*64 + (int)bfe(vi, 30, 6)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					6*128 + (int)bfe(vi, 42, 7)))
+					6*64 + (int)bfe(vi, 36, 6)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					7*128 + (int)bfe(vi, 49, 7)))
+					7*64 + (int)bfe(vi, 42, 6)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					8*128 + (int)bfe(vi, 56, 7)))
+					8*64 + (int)bfe(vi, 48, 6)))
 		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					9*128 + (int)bfe(vi, 63, 7)));
+					9*64 + (int)bfe(vi, 54, 6)))
+		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
+					10*64 + (int)bfe(vi, 60, 6)));
 		y[i] = yi;
 	}
 }

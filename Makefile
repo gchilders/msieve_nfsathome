@@ -102,7 +102,6 @@ COMMON_HDR = \
 	include/util.h
 
 COMMON_GPU_HDR = \
-	common/lanczos/gpu/lanczos_kernel.cu \
 	common/lanczos/gpu/lanczos_gpu.h
 
 COMMON_NOGPU_HDR = \
@@ -330,10 +329,13 @@ stage1_core_sm13.ptx: $(NFS_GPU_HDR)
 stage1_core_sm20.ptx: $(NFS_GPU_HDR)
 	$(NVCC) -arch sm_20 -ptx -o $@ $<
 
-lanczos_kernel_sm11.ptx: $(COMMON_GPU_HDR)
+	
+lanczos_kernel_sm11.ptx: common/lanczos/gpu/lanczos_kernel.cu \
+			$(COMMON_GPU_HDR)
 	$(NVCC) -arch sm_11 -ptx -o $@ $<
 
-lanczos_kernel_sm20.ptx: $(COMMON_GPU_HDR)
+lanczos_kernel_sm20.ptx:  common/lanczos/gpu/lanczos_kernel.cu \
+			$(COMMON_GPU_HDR)
 	$(NVCC) -arch sm_20 -ptx -o $@ $<
 
 b40c/built:

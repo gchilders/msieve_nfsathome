@@ -289,37 +289,38 @@ static void mul_precomp_256x8(uint64 *c, uint64 *x) {
 	}
 }
 
-static void mul_precomp_128x10(uint64 *c, uint64 *x) {
+static void mul_precomp_64x11(uint64 *c, uint64 *x) {
 
 	/* As above, except that the main loop breaks 64-bit
 	   words into 10 groups of 7 bits */
 
 	uint32 i;
-	uint64 c0, c1, c2, c3, c4, c5, c6, c7, c8;
+	uint64 c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10;
 
-	c0 = c1 = c2 = c3 = c4 = c5 = c6 = c7 = c8 = 0;
+	c0 = c1 = c2 = c3 = c4 = c5 = c6 = c7 = c8 = c9 = c10 = 0;
 
-	c[0*128] = c[1*128] = c[2*128] = c[3*128] = 
-	c[4*128] = c[5*128] = c[6*128] = c[7*128] = 
-	c[8*128] = 0;
+	c[0*64] = c[1*64] = c[2*64] = c[3*64] = 
+	c[4*64] = c[5*64] = c[6*64] = c[7*64] = 
+	c[8*64] = c[9*64] = c[10*64] = 0;
 
-	for (i = 1; i < 128; i++) {
+	for (i = 1; i < 64; i++) {
 
 		uint32 word = graycode[2 * i];
 		uint32 bit = graycode[2 * i + 1];
 
-		c0 ^= x[0*7 + bit]; c[0*128 + word] = c0;
-		c1 ^= x[1*7 + bit]; c[1*128 + word] = c1;
-		c2 ^= x[2*7 + bit]; c[2*128 + word] = c2;
-		c3 ^= x[3*7 + bit]; c[3*128 + word] = c3;
-		c4 ^= x[4*7 + bit]; c[4*128 + word] = c4;
-		c5 ^= x[5*7 + bit]; c[5*128 + word] = c5;
-		c6 ^= x[6*7 + bit]; c[6*128 + word] = c6;
-		c7 ^= x[7*7 + bit]; c[7*128 + word] = c7;
-		c8 ^= x[8*7 + bit]; c[8*128 + word] = c8;
+		c0 ^= x[0*6 + bit]; c[0*64 + word] = c0;
+		c1 ^= x[1*6 + bit]; c[1*64 + word] = c1;
+		c2 ^= x[2*6 + bit]; c[2*64 + word] = c2;
+		c3 ^= x[3*6 + bit]; c[3*64 + word] = c3;
+		c4 ^= x[4*6 + bit]; c[4*64 + word] = c4;
+		c5 ^= x[5*6 + bit]; c[5*64 + word] = c5;
+		c6 ^= x[6*6 + bit]; c[6*64 + word] = c6;
+		c7 ^= x[7*6 + bit]; c[7*64 + word] = c7;
+		c8 ^= x[8*6 + bit]; c[8*64 + word] = c8;
+		c9 ^= x[9*6 + bit]; c[9*64 + word] = c9;
+		if (i < 16)
+			c10 ^= x[10*6 + bit]; c[10*64 + word] = c10;
 	}
-	c[9*128] = 0;
-	c[9*128 + 1] = x[63];
 }
 
 /*-------------------------------------------------------------------*/
@@ -336,15 +337,14 @@ void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix,
 	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 				launch->threads_per_block;
 
-	mul_precomp_128x10(c, x);
+	mul_precomp_64x11(c, x);
 
 	CUDA_TRY(cuMemcpyHtoD(d->inner_scratch, c, 
-				(128*9+2) * sizeof(uint64)))
+				256 * 8 * sizeof(uint64)))
 
 	gpu_args[0].ptr_arg = (void *)(size_t)y->gpu_vec;
 	gpu_args[1].ptr_arg = (void *)(size_t)v->gpu_vec;
-	gpu_args[2].ptr_arg = (void *)(size_t)d->inner_scratch;
-	gpu_args[3].uint32_arg = n;
+	gpu_args[2].uint32_arg = n;
 	gpu_launch_set(launch, gpu_args);
 
 	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))

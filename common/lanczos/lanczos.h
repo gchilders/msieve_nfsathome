@@ -155,6 +155,14 @@ void mul_MxN_Nx64(packed_matrix_t *A,
 void mul_sym_NxN_Nx64(packed_matrix_t *A, void *x, 
 			void *b, void *scratch);
 
+/* easy base cases for small problems */
+
+void mul_unpacked(packed_matrix_t *matrix,
+			  uint64 *x, uint64 *b); 
+
+void mul_trans_unpacked(packed_matrix_t *matrix,
+				uint64 *x, uint64 *b);
+
 /* implementation-specifc matrix-vector product */
 
 void mul_core(packed_matrix_t *A, void *x, void *b);
