@@ -41,8 +41,9 @@ static const gpu_arg_type_list_t gpu_kernel_args[] =
 		}
 	},
 	/* lanczos_kernel_inner_prod */
-	{ 3,
+	{ 4,
 		{
+		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
 		  GPU_ARG_UINT32,

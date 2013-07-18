@@ -344,7 +344,8 @@ void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix,
 
 	gpu_args[0].ptr_arg = (void *)(size_t)y->gpu_vec;
 	gpu_args[1].ptr_arg = (void *)(size_t)v->gpu_vec;
-	gpu_args[2].uint32_arg = n;
+	gpu_args[2].ptr_arg = (void *)(size_t)d->inner_scratch;
+	gpu_args[3].uint32_arg = n;
 	gpu_launch_set(launch, gpu_args);
 
 	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
