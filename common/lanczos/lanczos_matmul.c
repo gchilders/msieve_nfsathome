@@ -207,16 +207,17 @@ static void pack_matrix_core(packed_matrix_t *p, la_col_t *A)
 
 		for (j = 0; j < curr_cols; j++) {
 			la_col_t *c = A + i * block_size + j;
-			uint32 limit = first_block_size;
 
 			for (k = 0, b = curr_stripe; k < c->weight; k++) {
 				uint32 index = c->data[k];
+				uint32 row = 0;
 
-				while (index >= limit) {
-					b += num_block_cols;
-					limit += block_size;
+				if (index >= first_block_size) {
+					row = 1 + (index - first_block_size) /
+						block_size;
 				}
-				b->num_entries++;
+
+				b[row * num_block_cols].num_entries++;
 			}
 		}
 
@@ -238,21 +239,22 @@ static void pack_matrix_core(packed_matrix_t *p, la_col_t *A)
 
 		for (j = 0; j < curr_cols; j++) {
 			la_col_t *c = A + i * block_size + j;
-			uint32 limit = first_block_size;
-			uint32 start_row = 0;
 
-			for (k = 0, b = curr_stripe; k < c->weight; k++) {
+			for (k = 0; k < c->weight; k++) {
 				entry_idx_t *e;
 				uint32 index = c->data[k];
+				uint32 row = 0;
 
-				while (index >= limit) {
-					b += num_block_cols;
-					start_row = limit;
-					limit += block_size;
+				if (index >= first_block_size) {
+					row = 1 + (index - first_block_size) /
+						block_size;
+					index -= first_block_size +
+						(row - 1) * block_size;
 				}
 
+				b = curr_stripe + row * num_block_cols;
 				e = b->d.entries + b->num_entries++;
-				e->row_off = index - start_row;
+				e->row_off = index;
 				e->col_off = j;
 			}
 
