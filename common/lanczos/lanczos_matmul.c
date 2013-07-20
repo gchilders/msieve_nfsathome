@@ -260,7 +260,7 @@ static void pack_matrix_core(packed_matrix_t *p, la_col_t *A)
 			c->data = NULL;
 		}
 
-		pack_med_block(curr_stripe);
+//		pack_med_block(curr_stripe);
 	}
 }
 
@@ -305,7 +305,7 @@ void packed_matrix_init(msieve_obj *obj,
 
 	p->num_threads = num_threads = MIN(num_threads, MAX_THREADS);
 
-/*XXX 	if (max_nrows <= MIN_NROWS_TO_PACK) */{
+	if (max_nrows <= MIN_NROWS_TO_PACK) {
 		matrix_extra_init(obj, p);
 		return;
 	}

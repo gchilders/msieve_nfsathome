@@ -292,7 +292,7 @@ static void mul_precomp_256x8(uint64 *c, uint64 *x) {
 static void mul_precomp_64x11(uint64 *c, uint64 *x) {
 
 	/* As above, except that the main loop breaks 64-bit
-	   words into 10 groups of 7 bits */
+	   words into 11 groups of 6 bits */
 
 	uint32 i;
 	uint64 c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10;
@@ -321,6 +321,17 @@ static void mul_precomp_64x11(uint64 *c, uint64 *x) {
 		if (i < 16)
 			c10 ^= x[10*6 + bit]; c[10*64 + word] = c10;
 	}
+}
+
+/*-------------------------------------------------------------------*/
+void v_mul_Nx64_64x64_acc_cpu(uint64 *v, uint64 *x,
+			uint64 *y, uint32 n) {
+
+	uint64 c[8 * 256];
+
+	mul_precomp_256x8(c, x);
+
+	core_Nx64_64x64_acc(v, c, y, n);
 }
 
 /*-------------------------------------------------------------------*/
@@ -355,9 +366,8 @@ void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix,
 		uint64 *tmp = (uint64 *)xmalloc(n * sizeof(uint64));
 		uint32 i;
 
-		mul_precomp_256x8(c, x);
+		v_mul_Nx64_64x64_acc_cpu(v->host_vec, x, y->host_vec, n);
 
-		core_Nx64_64x64_acc(v->host_vec, c, y->host_vec, n);
 		CUDA_TRY(cuMemcpyDtoH(tmp, y->gpu_vec, n * sizeof(uint64)))
 
 		for (i = 0; i < n; i++) {
@@ -530,6 +540,17 @@ static void mul_64xN_Nx64_postproc(uint64 *c, uint64 *xy) {
 }
 
 /*-------------------------------------------------------------------*/
+void v_mul_64xN_Nx64_cpu(uint64 *x, uint64 *y,
+		   uint64 *xy, uint32 n) {
+
+	uint64 c[8 * 256];
+
+	core_64xN_Nx64(x, c, y, n);
+
+	mul_64xN_Nx64_postproc(c, xy);
+}
+
+/*-------------------------------------------------------------------*/
 void v_mul_64xN_Nx64(packed_matrix_t *matrix,
 		   void *x_in, void *y_in,
 		   uint64 *xy, uint32 n) {
@@ -558,13 +579,10 @@ void v_mul_64xN_Nx64(packed_matrix_t *matrix,
 
 #ifdef LANCZOS_GPU_DEBUG
 	{
-		uint64 c[8 * 256];
 		uint64 tmp[64];
 		uint32 i;
 
-		core_64xN_Nx64(x->host_vec, c, y->host_vec, n);
-
-		mul_64xN_Nx64_postproc(c, xy);
+		v_mul_64xN_Nx64_cpu(x->host_vec, y->host_vec, xy, n);
 
 		CUDA_TRY(cuMemcpyDtoH(tmp, d->outer_scratch, 
 					64 * sizeof(uint64)))

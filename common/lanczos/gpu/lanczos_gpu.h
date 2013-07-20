@@ -62,6 +62,11 @@ enum {
 	NUM_GPU_FUNCTIONS /* must be last */
 };
 
+void v_mul_64xN_Nx64_cpu(uint64 *x, uint64 *y,
+		   uint64 *xy, uint32 n);
+
+void v_mul_Nx64_64x64_acc_cpu(uint64 *v, uint64 *x,
+			uint64 *y, uint32 n);
 
 #ifdef __cplusplus
 }
