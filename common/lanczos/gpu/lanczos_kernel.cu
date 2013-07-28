@@ -12,19 +12,10 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-typedef int int32;
-typedef unsigned int uint32;
-typedef unsigned long long uint64;
-typedef long long int64;
+#include "lanczos_gpu_core.h"
 
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-#if defined(_WIN64) || defined(__LP64__)
-	#define PTR_CONSTRAINT(x) "l"(x)
-#else
-	#define PTR_CONSTRAINT(x) "r"(x)
 #endif
 
 /*------------------------------------------------------------------------*/
@@ -52,60 +43,6 @@ lanczos_kernel_xor(uint64 *dest, uint64 *src, uint32 n)
 }
 
 /*------------------------------------------------------------------------*/
-texture<uint2, cudaTextureType1D, cudaReadModeElementType> inner_tex;
-
-__device__ uint32
-bfe(uint64 x, uint32 pos, uint32 bits)
-{
-#if __CUDA_ARCH__ >= 200
-
-	uint32 res;
-	uint32 hi = (uint32)(x >> 32);
-	uint32 lo = (uint32)x;
-
-	if (pos < 32) {
-	       if (pos + bits > 32) {
-			res = ((lo >> pos) | (hi << (32 - pos))) &
-				((1 << bits) - 1);
-	       }
-	       else {
-			asm("bfe.u32 %0, %1, %2, %3; \n\t"
-				: "=r"(res) : "r"(lo), "r"(pos), "r"(bits));
-	       }
-	}
-	else {
-		asm("bfe.u32 %0, %1, %2, %3; \n\t"
-			: "=r"(res) : "r"(hi), "r"(pos - 32), "r"(bits));
-	}
-
-	return res;
-
-#else
-
-	return (uint32)(x >> pos) & ((1 << bits) - 1);
-#endif
-}
-
-#if __CUDA_ARCH__ >= 200
-
-__device__ uint64
-load_streaming(uint64 *addr)
-{
-	uint64 res;
-
-	asm("ld.global.cg.u64 %0, [%1]; \n\t"
-		: "=l"(res) : PTR_CONSTRAINT(addr));
-
-	return res;
-}
-
-__device__ void
-store_streaming(uint64 x, uint64 *addr)
-{
-	asm("st.global.cg.u64 [%0], %1; \n\t"
-		: : PTR_CONSTRAINT(addr), "l"(x));
-}
-
 __global__ void
 lanczos_kernel_inner_prod(uint64 *y, uint64 *v, 
 			uint64 *lookup, uint32 n)
@@ -116,8 +53,8 @@ lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
 
 	for (i = grid_id; i < n; i += num_threads) {
 
-		uint64 vi = load_streaming(v + i);
-		uint64 yi = load_streaming(y + i);
+		uint64 vi = load_bypassL1(v + i);
+		uint64 yi = load_bypassL1(y + i);
 		yi ^=    lookup[ 0*64 + bfe(vi,  0, 6)]
 		       ^ lookup[ 1*64 + bfe(vi,  6, 6)]
 		       ^ lookup[ 2*64 + bfe(vi, 12, 6)]
@@ -129,56 +66,9 @@ lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
 		       ^ lookup[ 8*64 + bfe(vi, 48, 6)]
 		       ^ lookup[ 9*64 + bfe(vi, 54, 6)]
 		       ^ lookup[10*64 + bfe(vi, 60, 6)];
-		store_streaming(yi, y + i);
+		store_bypassL1(yi, y + i);
 	}
 }
-
-#else /* G80 code */
-
-__device__ uint64
-uint2_to_uint64(uint2 v)
-{
-	return (uint64)v.y << 32 | v.x;
-}
-
-__global__ void
-lanczos_kernel_inner_prod(uint64 *y, uint64 *v, 
-			uint32 *lookup, uint32 n)
-{
-	uint32 i;
-	uint32 num_threads = gridDim.x * blockDim.x;
-	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
-
-	for (i = grid_id; i < n; i += num_threads) {
-
-		uint64 vi = v[i];
-		uint64 yi = y[i];
-		yi ^=  uint2_to_uint64(tex1Dfetch(inner_tex, 
-					0*64 + (int)bfe(vi,  0, 6)))
-		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					1*64 + (int)bfe(vi,  6, 6)))
-		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					2*64 + (int)bfe(vi, 12, 6)))
-		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					3*64 + (int)bfe(vi, 18, 6)))
-		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					4*64 + (int)bfe(vi, 24, 6)))
-		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					5*64 + (int)bfe(vi, 30, 6)))
-		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					6*64 + (int)bfe(vi, 36, 6)))
-		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					7*64 + (int)bfe(vi, 42, 6)))
-		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					8*64 + (int)bfe(vi, 48, 6)))
-		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					9*64 + (int)bfe(vi, 54, 6)))
-		       ^ uint2_to_uint64(tex1Dfetch(inner_tex, 
-					10*64 + (int)bfe(vi, 60, 6)));
-		y[i] = yi;
-	}
-}
-#endif
 
 /*------------------------------------------------------------------------*/
 /* thanks to Patrick Stach for ideas on this */
@@ -262,6 +152,9 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 			atomicXor(&xy[i + 1], t[block_id - 64]);
 	}
 }
+
+/*------------------------------------------------------------------------*/
+texture<uint2, cudaTextureType1D, cudaReadModeElementType> matmul_tex;
 
 #ifdef __cplusplus
 }

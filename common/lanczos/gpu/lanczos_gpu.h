@@ -36,11 +36,20 @@ typedef struct {
 	/* inner product data */
 
 	CUdeviceptr inner_scratch;
-	CUtexref inner_texref;
 
 	/* outer product data */
 
 	CUdeviceptr outer_scratch;
+
+	/* matrix data */
+
+	CUtexref matmul_texref;
+
+	CUdeviceptr *dense_blocks;
+
+	CUdeviceptr block_num_entries;
+	CUdeviceptr block_entries_start;
+	CUdeviceptr block_entries;
 
 } gpudata_t;
 
