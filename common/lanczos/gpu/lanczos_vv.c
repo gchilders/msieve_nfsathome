@@ -551,13 +551,11 @@ void v_mul_64xN_Nx64_cpu(uint64 *x, uint64 *y,
 }
 
 /*-------------------------------------------------------------------*/
-void v_mul_64xN_Nx64(packed_matrix_t *matrix,
-		   void *x_in, void *y_in,
-		   uint64 *xy, uint32 n) {
+void v_mul_64xN_Nx64_gpu(packed_matrix_t *matrix,
+		   CUdeviceptr x, CUdeviceptr y,
+		   CUdeviceptr xy, uint32 n) {
 
 
-	gpuvec_t *x = (gpuvec_t *)x_in;
-	gpuvec_t *y = (gpuvec_t *)y_in;
 	gpudata_t *d = (gpudata_t *)matrix->extra;
 	gpu_launch_t *launch = d->launch + GPU_K_OUTER_PROD;
 	gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
@@ -567,15 +565,29 @@ void v_mul_64xN_Nx64(packed_matrix_t *matrix,
 	num_blocks = MIN(num_blocks, 
 			(uint32)(10 * d->gpu_info->num_compute_units));
 
-	CUDA_TRY(cuMemsetD8(d->outer_scratch, 0, 64 * sizeof(uint64)));
-
-	gpu_args[0].ptr_arg = (void *)(size_t)x->gpu_vec;
-	gpu_args[1].ptr_arg = (void *)(size_t)y->gpu_vec;
-	gpu_args[2].ptr_arg = (void *)(size_t)d->outer_scratch;
+	gpu_args[0].ptr_arg = (void *)(size_t)x;
+	gpu_args[1].ptr_arg = (void *)(size_t)y;
+	gpu_args[2].ptr_arg = (void *)(size_t)xy;
 	gpu_args[3].uint32_arg = n;
 	gpu_launch_set(launch, gpu_args);
 
 	CUDA_TRY(cuLaunchGrid(launch->kernel_func, num_blocks, 1))
+}
+
+/*-------------------------------------------------------------------*/
+void v_mul_64xN_Nx64(packed_matrix_t *matrix,
+		   void *x_in, void *y_in,
+		   uint64 *xy, uint32 n) {
+
+
+	gpuvec_t *x = (gpuvec_t *)x_in;
+	gpuvec_t *y = (gpuvec_t *)y_in;
+	gpudata_t *d = (gpudata_t *)matrix->extra;
+
+	CUDA_TRY(cuMemsetD8(d->outer_scratch, 0, 64 * sizeof(uint64)));
+
+	v_mul_64xN_Nx64_gpu(matrix, x->gpu_vec, y->gpu_vec, 
+			d->outer_scratch, n);
 
 #ifdef LANCZOS_GPU_DEBUG
 	{

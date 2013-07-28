@@ -156,6 +156,82 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 /*------------------------------------------------------------------------*/
 texture<uint2, cudaTextureType1D, cudaReadModeElementType> matmul_tex;
 
+__global__ void
+lanczos_kernel_matmul(uint32 num_block_cols,
+		      uint32 curr_col,
+		      uint32 block_size,
+		      uint32 first_block_size,
+		      uint32 *counts,
+		      uint32 *offsets,
+		      gpu_entry_idx_t *mat_entries,
+		      uint64 *x,
+		      uint64 *b)
+{
+	__shared__ uint64 shared_sums[MATMUL_THREADS];
+
+	uint32 curr_row = blockIdx.x;
+	uint64 *curr_x = x + curr_col * block_size;
+	uint64 *curr_b = (curr_row == 0) ? b : b + first_block_size +
+				(curr_row - 1) * block_size;
+	uint32 which_block = curr_row * num_block_cols + curr_col;
+	uint32 num_entries = counts[which_block];
+	gpu_entry_idx_t *entries = mat_entries + offsets[which_block];
+	uint32 i = MATMUL_THREADS * (1 + num_entries / 
+			MATMUL_THREADS) + threadIdx.x;
+	uint64 sum = 0;
+	gpu_entry_idx_t e;
+
+	while (i >= MATMUL_THREADS) {
+
+		if (i < num_entries + MATMUL_THREADS) {
+
+			e = entries[i];
+
+			sum ^= curr_x[e.col_off];
+
+			if (e.row_off_head) {
+				curr_b[e.row_off] ^= sum;
+				sum = 0;
+			}
+		}
+
+		i -= MATMUL_THREADS;
+	}
+
+	shared_sums[i] = sum;
+	__syncthreads();
+
+	/* start parallel reverse exclusive segmented prefix scan */
+
+	if (threadIdx.x == 0) {
+		uint32 j = MATMUL_THREADS - 1;
+
+		sum = shared_sums[j];
+		shared_sums[j] = 0;
+
+		for (j--; (int32)j >= 0; j--) {
+
+			uint64 sum0 = shared_sums[j];
+
+			e = entries[j];
+			if (e.row_off_head) {
+				shared_sums[j] = sum;
+				sum = sum0;
+			}
+			else {
+				sum ^= sum0;
+			}
+		}
+	}
+	/* end parallel reverse exclusive segmented prefix scan */
+
+	__syncthreads();
+
+	e = entries[i];
+	if (e.row_off_head)
+		curr_b[e.row_off] ^= shared_sums[i];
+}
+
 #ifdef __cplusplus
 }
 #endif

@@ -19,7 +19,7 @@ $Id$
 extern "C" {
 #endif
 
-#if defined(__CUDA_ARCH__) /*------------- device code -------------*/
+#if defined(__CUDACC__) /*------------- device code -------------*/
 
 typedef short int16;
 typedef unsigned short uint16;
@@ -94,15 +94,15 @@ store_bypassL1(uint64 x, uint64 *addr)
 #endif
 }
 
-__device__ uint64
-load_streaming(uint64 *addr)
+__device__ uint32
+load_streaming(uint32 *addr)
 {
 #if __CUDA_ARCH__ >= 200
 
-	uint64 res;
+	uint32 res;
 
-	asm("ld.global.cs.u64 %0, [%1]; \n\t"
-		: "=l"(res) : PTR_CONSTRAINT(addr));
+	asm("ld.global.cs.u32 %0, [%1]; \n\t"
+		: "=r"(res) : PTR_CONSTRAINT(addr));
 
 	return res;
 #else
@@ -111,12 +111,12 @@ load_streaming(uint64 *addr)
 }
 
 __device__ void
-store_streaming(uint64 x, uint64 *addr)
+store_streaming(uint32 x, uint32 *addr)
 {
 #if __CUDA_ARCH__ >= 200
 
-	asm("st.global.cs.u64 [%0], %1; \n\t"
-		: : PTR_CONSTRAINT(addr), "l"(x));
+	asm("st.global.cs.u32 [%0], %1; \n\t"
+		: : PTR_CONSTRAINT(addr), "r"(x));
 #else
 	addr[0] = x;
 #endif

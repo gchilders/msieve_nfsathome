@@ -68,6 +68,7 @@ enum {
 	GPU_K_XOR,
 	GPU_K_INNER_PROD,
 	GPU_K_OUTER_PROD,
+	GPU_K_MATMUL,
 	NUM_GPU_FUNCTIONS /* must be last */
 };
 
@@ -76,6 +77,10 @@ void v_mul_64xN_Nx64_cpu(uint64 *x, uint64 *y,
 
 void v_mul_Nx64_64x64_acc_cpu(uint64 *v, uint64 *x,
 			uint64 *y, uint32 n);
+
+void v_mul_64xN_Nx64_gpu(packed_matrix_t *matrix,
+		   CUdeviceptr x, CUdeviceptr y,
+		   CUdeviceptr xy, uint32 n);
 
 #ifdef __cplusplus
 }
