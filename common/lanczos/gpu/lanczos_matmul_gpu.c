@@ -165,10 +165,9 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 
 			g += MATMUL_THREADS;
 			if (++curr_r == ((curr_c < c_rem) ? r : r - 1)) {
-					curr_r = 0;
-					curr_c++;
-					g = gpu_marshall + MATMUL_THREADS + curr_c;
-				}
+				curr_r = 0;
+				curr_c++;
+				g = gpu_marshall + MATMUL_THREADS + curr_c;
 			}
 		}
 

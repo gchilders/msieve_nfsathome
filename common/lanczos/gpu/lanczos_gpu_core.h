@@ -133,10 +133,10 @@ uint2_to_uint64(uint2 v)
 #define MATMUL_THREADS 256
 
 typedef struct {
-	uint16 row_idx : 15;
-	uint16 row_idx_head : 1;
-	uint16 col_idx : 15;
-	uint16 col_idx_head : 1;
+	uint16 row_off : 15;
+	uint16 row_off_head : 1;
+	uint16 col_off : 15;
+	uint16 col_off_head : 1;
 } gpu_entry_idx_t;
 
 #ifdef __cplusplus
