@@ -15,10 +15,6 @@ $Id$
 #ifndef _COMMON_LANCZOS_GPU_LANCZOS_GPU_CORE_H_
 #define _COMMON_LANCZOS_GPU_LANCZOS_GPU_CORE_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #if defined(__CUDACC__) /*------------- device code -------------*/
 
 typedef short int16;
@@ -82,6 +78,22 @@ load_bypassL1(uint64 *addr)
 #endif
 }
 
+__device__ uint32
+load_bypassL1(uint32 *addr)
+{
+#if __CUDA_ARCH__ >= 200
+
+	uint32 res;
+
+	asm("ld.global.cg.u32 %0, [%1]; \n\t"
+		: "=r"(res) : PTR_CONSTRAINT(addr));
+
+	return res;
+#else
+	return addr[0];
+#endif
+}
+
 __device__ void
 store_bypassL1(uint64 x, uint64 *addr)
 {
@@ -89,6 +101,18 @@ store_bypassL1(uint64 x, uint64 *addr)
 
 	asm("st.global.cg.u64 [%0], %1; \n\t"
 		: : PTR_CONSTRAINT(addr), "l"(x));
+#else
+	addr[0] = x;
+#endif
+}
+
+__device__ void
+store_bypassL1(uint32 x, uint32 *addr)
+{
+#if __CUDA_ARCH__ >= 200
+
+	asm("st.global.cg.u32 [%0], %1; \n\t"
+		: : PTR_CONSTRAINT(addr), "r"(x));
 #else
 	addr[0] = x;
 #endif
@@ -130,13 +154,22 @@ uint2_to_uint64(uint2 v)
 
 #endif  /*--------------------------- device code -----------------*/
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MATMUL_THREADS 256
 
-typedef struct {
-	uint16 row_off : 15;
-	uint16 row_off_head : 1;
-	uint16 col_off : 15;
-	uint16 col_off_head : 1;
+typedef union {
+
+	uint32 w;
+
+	struct {
+		uint16 row_off : 15;
+		uint16 row_off_head : 1;
+		uint16 col_off : 15;
+		uint16 col_off_head : 1;
+	} d; 
 } gpu_entry_idx_t;
 
 #ifdef __cplusplus

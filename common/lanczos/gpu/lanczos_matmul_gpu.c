@@ -169,13 +169,13 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 
 			entry_idx_t *e = b->d.entries + j;
 
-			g->row_off = e->row_off;
-			g->col_off = e->col_off;
+			g->d.row_off = e->row_off;
+			g->d.col_off = e->col_off;
 
 			if (j == 0 || e[0].row_off != e[-1].row_off) {
-				g->row_off_head = 1;
-				gpu_marshall[curr_c].row_off = e->row_off;
-				gpu_marshall[curr_c].row_off_head = 1;
+				g->d.row_off_head = 1;
+				gpu_marshall[curr_c].d.row_off = e->row_off;
+				gpu_marshall[curr_c].d.row_off_head = 1;
 			}
 
 			g += MATMUL_THREADS;
@@ -299,10 +299,6 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p) {
 	CUDA_TRY(cuTexRefSetFormat(d->matmul_texref,
 				CU_AD_FORMAT_UNSIGNED_INT32, 2))
 
-#if 0
-	CUDA_TRY(cuTexRefSetAddress(NULL, d->matmul_texref, 
-				d->inner_scratch, 256 * 8 * sizeof(uint64)))
-#endif
 	/* set up the matrix on the card */
 
 	gpu_matrix_init(p);
@@ -391,6 +387,9 @@ static void mul_packed_gpu(packed_matrix_t *p, gpuvec_t *x, gpuvec_t *b) {
 
 	CUDA_TRY(cuMemsetD8(b->gpu_vec, 0, p->nrows * sizeof(uint64)));
 
+	CUDA_TRY(cuTexRefSetAddress(NULL, d->matmul_texref, 
+				x->gpu_vec, p->ncols * sizeof(uint64)))
+
 	/* invariant kernel args */
 
 	gpu_args[0].uint32_arg = p->num_block_cols;
@@ -448,7 +447,7 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 
 			mul_packed_cpu(A, x->host_vec, b->host_vec);
 
-			for (i = 64; i < A->nrows; i++) {
+			for (i = 0; i < A->nrows; i++) {
 				if (tmp[i] != b->host_vec[i]) {
 					printf("error %u\n", i);
 					exit(-1);

@@ -163,19 +163,19 @@ lanczos_kernel_matmul(uint32 num_block_cols,
 		      uint32 first_block_size,
 		      uint32 *counts,
 		      uint32 *offsets,
-		      gpu_entry_idx_t *mat_entries,
+		      uint32 *mat_entries,
 		      uint64 *x,
 		      uint64 *b)
 {
 	__shared__ uint64 shared_sums[MATMUL_THREADS];
 
 	uint32 curr_row = blockIdx.x;
-	uint64 *curr_x = x + curr_col * block_size;
+	uint32 curr_x = curr_col * block_size;
 	uint64 *curr_b = (curr_row == 0) ? b : b + first_block_size +
 				(curr_row - 1) * block_size;
 	uint32 which_block = curr_row * num_block_cols + curr_col;
 	uint32 num_entries = counts[which_block];
-	gpu_entry_idx_t *entries = mat_entries + offsets[which_block];
+	uint32 *entries = mat_entries + offsets[which_block];
 	uint32 i = MATMUL_THREADS * (1 + num_entries / 
 			MATMUL_THREADS) + threadIdx.x;
 	uint64 sum = 0;
@@ -185,12 +185,13 @@ lanczos_kernel_matmul(uint32 num_block_cols,
 
 		if (i < num_entries + MATMUL_THREADS) {
 
-			e = entries[i];
+			e.w = load_bypassL1(entries + i);
 
-			sum ^= curr_x[e.col_off];
+			sum ^= uint2_to_uint64(tex1Dfetch(matmul_tex,
+						curr_x + e.d.col_off));
 
-			if (e.row_off_head) {
-				curr_b[e.row_off] ^= sum;
+			if (e.d.row_off_head) {
+				curr_b[e.d.row_off] ^= sum;
 				sum = 0;
 			}
 		}
@@ -213,8 +214,8 @@ lanczos_kernel_matmul(uint32 num_block_cols,
 
 			uint64 sum0 = shared_sums[j];
 
-			e = entries[j];
-			if (e.row_off_head) {
+			e.w = load_bypassL1(entries + j);
+			if (e.d.row_off_head) {
 				shared_sums[j] = sum;
 				sum = sum0;
 			}
@@ -227,9 +228,9 @@ lanczos_kernel_matmul(uint32 num_block_cols,
 
 	__syncthreads();
 
-	e = entries[i];
-	if (e.row_off_head)
-		curr_b[e.row_off] ^= shared_sums[i];
+	e.w = load_bypassL1(entries + i);
+	if (e.d.row_off_head)
+		curr_b[e.d.row_off] ^= shared_sums[i];
 }
 
 #ifdef __cplusplus
