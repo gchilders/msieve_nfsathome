@@ -320,37 +320,37 @@ void mul_trans_packed_core(void *data, int thread_num)
 {
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
-	cpudata_t *cpudata = (cpudata_t *)p->extra;
+	cpudata_t *c = (cpudata_t *)p->extra;
 
-	uint32 start_block_r = 1 + task->block_num * p->superblock_size;
-	uint32 num_blocks_r = MIN(p->superblock_size, 
-				p->num_block_rows - start_block_r);
+	uint32 start_block_r = 1 + task->block_num * c->superblock_size;
+	uint32 num_blocks_r = MIN(c->superblock_size, 
+				c->num_block_rows - start_block_r);
 
-	packed_block_t *start_block = p->blocks + 
-				start_block_r * p->num_block_cols;
-	uint64 *x = cpudata->x + (start_block_r - 1) * p->block_size +
-				p->first_block_size;
+	packed_block_t *start_block = c->blocks + 
+				start_block_r * c->num_block_cols;
+	uint64 *x = c->x + (start_block_r - 1) * c->block_size +
+				c->first_block_size;
 	uint32 i, j;
 
-	for (i = task->task_num; i < p->num_block_cols; 
+	for (i = task->task_num; i < c->num_block_cols; 
 					i += p->num_threads) {
 
 		packed_block_t *curr_block = start_block + i;
-		uint32 b_off = i * p->block_size;
+		uint32 b_off = i * c->block_size;
 		uint64 *curr_x = x;
-		uint64 *b = cpudata->b + b_off;
+		uint64 *b = c->b + b_off;
 
 		if (start_block_r == 1) {
-			memset(b, 0, MIN(p->block_size, p->ncols - b_off) * 
+			memset(b, 0, MIN(c->block_size, p->ncols - b_off) * 
 						sizeof(uint64));
 			mul_trans_one_med_block(curr_block - 
-					p->num_block_cols, cpudata->x, b);
+					c->num_block_cols, c->x, b);
 		}
 
 		for (j = 0; j < num_blocks_r; j++) {
 			mul_trans_one_block(curr_block, curr_x, b);
-			curr_block += p->num_block_cols;
-			curr_x += p->block_size;
+			curr_block += c->num_block_cols;
+			curr_x += c->block_size;
 		}
 	}
 }
@@ -365,11 +365,11 @@ void mul_trans_packed_small_core(void *data, int thread_num)
 
 	la_task_t *task = (la_task_t *)data;
 	packed_matrix_t *p = task->matrix;
-	cpudata_t *cpudata = (cpudata_t *)p->extra;
+	cpudata_t *c = (cpudata_t *)p->extra;
 	uint32 vsize = p->ncols / p->num_threads;
 	uint32 off = vsize * task->task_num;
-	uint64 *x = cpudata->x;
-	uint64 *b = cpudata->b + off;
+	uint64 *x = c->x;
+	uint64 *b = c->b + off;
 	uint32 i;
 
 	if (p->num_threads == 1)
@@ -378,6 +378,6 @@ void mul_trans_packed_small_core(void *data, int thread_num)
 		vsize = p->ncols - off;
 
 	for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)
-		mul_Nx64_64x64_acc(p->dense_blocks[i] + off, 
+		mul_Nx64_64x64_acc(c->dense_blocks[i] + off, 
 					x + 64 * i, b, vsize);
 }

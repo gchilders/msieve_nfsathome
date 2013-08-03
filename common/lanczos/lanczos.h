@@ -37,41 +37,18 @@ extern "C" {
 #define POST_LANCZOS_ROWS 48
 #define MIN_POST_LANCZOS_DIM 10000
 
-/* routines for cache-efficient multiplication of
-   sparse matrices */
-
 /* the smallest matrix size that will be converted 
    to packed format */
 
 #define MIN_NROWS_TO_PACK 30000
 
+/* routines for cache-efficient multiplication of
+   sparse matrices */
+
 /* the number of moderately dense rows that are
    packed less tightly */
 
 #define NUM_MEDIUM_ROWS 3000
-
-/* structure representing a nonzero element of
-   the matrix after packing into block format. 
-   The two fields are the row and column offsets
-   from the top left corner of the block */
-
-typedef struct {
-	uint16 row_off;
-	uint16 col_off;
-} entry_idx_t;
-
-/* struct representing one block */
-
-typedef struct {
-	uint32 num_entries;       /* number of nonzero matrix entries */
-	union {
-		entry_idx_t *entries;     /* nonzero entries */
-		uint16 *med_entries;	  /* nonzero entries for medium dense rows */
-	} d;
-} packed_block_t;
-
-#define MAX_THREADS 32
-#define MIN_NROWS_TO_THREAD 200000
 
 /* struct representing a packed matrix */
 
@@ -88,23 +65,6 @@ typedef struct packed_matrix_t {
 	uint32 num_threads;
 
 	la_col_t *unpacked_cols;  /* used if no packing takes place */
-
-	/* used for block matrix multiplies */
-
-	uint32 block_size;
-	uint32 num_block_rows;
-	uint32 num_block_cols;
-
-	uint32 superblock_size;  /* in units of blocks */
-	uint32 num_superblock_rows;
-	uint32 num_superblock_cols;
-
-	uint32 first_block_size;/* block size for the smallest row numbers */
-
-	uint64 **dense_blocks;  /* for holding dense matrix rows; 
-				   dense_blocks[i] holds the i_th batch of
-				   64 matrix rows */
-	packed_block_t *blocks; /* sparse part of matrix, in block format */
 
 	void * extra; /* implementation-specific stuff */
 
@@ -139,12 +99,13 @@ void packed_matrix_init(msieve_obj *obj,
 
 void packed_matrix_free(packed_matrix_t *packed_matrix);
 
+size_t packed_matrix_sizeof(packed_matrix_t *packed_matrix);
+
 void matrix_extra_init(msieve_obj *obj, 
-			packed_matrix_t *packed_matrix);
+			packed_matrix_t *packed_matrix,
+			uint32 first_block_size);
 
 void matrix_extra_free(packed_matrix_t *packed_matrix);
-
-size_t packed_matrix_sizeof(packed_matrix_t *packed_matrix);
 
 /* top-level calls for matrix multiplies */
 
