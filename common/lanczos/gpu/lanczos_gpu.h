@@ -22,6 +22,16 @@ $Id$
 extern "C" {
 #endif
 
+typedef struct {
+	uint32 row_start;
+	uint32 col_start;
+	uint32 num_blocks;
+
+	CUdeviceptr block_num_entries;
+	CUdeviceptr block_entries_start;
+	CUdeviceptr block_entries;
+} block_row_t;
+
 /* implementation-specific structure */
 
 typedef struct {
@@ -47,10 +57,8 @@ typedef struct {
 
 	CUdeviceptr *dense_blocks;
 
-	CUdeviceptr block_num_entries;
-	CUdeviceptr block_entries_start;
-	CUdeviceptr block_entries;
-
+	uint32 num_block_rows;
+	block_row_t *block_rows;
 } gpudata_t;
 
 
@@ -71,12 +79,6 @@ enum {
 	GPU_K_MATMUL,
 	NUM_GPU_FUNCTIONS /* must be last */
 };
-
-void v_mul_64xN_Nx64_cpu(uint64 *x, uint64 *y,
-		   uint64 *xy, uint32 n);
-
-void v_mul_Nx64_64x64_acc_cpu(uint64 *v, uint64 *x,
-			uint64 *y, uint32 n);
 
 void v_mul_64xN_Nx64_gpu(packed_matrix_t *matrix,
 		   CUdeviceptr x, CUdeviceptr y,

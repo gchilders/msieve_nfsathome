@@ -324,7 +324,7 @@ static void mul_precomp_64x11(uint64 *c, uint64 *x) {
 }
 
 /*-------------------------------------------------------------------*/
-void v_mul_Nx64_64x64_acc_cpu(uint64 *v, uint64 *x,
+static void v_mul_Nx64_64x64_acc_cpu(uint64 *v, uint64 *x,
 			uint64 *y, uint32 n) {
 
 	uint64 c[8 * 256];
@@ -540,7 +540,7 @@ static void mul_64xN_Nx64_postproc(uint64 *c, uint64 *xy) {
 }
 
 /*-------------------------------------------------------------------*/
-void v_mul_64xN_Nx64_cpu(uint64 *x, uint64 *y,
+static void v_mul_64xN_Nx64_cpu(uint64 *x, uint64 *y,
 		   uint64 *xy, uint32 n) {
 
 	uint64 c[8 * 256];

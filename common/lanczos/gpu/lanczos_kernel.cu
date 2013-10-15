@@ -157,11 +157,7 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 texture<uint2, cudaTextureType1D, cudaReadModeElementType> matmul_tex;
 
 __global__ void
-lanczos_kernel_matmul(uint32 num_block_cols,
-		      uint32 curr_col,
-		      uint32 block_size,
-		      uint32 first_block_size,
-		      uint32 *counts,
+lanczos_kernel_matmul(uint32 *counts,
 		      uint32 *offsets,
 		      uint32 *mat_entries,
 		      uint64 *x,
@@ -169,54 +165,43 @@ lanczos_kernel_matmul(uint32 num_block_cols,
 {
 	__shared__ uint64 shared_sums[MATMUL_THREADS];
 
-	uint32 curr_row = blockIdx.x;
-	uint32 curr_x = curr_col * block_size;
-	uint64 *curr_b = (curr_row == 0) ? b : b + first_block_size +
-				(curr_row - 1) * block_size;
-	uint32 which_block = curr_row * num_block_cols + curr_col;
+	uint32 which_block = blockIdx.x;
 	uint32 num_entries = counts[which_block];
-	uint32 *entries = mat_entries + offsets[which_block];
-	uint32 i = MATMUL_THREADS * (1 + num_entries / 
-			MATMUL_THREADS) + threadIdx.x;
+	uint32 *entries = mat_entries + offsets[which_block] + MATMUL_THREADS;
 	uint64 sum = 0;
+	uint32 i;
 	gpu_entry_idx_t e;
 
-	while (i >= MATMUL_THREADS) {
+	for (i = threadIdx.x; i < num_entries; i += MATMUL_THREADS) {
 
-		if (i < num_entries + MATMUL_THREADS) {
+		e.w = load_bypassL1(entries + i);
 
-			e.w = load_bypassL1(entries + i);
-
-			sum ^= uint2_to_uint64(tex1Dfetch(matmul_tex,
-						curr_x + e.d.col_off));
-
-			if (e.d.row_off_head) {
-				curr_b[e.d.row_off] ^= sum;
-				sum = 0;
-			}
+		if (e.d.head) {
+			b[e.d.offset] ^= sum;
+			sum = 0;
 		}
-
-		i -= MATMUL_THREADS;
+		else {
+			sum ^= x[e.d.offset];
+		}
 	}
 
-	shared_sums[i] = sum;
+	shared_sums[threadIdx.x] = sum;
+	entries -= MATMUL_THREADS;
 	__syncthreads();
 
-	/* start parallel reverse exclusive segmented prefix scan */
+	/* start parallel exclusive segmented prefix scan */
 
 	if (threadIdx.x == 0) {
-		uint32 j = MATMUL_THREADS - 1;
+		sum = shared_sums[0];
+		shared_sums[0] = 0;
 
-		sum = shared_sums[j];
-		shared_sums[j] = 0;
+		for (i = 1; i < MATMUL_THREADS; i++) {
 
-		for (j--; (int32)j >= 0; j--) {
+			uint64 sum0 = shared_sums[i];
 
-			uint64 sum0 = shared_sums[j];
-
-			e.w = load_bypassL1(entries + j);
-			if (e.d.row_off_head) {
-				shared_sums[j] = sum;
+			e.w = load_bypassL1(entries + i);
+			if (e.d.head) {
+				shared_sums[i] = sum;
 				sum = sum0;
 			}
 			else {
@@ -224,13 +209,14 @@ lanczos_kernel_matmul(uint32 num_block_cols,
 			}
 		}
 	}
-	/* end parallel reverse exclusive segmented prefix scan */
+	/* end parallel exclusive segmented prefix scan */
 
 	__syncthreads();
 
-	e.w = load_bypassL1(entries + i);
-	if (e.d.row_off_head)
-		curr_b[e.d.row_off] ^= shared_sums[i];
+	e.w = load_bypassL1(entries + threadIdx.x);
+	if (e.d.head)
+		b[e.d.offset] ^= shared_sums[threadIdx.x];
+
 }
 
 #ifdef __cplusplus

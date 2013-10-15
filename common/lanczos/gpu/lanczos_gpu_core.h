@@ -164,11 +164,13 @@ typedef union {
 
 	uint32 w;
 
+	/* offset is a column offset unless head is nonzero,
+	   in which case it is a row offset (i.e. a trigger that
+	   a new row is starting) */
+
 	struct {
-		uint16 row_off : 15;
-		uint16 row_off_head : 1;
-		uint16 col_off : 15;
-		uint16 col_off_head : 1;
+		uint32 offset : 31;
+		uint32 head : 1;
 	} d; 
 } gpu_entry_idx_t;
 

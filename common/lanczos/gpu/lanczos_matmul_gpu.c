@@ -61,12 +61,8 @@ static const gpu_arg_type_list_t gpu_kernel_args[] =
 		}
 	},
 	/* lanczos_kernel_matmul */
-	{ 9,
+	{ 5,
 		{
-		  GPU_ARG_UINT32,
-		  GPU_ARG_UINT32,
-		  GPU_ARG_UINT32,
-		  GPU_ARG_UINT32,
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
 		  GPU_ARG_PTR,
@@ -75,6 +71,147 @@ static const gpu_arg_type_list_t gpu_kernel_args[] =
 		}
 	},
 };
+
+typedef struct {
+	uint32 row_off;
+	uint32 col_off;
+} entry_idx_t;
+
+/*-------------------------------------------------------------------*/
+static void copy_dense(packed_matrix_t *p) 
+{
+	/* copy the dense arrays to device memory */
+
+	uint32 i, j;
+	uint32 ncols = p->ncols;
+	gpudata_t *d = (gpudata_t *)p->extra;
+	uint32 num_dense_blocks = (p->num_dense_rows + 63) / 64;
+	uint64 *tmp = (uint64 *)xmalloc(ncols * sizeof(uint64));
+
+	d->dense_blocks = (CUdeviceptr *)xmalloc(num_dense_blocks *
+						sizeof(CUdeviceptr));
+
+	for (i = 0; i < num_dense_blocks; i++) {
+
+		for (j = 0; j < ncols; j++) {
+			la_col_t *col = p->unpacked_cols + j;
+			uint32 *src = col->data + col->weight;
+
+			tmp[j] = (uint64)src[2 * i + 1] << 32 |
+				 (uint64)src[2 * i];
+		}
+
+		CUDA_TRY(cuMemAlloc(&d->dense_blocks[i], 
+					ncols * sizeof(uint64)))
+		CUDA_TRY(cuMemcpyHtoD(d->dense_blocks[i], tmp,
+					ncols * sizeof(uint64)))
+	}
+
+	free(tmp);
+}
+
+/*-------------------------------------------------------------------*/
+static uint32 extract_block(la_col_t *cols, uint32 ncols,
+			uint32 row_min, uint32 row_max,
+			uint32 col_min, uint32 col_max,
+			entry_idx_t **entries_in, 
+			uint32 *max_entries_in)
+{
+	uint32 i, j;
+	uint32 num_entries = 0;
+	entry_idx_t *entries = *entries_in;
+	uint32 max_entries = *max_entries_in;
+
+	for (i = col_min; i < col_max; i++) {
+
+		la_col_t *col = cols + i;
+
+		for (j = 0; j < col->weight; j++) {
+			uint32 idx = col->data[j];
+
+			if (idx >= row_max)
+				break;
+
+			if (idx >= row_min) {
+
+				entry_idx_t *e;
+
+				if (num_entries == max_entries) {
+					max_entries *= 2;
+					entries = (entry_idx_t *)xrealloc(
+							entries, 
+							max_entries *
+							sizeof(entry_idx_t));
+				}
+
+				e = entries + num_entries++;
+				e->row_off = idx;
+				e->col_off = i;
+			}
+		}
+	}
+
+	*entries_in = entries;
+	*max_entries_in = max_entries;
+	return num_entries;
+}
+
+/*-------------------------------------------------------------------*/
+static void pack_block(entry_idx_t *entries, 
+			uint32 num_entries,
+			uint32 num_rows,
+			uint32 row_min, uint32 col_min,
+			gpu_entry_idx_t *gpu_entries)
+{
+	uint32 i;
+	uint32 num_gpu_entries = num_entries + num_rows;
+	uint32 r = (num_gpu_entries + MATMUL_THREADS - 1) / MATMUL_THREADS; 
+	uint32 c_rem = num_gpu_entries % MATMUL_THREADS;
+	uint32 curr_r = 0;
+	uint32 curr_c = 0;
+	gpu_entry_idx_t *g = gpu_entries + MATMUL_THREADS;
+	uint32 first_in_col = 1;
+
+	if (c_rem == 0)
+		c_rem = MATMUL_THREADS;
+
+	memset(gpu_entries, 0, MATMUL_THREADS * sizeof(gpu_entry_idx_t));
+
+	for (i = num_entries - 1; (int32)i >= 0; i--) {
+
+		entry_idx_t *e = entries + i;
+
+		g->d.head = 0;
+		g->d.offset = e->col_off - col_min;
+
+		g += MATMUL_THREADS;
+		if (++curr_r == ((curr_c < c_rem) ? r : r - 1)) {
+			curr_r = 0;
+			curr_c++;
+			g = gpu_entries + MATMUL_THREADS + curr_c;
+			first_in_col = 1;
+		}
+
+		if (i == 0 || e[0].row_off != e[-1].row_off) {
+
+			g->d.head = 1;
+			g->d.offset = e->row_off - row_min;
+
+			if (first_in_col) {
+				gpu_entries[curr_c] = *g;
+				first_in_col = 0;
+			}
+
+			g += MATMUL_THREADS;
+			if (++curr_r == ((curr_c < c_rem) ? r : r - 1)) {
+				curr_r = 0;
+				curr_c++;
+				g = gpu_entries + MATMUL_THREADS + curr_c;
+				first_in_col = 1;
+			}
+		}
+	}
+}
 
 /*-------------------------------------------------------------------*/
 static int compare_row_off(const void *x, const void *y) {
@@ -90,117 +227,182 @@ static int compare_row_off(const void *x, const void *y) {
 }
 
 /*-------------------------------------------------------------------*/
-static void gpu_matrix_init(packed_matrix_t *p) {
+static void pack_block_row(block_row_t *b, uint32 start_row,
+			entry_idx_t *entries, uint32 num_entries,
+			uint32 entries_per_block) {
 
-	uint32 i;
-	uint32 num_blocks = p->num_block_rows * p->num_block_cols;
-	uint32 num_dense_blocks = (p->num_dense_rows + 63) / 64;
-	uint32 num_nonzero;
-	uint32 *tmp_counts;
-	uint32 *tmp_starts;
-	gpudata_t *d = (gpudata_t *)p->extra;
+	uint32 i, j;
+	uint32 curr_rows;
 
-	/* copy the dense arrays */
+	uint32 num_blocks;
+	uint32 num_blocks_alloc;
+	uint32 *block_counts;
+	uint32 *block_entries_start;
 
-	d->dense_blocks = (CUdeviceptr *)xmalloc(num_dense_blocks *
-						sizeof(CUdeviceptr));
-	for (i = 0; i < num_dense_blocks; i++) {
-		CUDA_TRY(cuMemAlloc(&d->dense_blocks[i], 
-					p->ncols * sizeof(uint64)))
-		CUDA_TRY(cuMemcpyHtoD(d->dense_blocks[i],
-					p->dense_blocks[i],
-					p->ncols * sizeof(uint64)))
-	}
+	uint32 num_block_entries;
+	uint32 num_block_entries_alloc;
+	gpu_entry_idx_t *block_entries;
 
-	/* copy the sparse blocks (assume we can fit at most
-	   4G matrix entries on the device) */
+	num_blocks = 0;
+	num_blocks_alloc = 50;
+	block_counts = (uint32 *)xmalloc(num_blocks_alloc * 
+						sizeof(uint32));
+	block_entries_start = (uint32 *)xmalloc(num_blocks_alloc * 
+						sizeof(uint32));
 
-	tmp_counts = (uint32 *)xmalloc(num_blocks *
-					sizeof(uint32));
-	tmp_starts = (uint32 *)xmalloc(num_blocks *
-					sizeof(uint32));
-
-	for (i = num_nonzero = 0; i < num_blocks; i++) {
-		tmp_counts[i] = p->blocks[i].num_entries;
-		tmp_starts[i] = num_nonzero;
-		num_nonzero += tmp_counts[i] + MATMUL_THREADS;
-	}
-
-	CUDA_TRY(cuMemAlloc(&d->block_num_entries,
-				num_blocks * sizeof(uint32)))
-	CUDA_TRY(cuMemcpyHtoD(d->block_num_entries,
-				tmp_counts,
-				num_blocks * sizeof(uint32)))
-
-	CUDA_TRY(cuMemAlloc(&d->block_entries_start,
-				num_blocks * sizeof(uint32)))
-	CUDA_TRY(cuMemcpyHtoD(d->block_entries_start,
-				tmp_starts,
-				num_blocks * sizeof(uint32)))
-
-	CUDA_TRY(cuMemAlloc(&d->block_entries,
-				num_nonzero * sizeof(gpu_entry_idx_t)))
-
-	for (i = 0; i < num_blocks; i++) {
-
-		uint32 j;
-		uint32 r, c_rem, curr_r, curr_c;
-		gpu_entry_idx_t *gpu_marshall;
-		gpu_entry_idx_t *g;
-		packed_block_t *b = p->blocks + i;
-
-		/* sort in row-major order */
-
-		qsort(b->d.entries, b->num_entries, 
-				sizeof(entry_idx_t), compare_row_off);
-
-		gpu_marshall = (gpu_entry_idx_t *)xcalloc((b->num_entries + 
-						MATMUL_THREADS),
+	num_block_entries = 0;
+	num_block_entries_alloc = 10000;
+	block_entries = (gpu_entry_idx_t *)xmalloc(num_block_entries_alloc * 
 						sizeof(gpu_entry_idx_t));
 
-		r = (b->num_entries + MATMUL_THREADS - 1) / MATMUL_THREADS;
-		c_rem = b->num_entries % MATMUL_THREADS;
-		if (c_rem == 0)
-			c_rem = MATMUL_THREADS;
+	qsort(entries, num_entries, sizeof(entry_idx_t), compare_row_off);
 
-		g = gpu_marshall + MATMUL_THREADS;
+	for (i = j = 0; i < num_entries; i += j) {
 
-		for (j = curr_r = curr_c = 0; j < b->num_entries; j++) {
+		uint32 curr_entries;
 
-			entry_idx_t *e = b->d.entries + j;
+		for (j = curr_rows = 0; i+j < num_entries; j++) {
 
-			g->d.row_off = e->row_off;
-			g->d.col_off = e->col_off;
+			if (j > 0 && entries[i+j].row_off != 
+					entries[i+j-1].row_off) {
 
-			if (j == 0 || e[0].row_off != e[-1].row_off) {
-				g->d.row_off_head = 1;
-				gpu_marshall[curr_c].d.row_off = e->row_off;
-				gpu_marshall[curr_c].d.row_off_head = 1;
-			}
-
-			g += MATMUL_THREADS;
-			if (++curr_r == ((curr_c < c_rem) ? r : r - 1)) {
-				curr_r = 0;
-				curr_c++;
-				g = gpu_marshall + MATMUL_THREADS + curr_c;
+				curr_rows++;
+				if (j > entries_per_block)
+					break;
 			}
 		}
+		if (i+j == num_entries)
+			curr_rows++;
 
-		/* the following assumes we can offset from a 
-		   CUdeviceptr as if it was an ordinary host ptr */
+		if (num_blocks == num_blocks_alloc) {
+			num_blocks_alloc *= 2;
+			block_counts = (uint32 *)xrealloc(
+						block_counts,
+						num_blocks_alloc * 
+						sizeof(uint32));
+			block_entries_start = (uint32 *)xrealloc(
+						block_entries_start,
+						num_blocks_alloc * 
+						sizeof(uint32));
+		}
 
-		CUDA_TRY(cuMemcpyHtoD( (CUdeviceptr)(
-					(entry_idx_t *)d->block_entries +
-					tmp_starts[i]),
-				gpu_marshall,
-				(tmp_counts[i] + MATMUL_THREADS) * 
-						sizeof(gpu_entry_idx_t)))
+		curr_entries = j + MATMUL_THREADS + curr_rows;
 
-		free(gpu_marshall);
+		if (num_block_entries + curr_entries >= 
+					num_block_entries_alloc) {
+			num_block_entries_alloc += MAX(curr_entries,
+						2 * num_block_entries_alloc);
+
+			block_entries = (gpu_entry_idx_t *)xrealloc(
+						block_entries,
+						num_block_entries_alloc * 
+						sizeof(gpu_entry_idx_t));
+		}
+
+		pack_block(entries + i, 
+			j, curr_rows, start_row, 0, 
+			block_entries + num_block_entries);
+
+		block_counts[num_blocks] = j + curr_rows;
+		block_entries_start[num_blocks] = num_block_entries;
+		num_blocks++;
+		num_block_entries += curr_entries;
 	}
 
-	free(tmp_counts);
-	free(tmp_starts);
+	b->row_start = start_row;
+	b->col_start = 0;
+	b->num_blocks = num_blocks;
+
+	CUDA_TRY(cuMemAlloc(&b->block_num_entries,
+				num_blocks * sizeof(uint32)))
+	CUDA_TRY(cuMemcpyHtoD(b->block_num_entries,
+				block_counts,
+				num_blocks * sizeof(uint32)))
+
+	CUDA_TRY(cuMemAlloc(&b->block_entries_start,
+				num_blocks * sizeof(uint32)))
+	CUDA_TRY(cuMemcpyHtoD(b->block_entries_start,
+				block_entries_start,
+				num_blocks * sizeof(uint32)))
+
+	CUDA_TRY(cuMemAlloc(&b->block_entries,
+				num_block_entries * 
+				sizeof(gpu_entry_idx_t)))
+	CUDA_TRY(cuMemcpyHtoD(b->block_entries,
+				block_entries,
+				num_block_entries * 
+				sizeof(gpu_entry_idx_t)))
+	free(block_counts);
+	free(block_entries_start);
+	free(block_entries);
+}
+
+/*-------------------------------------------------------------------*/
+static void gpu_matrix_init(packed_matrix_t *p) {
+
+	uint32 start_row = 0;
+	uint32 block_size = 1000;
+	gpudata_t *d = (gpudata_t *)p->extra;
+
+	uint32 num_block_rows = 0;
+	uint32 num_block_rows_alloc = 100;
+	block_row_t *block_rows = (block_row_t *)xmalloc(
+					num_block_rows_alloc *
+					sizeof(block_row_t));
+
+	uint32 num_entries_alloc = 10000;
+	entry_idx_t *entries = (entry_idx_t *)xmalloc(
+					num_entries_alloc *
+					sizeof(entry_idx_t));
+
+	uint32 preferred_entries_per_block = 100000;
+	uint32 preferred_num_blocks = 5 * d->gpu_info->num_compute_units;
+
+	/* deal with the dense rows */
+
+	copy_dense(p);
+
+	/* deal with the sparse rows */
+
+	while (start_row < p->nrows) {
+
+		block_row_t *b;
+		uint32 num_entries;
+
+		if (num_block_rows == num_block_rows_alloc) {
+			num_block_rows_alloc *= 2;
+			block_rows = (block_row_t *)xrealloc(
+					block_rows,
+					num_block_rows_alloc *
+					sizeof(block_row_t));
+		}
+
+		b = block_rows + num_block_rows++;
+
+		num_entries = extract_block(p->unpacked_cols, p->ncols,
+						start_row, 
+						start_row + block_size,
+						0, p->ncols,
+						&entries,
+						&num_entries_alloc);
+
+		pack_block_row(b, start_row, entries, num_entries,
+				num_entries / preferred_num_blocks);
+
+		/* choose the next block size so that more of the
+		   matrix is grabbed at a time as it becomes more
+		   sparse */
+
+		start_row += block_size;
+		if (num_entries / preferred_entries_per_block <
+				preferred_num_blocks) {
+			block_size *= 2;
+		}
+	}
+
+	d->num_block_rows = num_block_rows;
+	d->block_rows = block_rows;
+	free(entries);
 }
 
 /*-------------------------------------------------------------------*/
@@ -209,9 +411,14 @@ static void gpu_matrix_free(packed_matrix_t *p) {
 	uint32 i;
 	gpudata_t *d = (gpudata_t *)p->extra;
 
-	CUDA_TRY(cuMemFree(d->block_num_entries))
-	CUDA_TRY(cuMemFree(d->block_entries_start))
-	CUDA_TRY(cuMemFree(d->block_entries))
+	for (i = 0; i < d->num_block_rows; i++) {
+		block_row_t *b = d->block_rows + i;
+
+		CUDA_TRY(cuMemFree(b->block_num_entries))
+		CUDA_TRY(cuMemFree(b->block_entries_start))
+		CUDA_TRY(cuMemFree(b->block_entries))
+	}
+	free(d->block_rows);
 
 	for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)
 		CUDA_TRY(cuMemFree(d->dense_blocks[i]))
@@ -219,7 +426,8 @@ static void gpu_matrix_free(packed_matrix_t *p) {
 }
 
 /*-------------------------------------------------------------------*/
-void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p) {
+void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
+			uint32 first_block_size) {
 
 	uint32 i;
 	gpudata_t *d;
@@ -323,91 +531,34 @@ void matrix_extra_free(packed_matrix_t *p) {
 }
 
 /*-------------------------------------------------------------------*/
-static void mul_one_block(packed_block_t *curr_block,
-			uint64 *curr_col, uint64 *curr_b) {
-
-	uint32 i;
-	uint32 num_entries = curr_block->num_entries;
-	entry_idx_t *entries = curr_block->d.entries;
-
-	#define _txor(x) curr_b[entries[i+x].row_off] ^= \
-				 curr_col[entries[i+x].col_off]
-
-	for (i = 0; i < (num_entries & (uint32)(~15)); i += 16) {
-		_txor( 0); _txor( 1); _txor( 2); _txor( 3);
-		_txor( 4); _txor( 5); _txor( 6); _txor( 7);
-		_txor( 8); _txor( 9); _txor(10); _txor(11);
-		_txor(12); _txor(13); _txor(14); _txor(15);
-	}
-
-	#undef _txor
-
-	for (; i < num_entries; i++) {
-		curr_b[entries[i].row_off] ^= curr_col[entries[i].col_off];
-	}
-}
-
-/*-------------------------------------------------------------------*/
-static void mul_packed_cpu(packed_matrix_t *p, uint64 *x, uint64 *b) {
-
-	uint32 i, j;
-
-	memset(b, 0, p->nrows * sizeof(uint64));
-
-	for (i = 0; i < p->num_block_rows; i++) {
-
-		packed_block_t *curr_block = p->blocks + 
-					i * p->num_block_cols;
-		uint64 *curr_x = x;
-		uint32 b_off = 0;
-
-		if (i > 0)
-			b_off = (i - 1) * p->block_size + p->first_block_size;
-
-		for (j = 0; j < p->num_block_cols; j++) {
-			mul_one_block(curr_block, curr_x, b + b_off);
-			curr_block++;
-			curr_x += p->block_size;
-		}
-	}
-
-	for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)
-		v_mul_64xN_Nx64_cpu(p->dense_blocks[i],
-				x, b + 64 * i, p->ncols);
-}
-
-/*-------------------------------------------------------------------*/
 static void mul_packed_gpu(packed_matrix_t *p, gpuvec_t *x, gpuvec_t *b) {
 
 	uint32 i;
 	gpudata_t *d = (gpudata_t *)p->extra;
 	gpu_launch_t *launch = d->launch + GPU_K_MATMUL;
 	gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
-	uint32 num_blocks = p->num_block_rows;
 
 	CUDA_TRY(cuMemsetD8(b->gpu_vec, 0, p->nrows * sizeof(uint64)));
 
 	CUDA_TRY(cuTexRefSetAddress(NULL, d->matmul_texref, 
 				x->gpu_vec, p->ncols * sizeof(uint64)))
 
-	/* invariant kernel args */
+	/* sweep through the matrix a block row at a time */
 
-	gpu_args[0].uint32_arg = p->num_block_cols;
-	gpu_args[2].uint32_arg = p->block_size;
-	gpu_args[3].uint32_arg = p->first_block_size;
-	gpu_args[4].ptr_arg = (void *)(size_t)d->block_num_entries;
-	gpu_args[5].ptr_arg = (void *)(size_t)d->block_entries_start;
-	gpu_args[6].ptr_arg = (void *)(size_t)d->block_entries;
-	gpu_args[7].ptr_arg = (void *)(size_t)x->gpu_vec;
-	gpu_args[8].ptr_arg = (void *)(size_t)b->gpu_vec;
+	for (i = 0; i < d->num_block_rows; i++) {
 
-	/* sweep through the matrix a block column at a time */
+		block_row_t *blk = d->block_rows + i;
 
-	for (i = 0; i < p->num_block_cols; i++) {
+		gpu_args[0].ptr_arg = (void *)(size_t)blk->block_num_entries;
+		gpu_args[1].ptr_arg = (void *)(size_t)blk->block_entries_start;
+		gpu_args[2].ptr_arg = (void *)(size_t)blk->block_entries;
+		gpu_args[3].ptr_arg = (void *)((uint64 *)x->gpu_vec + 
+							blk->col_start);
+		gpu_args[4].ptr_arg = (void *)((uint64 *)b->gpu_vec + 
+							blk->row_start);
 
-		gpu_args[1].uint32_arg = i;
 		gpu_launch_set(launch, gpu_args);
-		CUDA_TRY(cuLaunchGrid(launch->kernel_func, num_blocks, 1))
+		CUDA_TRY(cuLaunchGrid(launch->kernel_func, blk->num_blocks, 1))
 	}
 
 	/* handle dense rows */
@@ -427,94 +578,35 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 	gpuvec_t *x = (gpuvec_t *)x_in;
 	gpuvec_t *b = (gpuvec_t *)b_in;
 
-	if (A->unpacked_cols) {
-		mul_unpacked(A, x->host_vec, b->host_vec);
-
-		CUDA_TRY(cuMemcpyHtoD(b->gpu_vec, b->host_vec, 
-			 		A->ncols * sizeof(uint64)))
-	}
-	else {
-		mul_packed_gpu(A, x, b);
+	mul_packed_gpu(A, x, b);
 
 #ifdef LANCZOS_GPU_DEBUG
-		{
-			uint32 i;
-			uint64 *tmp = (uint64 *)xmalloc(A->ncols * 
-							sizeof(uint64));
+	{
+		uint32 i;
+		uint64 *tmp = (uint64 *)xmalloc(A->ncols * 
+						sizeof(uint64));
 
-			CUDA_TRY(cuMemcpyDtoH(tmp, b->gpu_vec, 
-						A->ncols * sizeof(uint64)))
+		CUDA_TRY(cuMemcpyDtoH(tmp, b->gpu_vec, 
+					A->ncols * sizeof(uint64)))
 
-			mul_packed_cpu(A, x->host_vec, b->host_vec);
+		mul_unpacked(A, x->host_vec, b->host_vec);
 
-			for (i = 0; i < A->nrows; i++) {
-				if (tmp[i] != b->host_vec[i]) {
-					printf("error %u\n", i);
-					exit(-1);
-				}
+		for (i = 0; i < A->nrows; i++) {
+			if (tmp[i] != b->host_vec[i]) {
+				printf("error %u\n", i);
+				exit(-1);
 			}
-			free(tmp);
-
-			CUDA_TRY(cuMemcpyHtoD(b->gpu_vec, b->host_vec, 
-			 		A->ncols * sizeof(uint64)))
 		}
+
+		free(tmp);
+
+		CUDA_TRY(cuMemcpyHtoD(b->gpu_vec, b->host_vec, 
+		 		A->ncols * sizeof(uint64)))
+	}
 #else
-		CUDA_TRY(cuMemcpyDtoH(b->host_vec, b->gpu_vec, 
-			 		A->ncols * sizeof(uint64)))
+	CUDA_TRY(cuMemcpyDtoH(b->host_vec, b->gpu_vec, 
+		 		A->ncols * sizeof(uint64)))
 #endif
-	}
-
-}
-
-/*-------------------------------------------------------------------*/
-static void mul_trans_one_block(packed_block_t *curr_block,
-				uint64 *curr_row, uint64 *curr_b) {
-
-	uint32 i;
-	uint32 num_entries = curr_block->num_entries;
-	entry_idx_t *entries = curr_block->d.entries;
-
-	#define _txor(x) curr_b[entries[i+x].col_off] ^= \
-				 curr_row[entries[i+x].row_off]	
-
-	for (i = 0; i < (num_entries & (uint32)(~15)); i += 16) {
-		_txor( 0); _txor( 1); _txor( 2); _txor( 3);
-		_txor( 4); _txor( 5); _txor( 6); _txor( 7);
-		_txor( 8); _txor( 9); _txor(10); _txor(11);
-		_txor(12); _txor(13); _txor(14); _txor(15);
-	}
-
-	#undef _txor
-
-	for (; i < num_entries; i++) {
-		curr_b[entries[i].col_off] ^= curr_row[entries[i].row_off];
-	}
-}
-
-/*-------------------------------------------------------------------*/
-static void mul_trans_packed_cpu(packed_matrix_t *p, 
-			uint64 *x, uint64 *b) {
-	uint32 i, j;
-
-	memset(b, 0, p->ncols * sizeof(uint64));
-
-	for (i = 0; i < p->num_block_cols; i++) {
-
-		packed_block_t *curr_block = p->blocks + i;
-		uint32 b_off = i * p->block_size;
-		uint64 *curr_x = x;
-
-		for (j = 0; j < p->num_block_rows; j++) {
-			mul_trans_one_block(curr_block, curr_x, b + b_off);
-			curr_block += p->num_block_cols;
-			curr_x += (j == 0) ? p->first_block_size : 
-					p->block_size;
-		}
-	}
-
-	for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)
-		v_mul_Nx64_64x64_acc_cpu(p->dense_blocks[i],
-					x + 64 * i, b, p->ncols);
 }
 
 /*-------------------------------------------------------------------*/
@@ -523,11 +615,16 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 	gpuvec_t *x = (gpuvec_t *)x_in;
 	gpuvec_t *b = (gpuvec_t *)b_in;
 
-	if (A->unpacked_cols)
-		mul_trans_unpacked(A, x->host_vec, b->host_vec);
-	else
-		mul_trans_packed_cpu(A, x->host_vec, b->host_vec);
+	mul_trans_unpacked(A, x->host_vec, b->host_vec);
 
 	CUDA_TRY(cuMemcpyHtoD(b->gpu_vec, b->host_vec, 
 			       A->ncols * sizeof(uint64)))
 }
+
+/*-------------------------------------------------------------------*/
+size_t packed_matrix_sizeof(packed_matrix_t *p) {
+
+	/* FIXME */
+	return 0;
+}
+
