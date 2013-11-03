@@ -111,7 +111,33 @@ static void copy_dense(packed_matrix_t *p)
 }
 
 /*-------------------------------------------------------------------*/
-static uint32 extract_block(la_col_t *cols, uint32 ncols,
+static uint32 count_entries(la_col_t *cols,
+			uint32 row_min, uint32 row_max,
+			uint32 col_min, uint32 col_max)
+{
+	uint32 i, j;
+	uint32 num_entries = 0;
+
+	for (i = col_min; i < col_max; i++) {
+
+		la_col_t *col = cols + i;
+
+		for (j = 0; j < col->weight; j++) {
+			uint32 idx = col->data[j];
+
+			if (idx >= row_max)
+				break;
+
+			if (idx >= row_min)
+				num_entries++;
+		}
+	}
+
+	return num_entries;
+}
+
+/*-------------------------------------------------------------------*/
+static uint32 extract_block(la_col_t *cols,
 			uint32 row_min, uint32 row_max,
 			uint32 col_min, uint32 col_max,
 			entry_idx_t **entries_in, 
@@ -160,7 +186,6 @@ static uint32 extract_block(la_col_t *cols, uint32 ncols,
 static void pack_block(entry_idx_t *entries, 
 			uint32 num_entries,
 			uint32 num_rows,
-			uint32 row_min, uint32 col_min,
 			gpu_entry_idx_t *gpu_entries)
 {
 	uint32 i;
@@ -182,7 +207,7 @@ static void pack_block(entry_idx_t *entries,
 		entry_idx_t *e = entries + i;
 
 		g->d.head = 0;
-		g->d.offset = e->col_off - col_min;
+		g->d.offset = e->col_off;
 
 		g += MATMUL_THREADS;
 		if (++curr_r == ((curr_c < c_rem) ? r : r - 1)) {
@@ -195,7 +220,7 @@ static void pack_block(entry_idx_t *entries,
 		if (i == 0 || e[0].row_off != e[-1].row_off) {
 
 			g->d.head = 1;
-			g->d.offset = e->row_off - row_min;
+			g->d.offset = e->row_off;
 
 			if (first_in_col) {
 				gpu_entries[curr_c] = *g;
@@ -227,9 +252,10 @@ static int compare_row_off(const void *x, const void *y) {
 }
 
 /*-------------------------------------------------------------------*/
-static void pack_block_row(block_row_t *b, uint32 start_row,
+static void pack_matrix_block(block_row_t *b,
 			entry_idx_t *entries, uint32 num_entries,
-			uint32 entries_per_block) {
+			uint32 entries_per_gpu_block) 
+{
 
 	uint32 i, j;
 	uint32 curr_rows;
@@ -267,7 +293,7 @@ static void pack_block_row(block_row_t *b, uint32 start_row,
 					entries[i+j-1].row_off) {
 
 				curr_rows++;
-				if (j > entries_per_block)
+				if (j > entries_per_gpu_block)
 					break;
 			}
 		}
@@ -299,8 +325,7 @@ static void pack_block_row(block_row_t *b, uint32 start_row,
 						sizeof(gpu_entry_idx_t));
 		}
 
-		pack_block(entries + i, 
-			j, curr_rows, start_row, 0, 
+		pack_block(entries + i, j, curr_rows,
 			block_entries + num_block_entries);
 
 		block_counts[num_blocks] = j + curr_rows;
@@ -309,8 +334,6 @@ static void pack_block_row(block_row_t *b, uint32 start_row,
 		num_block_entries += curr_entries;
 	}
 
-	b->row_start = start_row;
-	b->col_start = 0;
 	b->num_blocks = num_blocks;
 
 	CUDA_TRY(cuMemAlloc(&b->block_num_entries,
@@ -355,7 +378,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 					num_entries_alloc *
 					sizeof(entry_idx_t));
 
-	uint32 preferred_entries_per_block = 100000;
+	uint32 preferred_entries_per_block = 10000;
 	uint32 preferred_num_blocks = 5 * d->gpu_info->num_compute_units;
 
 	/* deal with the dense rows */
@@ -368,33 +391,54 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 
 		block_row_t *b;
 		uint32 num_entries;
+		uint32 max_entries;
+		uint32 num_col_blocks;
+		uint32 col_block_size;
+		uint32 i;
 
-		if (num_block_rows == num_block_rows_alloc) {
-			num_block_rows_alloc *= 2;
-			block_rows = (block_row_t *)xrealloc(
-					block_rows,
-					num_block_rows_alloc *
-					sizeof(block_row_t));
-		}
-
-		b = block_rows + num_block_rows++;
-
-		num_entries = extract_block(p->unpacked_cols, p->ncols,
+		max_entries = count_entries(p->unpacked_cols,
 						start_row, 
 						start_row + block_size,
-						0, p->ncols,
+						0, p->ncols);
+
+		num_col_blocks = MAX(1, max_entries / 
+					(preferred_entries_per_block *
+					 preferred_num_blocks));
+		col_block_size = p->ncols / num_col_blocks + 100;
+		printf("%u\n", num_col_blocks);
+
+		for (i = 0; i < num_col_blocks; i++) {
+
+			uint32 col_min = i * col_block_size;
+			uint32 col_max = MIN(p->ncols, (i+1) * col_block_size);
+
+			num_entries = extract_block(p->unpacked_cols,
+						start_row, 
+						start_row + block_size,
+						col_min, col_max,
 						&entries,
 						&num_entries_alloc);
 
-		pack_block_row(b, start_row, entries, num_entries,
-				num_entries / preferred_num_blocks);
+			if (num_block_rows == num_block_rows_alloc) {
+				num_block_rows_alloc *= 2;
+				block_rows = (block_row_t *)xrealloc(
+						block_rows,
+						num_block_rows_alloc *
+						sizeof(block_row_t));
+			}
+
+			b = block_rows + num_block_rows++;
+
+			pack_matrix_block(b, entries, num_entries,
+					num_entries / preferred_num_blocks);
+		}
 
 		/* choose the next block size so that more of the
 		   matrix is grabbed at a time as it becomes more
 		   sparse */
 
 		start_row += block_size;
-		if (num_entries / preferred_entries_per_block <
+		if (max_entries / preferred_entries_per_block <
 				preferred_num_blocks) {
 			block_size *= 2;
 		}
@@ -545,6 +589,9 @@ static void mul_packed_gpu(packed_matrix_t *p, gpuvec_t *x, gpuvec_t *b) {
 
 	/* sweep through the matrix a block row at a time */
 
+	gpu_args[3].ptr_arg = (void *)((uint64 *)x->gpu_vec);
+	gpu_args[4].ptr_arg = (void *)((uint64 *)b->gpu_vec);
+
 	for (i = 0; i < d->num_block_rows; i++) {
 
 		block_row_t *blk = d->block_rows + i;
@@ -552,10 +599,6 @@ static void mul_packed_gpu(packed_matrix_t *p, gpuvec_t *x, gpuvec_t *b) {
 		gpu_args[0].ptr_arg = (void *)(size_t)blk->block_num_entries;
 		gpu_args[1].ptr_arg = (void *)(size_t)blk->block_entries_start;
 		gpu_args[2].ptr_arg = (void *)(size_t)blk->block_entries;
-		gpu_args[3].ptr_arg = (void *)((uint64 *)x->gpu_vec + 
-							blk->col_start);
-		gpu_args[4].ptr_arg = (void *)((uint64 *)b->gpu_vec + 
-							blk->row_start);
 
 		gpu_launch_set(launch, gpu_args);
 		CUDA_TRY(cuLaunchGrid(launch->kernel_func, blk->num_blocks, 1))
@@ -590,14 +633,14 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 					A->ncols * sizeof(uint64)))
 
 		mul_unpacked(A, x->host_vec, b->host_vec);
-
+#if 1
 		for (i = 0; i < A->nrows; i++) {
 			if (tmp[i] != b->host_vec[i]) {
 				printf("error %u\n", i);
 				exit(-1);
 			}
 		}
-
+#endif
 		free(tmp);
 
 		CUDA_TRY(cuMemcpyHtoD(b->gpu_vec, b->host_vec, 

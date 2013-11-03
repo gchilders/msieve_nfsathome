@@ -181,7 +181,8 @@ lanczos_kernel_matmul(uint32 *counts,
 			sum = 0;
 		}
 		else {
-			sum ^= x[e.d.offset];
+			sum ^= uint2_to_uint64(
+				tex1Dfetch(matmul_tex, e.d.offset));
 		}
 	}
 

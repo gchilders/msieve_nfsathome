@@ -23,8 +23,6 @@ extern "C" {
 #endif
 
 typedef struct {
-	uint32 row_start;
-	uint32 col_start;
 	uint32 num_blocks;
 
 	CUdeviceptr block_num_entries;
