@@ -256,7 +256,8 @@ ifeq ($(CUDA),1)
 		stage1_core_sm11.ptx \
 		stage1_core_sm13.ptx \
 		stage1_core_sm20.ptx \
-		b40c/built
+		b40c/built \
+		mgpu/built
 else
 	NFS_HDR += $(NFS_NOGPU_HDR)
 	NFS_SRCS += $(NFS_NOGPU_SRCS)
@@ -287,6 +288,7 @@ all: $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(GPU_OBJS)
 
 clean:
 	cd b40c && make clean WIN=$(WIN) && cd ..
+	cd mgpu && make clean WIN=$(WIN) && cd ..
 	rm -f msieve msieve.exe libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
 		$(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) \
 		$(COMMON_GPU_OBJS) $(COMMON_NOGPU_OBJS) *.ptx
@@ -336,3 +338,6 @@ lanczos_kernel_sm20.ptx:  common/lanczos/gpu/lanczos_kernel.cu \
 
 b40c/built:
 	cd b40c && make WIN=$(WIN) && cd ..
+
+mgpu/built:
+	cd mgpu && make WIN=$(WIN) && cd ..

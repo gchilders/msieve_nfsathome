@@ -633,7 +633,7 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 					A->ncols * sizeof(uint64)))
 
 		mul_unpacked(A, x->host_vec, b->host_vec);
-#if 1
+#if 0
 		for (i = 0; i < A->nrows; i++) {
 			if (tmp[i] != b->host_vec[i]) {
 				printf("error %u\n", i);
