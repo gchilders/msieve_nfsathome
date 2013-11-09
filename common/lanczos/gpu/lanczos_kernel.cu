@@ -157,67 +157,29 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 texture<uint2, cudaTextureType1D, cudaReadModeElementType> matmul_tex;
 
 __global__ void
-lanczos_kernel_matmul(uint32 *counts,
-		      uint32 *offsets,
-		      uint32 *mat_entries,
-		      uint64 *x,
-		      uint64 *b)
+lanczos_kernel_gather(uint32 *offsets, uint64 *dest, uint32 n)
 {
-	__shared__ uint64 shared_sums[MATMUL_THREADS];
-
-	uint32 which_block = blockIdx.x;
-	uint32 num_entries = counts[which_block];
-	uint32 *entries = mat_entries + offsets[which_block] + MATMUL_THREADS;
-	uint64 sum = 0;
 	uint32 i;
-	gpu_entry_idx_t e;
+	uint32 num_threads = gridDim.x * blockDim.x;
+	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
 
-	for (i = threadIdx.x; i < num_entries; i += MATMUL_THREADS) {
-
-		e.w = load_bypassL1(entries + i);
-
-		if (e.d.head) {
-			b[e.d.offset] ^= sum;
-			sum = 0;
-		}
-		else {
-			sum ^= uint2_to_uint64(
-				tex1Dfetch(matmul_tex, e.d.offset));
-		}
+	for (i = grid_id; i < n; i += num_threads) {
+		dest[i] = uint2_to_uint64(
+				tex1Dfetch(matmul_tex, offsets[i]));
 	}
+}
 
-	shared_sums[threadIdx.x] = sum;
-	entries -= MATMUL_THREADS;
-	__syncthreads();
+/*------------------------------------------------------------------------*/
+__global__ void
+lanczos_kernel_fixup(uint64 *src, uint64 *dest, 
+			uint32 *row_off, uint32 n)
+{
+	uint32 i;
+	uint32 num_threads = gridDim.x * blockDim.x;
+	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
 
-	/* start parallel exclusive segmented prefix scan */
-
-	if (threadIdx.x == 0) {
-		sum = shared_sums[0];
-		shared_sums[0] = 0;
-
-		for (i = 1; i < MATMUL_THREADS; i++) {
-
-			uint64 sum0 = shared_sums[i];
-
-			e.w = load_bypassL1(entries + i);
-			if (e.d.head) {
-				shared_sums[i] = sum;
-				sum = sum0;
-			}
-			else {
-				sum ^= sum0;
-			}
-		}
-	}
-	/* end parallel exclusive segmented prefix scan */
-
-	__syncthreads();
-
-	e.w = load_bypassL1(entries + threadIdx.x);
-	if (e.d.head)
-		b[e.d.offset] ^= shared_sums[threadIdx.x];
-
+	for (i = grid_id; i < n; i += num_threads)
+		dest[i] = src[row_off[i]] ^ src[row_off[i+1]];
 }
 
 #ifdef __cplusplus

@@ -54,7 +54,7 @@ else
 	CUDA_ROOT = $(shell dirname $(NVCC))/../
 	CUDA_LIBS = -lcuda
 endif
-	CFLAGS += -I"$(CUDA_ROOT)include" -Ib40c -DHAVE_CUDA
+	CFLAGS += -I"$(CUDA_ROOT)include" -Ib40c -Imgpu -DHAVE_CUDA
 	LIBS += $(CUDA_LIBS)
 endif
 ifeq ($(MPI),1)

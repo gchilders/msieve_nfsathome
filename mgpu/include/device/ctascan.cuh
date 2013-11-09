@@ -74,7 +74,8 @@ enum ScanOpType {
 	ScanOpTypeAdd,
 	ScanOpTypeMul,
 	ScanOpTypeMin,
-	ScanOpTypeMax
+	ScanOpTypeMax,
+	ScanOpTypeXor
 };
 
 template<ScanOpType OpType, typename T>
@@ -91,6 +92,7 @@ struct ScanOp {
 			case ScanOpTypeMul: t1 *= t2; break;
 			case ScanOpTypeMin: t1 = min(t1, t2); break;
 			case ScanOpTypeMax: t1 = max(t1, t2); break;
+			case ScanOpTypeXor: t1 ^= t2; break;
 		}
 		return t1;
 	}
@@ -106,6 +108,7 @@ struct ScanOp {
 			case ScanOpTypeMul: _ident = 1; break;
 			case ScanOpTypeMin: _ident = numeric_limits<T>::max(); break;
 			case ScanOpTypeMax: _ident = numeric_limits<T>::lowest(); break;
+			case ScanOpTypeXor: _ident = 0; break;
 		}
 	}
 
