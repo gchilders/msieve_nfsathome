@@ -32,46 +32,57 @@
  *
  ******************************************************************************/
 
-#include "util/util.h"
+#pragma once
 
-#define MGPU_RAND_NS std::tr1
-
-#ifdef _MSC_VER
-#include <random>
-#else
-#include <tr1/random>
-#endif
+#include "../mgpuhost.cuh"
+#include "../device/ctaloadbalance.cuh"
+#include "../kernels/search.cuh"
 
 namespace mgpu {
 
 ////////////////////////////////////////////////////////////////////////////////
-// Random number generators.
+// KernelLoadBalance
 
-MGPU_RAND_NS::mt19937 mt19937;
+template<typename Tuning, typename InputIt>
+MGPU_LAUNCH_BOUNDS void KernelLoadBalance(int aCount, InputIt b_global,
+	int bCount, const int* mp_global, int* indices_global) {
 
-int Rand(int min, int max) {
-	MGPU_RAND_NS::uniform_int<int> r(min, max);
-	return r(mt19937);
+	typedef MGPU_LAUNCH_PARAMS Params;
+	const int NT = Params::NT;
+	const int VT = Params::VT;
+	__shared__ int indices_shared[NT * (VT + 1)];
+	
+	int tid = threadIdx.x;
+	int block = blockIdx.x;
+	int4 range = CTALoadBalance<NT, VT>(aCount, b_global, bCount, block, tid,
+		mp_global, indices_shared, false);
+	aCount = range.y - range.x;
+
+	DeviceSharedToGlobal<NT, VT>(aCount, indices_shared, tid, 
+		indices_global + range.x, false);
 }
-int64 Rand(int64 min, int64 max) {
-	MGPU_RAND_NS::uniform_int<int64> r(min, max);
-	return r(mt19937);
-}
-uint Rand(uint min, uint max) {
-	MGPU_RAND_NS::uniform_int<uint> r(min, max);
-	return r(mt19937);
-}
-uint64 Rand(uint64 min, uint64 max) {
-	MGPU_RAND_NS::uniform_int<uint64> r(min, max);
-	return r(mt19937);
-}
-float Rand(float min, float max) {
-	MGPU_RAND_NS::uniform_real<float> r(min, max);
-	return r(mt19937);
-}
-double Rand(double min, double max) {
-	MGPU_RAND_NS::uniform_real<double> r(min, max);
-	return r(mt19937);
+
+////////////////////////////////////////////////////////////////////////////////
+// LoadBalanceSearch
+
+template<typename InputIt>
+MGPU_HOST void LoadBalanceSearch(int aCount, InputIt b_global, int bCount,
+	int* indices_global, CudaContext& context) {
+
+	const int NT = 128;
+	const int VT = 7;
+	typedef LaunchBoxVT<NT, VT> Tuning;
+	int2 launch = Tuning::GetLaunchParams(context);
+	const int NV = launch.x * launch.y;
+	  
+	MGPU_MEM(int) partitionsDevice = MergePathPartitions<MgpuBoundsUpper>(
+		mgpu::counting_iterator<int>(0), aCount, b_global, bCount, NV, 0,
+		mgpu::less<int>(), context);
+
+	int numBlocks = MGPU_DIV_UP(aCount + bCount, NV);
+	KernelLoadBalance<Tuning><<<numBlocks, launch.x, 0, context.Stream()>>>(
+		aCount, b_global, bCount, partitionsDevice->get(), indices_global);
+	MGPU_SYNC_CHECK("KernelLoadBalance");
 }
 
 } // namespace mgpu

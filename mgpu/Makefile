@@ -24,7 +24,8 @@ INC = -I"$(CUDA_ROOT)include" -Iinclude -I.
 
 SRC = \
       scan_engine.cu \
-	$(wildcard src/*.cpp)
+	$(wildcard src/*.cpp) \
+	$(wildcard src/*.cu)
 
 DEPS = ./Makefile $(SRC) \
 	scan_engine.h \

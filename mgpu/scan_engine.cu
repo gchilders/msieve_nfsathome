@@ -11,8 +11,6 @@
 
 using namespace mgpu;
 
-typedef ScanOp<ScanOpTypeXor, uint64> scan_func;
-
 extern "C"
 {
 
@@ -34,15 +32,15 @@ SCAN_ENGINE_DECL void
 scan_engine_run(void * e, scan_data_t * data)
 {
 	ContextPtr *ctxptr = (ContextPtr *)e;
-	scan_func func;
 
-	Scan<MgpuScanTypeExc, uint64 *, uint64 *, scan_func> (
+	Scan<MgpuScanTypeExc, uint64 *, uint64, bit_xor<uint64>, uint64 * > (
 				(uint64 *)data->data_in,
 				data->num_elements,
-				(uint64 *)data->data_in,
-				func,
+				(uint64)0,
+				bit_xor<uint64>(),
+				(uint64 *)data->data_in + data->num_elements,
 				0,
-				true,
+				(uint64 *)data->data_in,
 				**ctxptr);
 }
 
