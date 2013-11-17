@@ -23,16 +23,16 @@ GEN_SM35 = -gencode=arch=compute_35,code=\"sm_35,compute_35\"
 INC = -I"$(CUDA_ROOT)include" -Iinclude -I. 
 
 SRC = \
-      scan_engine.cu \
+      spmv_engine.cu \
 	$(wildcard src/*.cpp) \
 	$(wildcard src/*.cu)
 
 DEPS = ./Makefile $(SRC) \
-	scan_engine.h \
+	spmv_engine.h \
 	$(wildcard include/*.h) \
 	$(wildcard include/*.cuh)
 
-LIBNAME = scan_engine
+LIBNAME = spmv_engine
 
 all: $(LIBNAME)_sm20.$(EXT) $(LIBNAME)_sm30.$(EXT) $(LIBNAME)_sm35.$(EXT)
 	touch built

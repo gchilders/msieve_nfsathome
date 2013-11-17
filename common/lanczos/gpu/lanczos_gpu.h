@@ -16,7 +16,7 @@ $Id$
 #define _COMMON_LANCZOS_GPU_LANCZOS_GPU_H_
 
 #include <cuda_xface.h>
-#include <scan_engine.h>
+#include <spmv_engine.h>
 #include "../lanczos.h"
 
 #ifdef __cplusplus
@@ -25,9 +25,10 @@ extern "C" {
 
 typedef struct {
 	uint32 num_rows;
-	uint32 num_entries;
-	CUdeviceptr vector_off;
-	CUdeviceptr vector_off_start;
+	uint32 num_col_entries;
+	CUdeviceptr col_entries;        /* uint32 */
+	CUdeviceptr row_entries;        /* uint32 */
+	int32 spmv_preprocess_handle;
 } block_row_t;
 
 /* implementation-specific structure */
@@ -51,22 +52,18 @@ typedef struct {
 
 	/* matrix data */
 
-	CUtexref matmul_texref;
-
 	CUdeviceptr *dense_blocks;
 
 	uint32 num_block_rows;
 	block_row_t *block_rows;
 
-	CUdeviceptr matmul_scratch;
-
 	/* scan engine data */
 
-	libhandle_t scan_engine_handle;
-	scan_engine_init_func scan_engine_init;
-	scan_engine_free_func scan_engine_free;
-	scan_engine_run_func scan_engine_run;
-	void * scan_engine;
+	libhandle_t spmv_engine_handle;
+	spmv_engine_init_func spmv_engine_init;
+	spmv_engine_free_func spmv_engine_free;
+	spmv_engine_preprocess_func spmv_engine_preprocess;
+	spmv_engine_run_func spmv_engine_run;
 
 } gpudata_t;
 
@@ -85,8 +82,6 @@ enum {
 	GPU_K_XOR,
 	GPU_K_INNER_PROD,
 	GPU_K_OUTER_PROD,
-	GPU_K_GATHER,
-	GPU_K_FIXUP,
 	NUM_GPU_FUNCTIONS /* must be last */
 };
 

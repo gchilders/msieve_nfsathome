@@ -153,35 +153,6 @@ lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
 	}
 }
 
-/*------------------------------------------------------------------------*/
-texture<uint2, cudaTextureType1D, cudaReadModeElementType> matmul_tex;
-
-__global__ void
-lanczos_kernel_gather(uint32 *offsets, uint64 *dest, uint32 n)
-{
-	uint32 i;
-	uint32 num_threads = gridDim.x * blockDim.x;
-	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
-
-	for (i = grid_id; i < n; i += num_threads) {
-		dest[i] = uint2_to_uint64(
-				tex1Dfetch(matmul_tex, offsets[i]));
-	}
-}
-
-/*------------------------------------------------------------------------*/
-__global__ void
-lanczos_kernel_fixup(uint64 *src, uint64 *dest, 
-			uint32 *row_off, uint32 n)
-{
-	uint32 i;
-	uint32 num_threads = gridDim.x * blockDim.x;
-	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
-
-	for (i = grid_id; i < n; i += num_threads)
-		dest[i] = src[row_off[i]] ^ src[row_off[i+1]];
-}
-
 #ifdef __cplusplus
 }
 #endif
