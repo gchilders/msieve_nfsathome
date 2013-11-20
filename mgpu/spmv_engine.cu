@@ -41,23 +41,26 @@ SPMV_ENGINE_DECL int
 spmv_engine_preprocess(spmv_data_t * data)
 {
 	int new_handle = preproc_list.size();
+#if 0
 	spmv_preprocess * new_ptr = new spmv_preprocess();
 
 	SpmvPreprocessUnary<uint64, int *>(
 			data->num_col_entries,
 			(int *)data->row_entries,
 			data->num_rows,
-			false,
+			true,
 			new_ptr,
 			**local_ctx);
 
 	preproc_list.push_back(new_ptr);
+#endif
 	return new_handle;
 }
 
 SPMV_ENGINE_DECL void 
 spmv_engine_run(int preprocess_handle, spmv_data_t * data)
 {
+#if 0
 	SpmvUnaryApply<int *, uint64 *, uint64 *, uint64,
 			bit_and<uint64>, bit_xor<uint64> > (
 				**preproc_list[preprocess_handle],
@@ -67,6 +70,21 @@ spmv_engine_run(int preprocess_handle, spmv_data_t * data)
 				(uint64)0,
 				bit_xor<uint64>(),
 				**local_ctx);
+#else
+       SpmvCsrUnary<int *, int *, uint64 *, uint64 *, uint64,
+                        bit_xor<uint64> > (
+                                (int *)data->col_entries,
+                                data->num_col_entries,      
+                                (int *)data->row_entries,         
+                                data->num_rows,          
+                                (uint64 *)data->vector_in,
+                                true,
+                                (uint64 *)data->vector_out,
+                                (uint64)0,
+                                bit_xor<uint64>(),
+                                **local_ctx);
+
+#endif
 }
 
 } // extern "C"
