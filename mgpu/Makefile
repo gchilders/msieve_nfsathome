@@ -3,8 +3,8 @@ WIN = 0
 
 ifeq ($(WIN),1)
 	CUDA_ROOT = $(shell echo $$CUDA_PATH)
-	NVCC = "$(CUDA_ROOT)bin/nvcc"
-	CUDA_LIBS = "$(CUDA_ROOT)lib/win32/cuda.lib"
+	NVCC = "$(CUDA_ROOT)/bin/nvcc"
+	CUDA_LIBS = "$(CUDA_ROOT)/lib/win32/cuda.lib"
 	EXT = dll
 	NVCCFLAGS = -Xptxas -v -Xcudafe -\# -shared -Xptxas -abi=no
 else
@@ -20,7 +20,7 @@ GEN_SM20 = -gencode=arch=compute_20,code=\"sm_20,compute_20\"
 GEN_SM30 = -gencode=arch=compute_30,code=\"sm_30,compute_30\" 
 GEN_SM35 = -gencode=arch=compute_35,code=\"sm_35,compute_35\" 
 
-INC = -I"$(CUDA_ROOT)include" -Iinclude -I. 
+INC = -I"$(CUDA_ROOT)/include" -Iinclude -I. 
 
 SRC = \
       spmv_engine.cu \
