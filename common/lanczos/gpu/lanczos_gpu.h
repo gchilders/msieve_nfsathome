@@ -57,6 +57,9 @@ typedef struct {
 	uint32 num_block_rows;
 	block_row_t *block_rows;
 
+	uint32 num_trans_block_rows;
+	block_row_t *trans_block_rows;
+
 	/* scan engine data */
 
 	libhandle_t spmv_engine_handle;
@@ -90,6 +93,10 @@ enum {
 void v_mul_64xN_Nx64_gpu(packed_matrix_t *matrix,
 		   CUdeviceptr x, CUdeviceptr y,
 		   CUdeviceptr xy, uint32 n);
+
+void v_mul_Nx64_64x64_acc_gpu(packed_matrix_t *matrix, 
+			CUdeviceptr v, uint64 *x,
+			CUdeviceptr y, uint32 n);
 
 #ifdef __cplusplus
 }
