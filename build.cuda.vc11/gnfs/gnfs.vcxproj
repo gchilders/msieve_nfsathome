@@ -22,7 +22,6 @@
     <ProjectGuid>{AC786FD6-B405-40FB-BA5A-3AB68B33C81D}</ProjectGuid>
     <RootNamespace>gnfs</RootNamespace>
     <Keyword>Win32Proj</Keyword>
-    <VCTargetsPath Condition="'$(VCTargetsPath11)' != '' and '$(VSVersion)' == '' and $(VisualStudioVersion) == ''">$(VCTargetsPath11)</VCTargetsPath>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
@@ -68,18 +67,18 @@
     <_ProjectFileVersion>10.0.30128.1</_ProjectFileVersion>
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(SolutionDir)..\lib\$(Platform)\$(Configuration)\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(Platform)\$(Configuration)\</IntDir>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(SolutionDir)..\lib\$(Platform)\$(Configuration)\</OutDir>
-    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(Platform)\$(Configuration)\</IntDir>
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(SolutionDir)..\lib\$(Platform)\$(Configuration)\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\</IntDir>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(SolutionDir)..\lib\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(Platform)\$(Configuration)\</IntDir>
     <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(SolutionDir)..\lib\$(Platform)\$(Configuration)\</OutDir>
     <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files (x86)\Oracle\Berkeley DB 11gR2 5.3.21\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\b40c;...\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v5.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_LIB;HAVE_CUDA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -89,7 +88,16 @@
       <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
       <CompileAs>Default</CompileAs>
     </ClCompile>
-    <Lib />
+    <ProjectReference>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <Lib>
+      <AdditionalLibraryDirectories>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v5.5\lib\$(Platform);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Lib>
+    <CudaCompile>
+      <CodeGeneration>compute_30,sm_30</CodeGeneration>
+      <NvccCompilation>ptx</NvccCompilation>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Midl>
@@ -97,8 +105,8 @@
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files (x86)\Oracle\Berkeley DB 11gR2 5.3.21\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;_WIN64;_DEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\b40c;..\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v5.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_WIN64;_DEBUG;_LIB;HAVE_CUDA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -108,14 +116,24 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <CompileAs>Default</CompileAs>
     </ClCompile>
-    <Lib />
+    <ProjectReference>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <Lib>
+      <AdditionalLibraryDirectories>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v5.5\lib\$(Platform);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Lib>
+    <CudaCompile>
+      <CodeGeneration>compute_30,sm_30</CodeGeneration>
+      <TargetMachinePlatform>64</TargetMachinePlatform>
+      <NvccCompilation>ptx</NvccCompilation>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <Optimization>Full</Optimization>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
-      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files (x86)\Oracle\Berkeley DB 11gR2 5.3.21\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\b40c;..\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v5.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;HAVE_CUDA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <PrecompiledHeader>
       </PrecompiledHeader>
@@ -123,7 +141,16 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <CompileAs>Default</CompileAs>
     </ClCompile>
-    <Lib />
+    <ProjectReference>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <Lib>
+      <AdditionalLibraryDirectories>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v5.5\lib\$(Platform);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Lib>
+    <CudaCompile>
+      <CodeGeneration>compute_30,sm_30</CodeGeneration>
+      <NvccCompilation>ptx</NvccCompilation>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Midl>
@@ -132,8 +159,8 @@
     <ClCompile>
       <Optimization>Full</Optimization>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
-      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files (x86)\Oracle\Berkeley DB 11gR2 5.3.21\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;_WIN64;NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>.\;..\;..\..\;..\..\include;..\..\b40c;..\..\zlib;..\..\gnfs;..\..\gnfs\poly;..\..\gnfs\poly\stage1;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v5.5\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_WIN64;NDEBUG;_LIB;HAVE_CUDA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <PrecompiledHeader>
       </PrecompiledHeader>
@@ -141,14 +168,24 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <CompileAs>Default</CompileAs>
     </ClCompile>
-    <Lib />
+    <ProjectReference>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <Lib>
+      <AdditionalLibraryDirectories>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v5.5\lib\$(Platform);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Lib>
+    <CudaCompile>
+      <CodeGeneration>compute_30,sm_30</CodeGeneration>
+      <TargetMachinePlatform>64</TargetMachinePlatform>
+      <NvccCompilation>ptx</NvccCompilation>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\gnfs\fb.c" />
     <ClCompile Include="..\..\gnfs\ffpoly.c" />
     <ClCompile Include="..\..\gnfs\gf2.c" />
     <ClCompile Include="..\..\gnfs\gnfs.c" />
-    <ClCompile Include="..\..\gnfs\poly\stage1\stage1_sieve_cpu.c" />
+    <ClCompile Include="..\..\gnfs\poly\stage1\stage1_sieve_gpu.c" />
     <ClCompile Include="..\..\gnfs\poly\stage2\optimize_deg6.c" />
     <ClCompile Include="..\..\gnfs\poly\stage2\root_sieve_deg45_x.c" />
     <ClCompile Include="..\..\gnfs\poly\stage2\root_sieve_deg5_xy.c" />
@@ -178,16 +215,14 @@
     <ClCompile Include="..\..\gnfs\sqrt\sqrt_a.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\..\mpir\lib\x64\Release\gmp.h" />
-    <ClInclude Include="..\..\..\pthreads\config.h" />
     <ClInclude Include="..\..\gnfs\filter\filter.h" />
+    <ClInclude Include="..\..\gnfs\poly\poly.h" />
+    <ClInclude Include="..\..\gnfs\poly\stage1\cpu_intrinsics.h" />
+    <ClInclude Include="..\..\gnfs\poly\stage1\stage1_core_gpu\cuda_intrinsics.h" />
+    <ClInclude Include="..\..\gnfs\poly\stage1\stage1_core_gpu\stage1_core.h" />
     <ClInclude Include="..\..\gnfs\sieve\sieve.h" />
-    <ClInclude Include="..\..\include\dd.h" />
     <ClInclude Include="..\..\common\filter\filter.h" />
     <ClInclude Include="..\..\gnfs\gnfs.h" />
-    <ClInclude Include="..\..\common\lanczos\lanczos.h" />
-    <ClInclude Include="..\..\include\msieve.h" />
-    <ClInclude Include="..\..\gnfs\poly\poly.h" />
     <ClInclude Include="..\..\gnfs\poly\poly_skew.h" />
     <ClInclude Include="..\..\gnfs\sqrt\sqrt.h" />
     <ClInclude Include="..\..\gnfs\poly\stage1\stage1.h" />

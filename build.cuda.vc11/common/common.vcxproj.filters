@@ -17,6 +17,9 @@
     <ClCompile Include="..\..\common\filter\clique.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\common\cuda_xface.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\common\dickman.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -95,9 +98,6 @@
     <ClCompile Include="..\..\common\strtoll.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\common\smallfact\tinyqs.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\common\util.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -113,10 +113,10 @@
     <ClCompile Include="..\..\common\thread.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\common\cuda_xface.c">
+    <ClCompile Include="..\..\common\driver.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\common\driver.c">
+    <ClCompile Include="..\..\common\smallfact\tinyqs.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -139,9 +139,6 @@
     <ClInclude Include="..\..\common\filter\filter_priv.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\include\integrate.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\common\lanczos\lanczos.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -160,31 +157,16 @@
     <ClInclude Include="..\..\include\thread.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\pthreads\config.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\..\gmp-ecm\ecm.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\..\mpir\lib\x64\Release\gmp.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\..\pthreads\pthread.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\zlib\zlib.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\zlib\zconf.h">
+    <ClInclude Include="..\..\include\cuda_xface.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\common\filter\merge_util.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\include\cuda_xface.h">
+    <ClInclude Include="..\..\include\gmp_xface.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\include\gmp_xface.h">
+    <ClInclude Include="..\..\include\integrate.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -29,23 +29,19 @@
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <PlatformToolset>v110</PlatformToolset>
-    <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <PlatformToolset>v110</PlatformToolset>
-    <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <PlatformToolset>v110</PlatformToolset>
-    <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <PlatformToolset>v110</PlatformToolset>
-    <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -160,10 +156,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\common\batch_factor.c" />
+    <ClCompile Include="..\..\common\cuda_xface.c" />
+    <ClCompile Include="..\..\common\driver.c" />
     <ClCompile Include="..\..\common\filter\clique.c" />
     <ClCompile Include="..\..\common\dickman.c" />
     <ClCompile Include="..\..\common\expr_eval.c" />
     <ClCompile Include="..\..\common\filter\filter.c" />
+    <ClCompile Include="..\..\common\lanczos\lanczos_vv.c" />
     <ClCompile Include="..\..\common\lanczos\matmul_util.c" />
     <ClCompile Include="..\..\common\minimize_global.c" />
     <ClCompile Include="..\..\common\smallfact\gmp_ecm.c" />
@@ -196,12 +195,19 @@
     <ClCompile Include="..\..\common\util.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\..\gmp-ecm\ecm.h" />
+    <ClInclude Include="..\..\..\mpir\lib\x64\Release\gmp.h" />
+    <ClInclude Include="..\..\..\pthreads\config.h" />
+    <ClInclude Include="..\..\..\pthreads\pthread.h" />
+    <ClInclude Include="..\..\common\filter\merge_util.h" />
     <ClInclude Include="..\..\include\batch_factor.h" />
     <ClInclude Include="..\..\include\common.h" />
+    <ClInclude Include="..\..\include\cuda_xface.h" />
     <ClInclude Include="..\..\include\dd.h" />
     <ClInclude Include="..\..\include\ddcomplex.h" />
     <ClInclude Include="..\..\common\filter\filter.h" />
     <ClInclude Include="..\..\common\filter\filter_priv.h" />
+    <ClInclude Include="..\..\include\gmp_xface.h" />
     <ClInclude Include="..\..\include\integrate.h" />
     <ClInclude Include="..\..\common\lanczos\lanczos.h" />
     <ClInclude Include="..\..\common\lanczos\cpu\lanczos_cpu.h" />
@@ -210,6 +216,8 @@
     <ClInclude Include="..\..\include\polyroot.h" />
     <ClInclude Include="..\..\include\thread.h" />
     <ClInclude Include="..\..\include\util.h" />
+    <ClInclude Include="..\..\zlib\zconf.h" />
+    <ClInclude Include="..\..\zlib\zlib.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
