@@ -62,11 +62,14 @@ static void mul_packed(packed_matrix_t *p,
 	/* xor the small vectors from each thread */
 
 	memcpy(b, c->thread_data[0].tmp_b, 
-			c->first_block_size *
+			MAX(c->first_block_size,
+				64 * ((p->num_dense_rows + 63) / 64)) *
 			sizeof(uint64));
 
 	for (i = 1; i < p->num_threads; i++)
-		v_xor(b, c->thread_data[i].tmp_b, c->first_block_size);
+		v_xor(b, c->thread_data[i].tmp_b,
+				MAX(c->first_block_size,
+				    64 * ((p->num_dense_rows + 63) / 64)));
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX)
 	ASM_G volatile ("emms");
@@ -140,10 +143,13 @@ static void matrix_thread_init(void *data, int thread_num) {
 
 	/* we use this scratch vector for both matrix multiplies
 	   and vector-vector operations; it has to be large enough
-	   to support both */
+	   to support both. Note that first_block_size is split across
+	   MPI rows, so it is conceivable with enough MPI processes that
+	   the MAX() is necessary */
 
-	t->tmp_b = (uint64 *)xmalloc(MAX(64, c->first_block_size) *
-					sizeof(uint64));
+	t->tmp_b = (uint64 *)xmalloc(MAX(c->first_block_size,
+				64 * (1 + (p->num_dense_rows + 63) / 64)) *
+				sizeof(uint64));
 }
 
 /*-------------------------------------------------------------------*/

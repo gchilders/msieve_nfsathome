@@ -40,24 +40,18 @@ static void add_to_hashtable(bucket_t *entry,
 	   Note that after the first polynomial it's unlikely
 	   that any hash bin will need to grow in size. */
 
-	uint32 i = entry->num_used;
-	bucket_entry_t new_entry;
-
-	/* always prefetch; we can't rely on the processor
-	   automatically knowing when to do this */
-	if (!(i % 8))
-		PREFETCH(entry->list + i + 8);
+	bucket_entry_t *new_entry;
+	uint32 i = entry->num_used++;
 
 	if (i == entry->num_alloc) {
 		entry->num_alloc = 2 * i;
 		entry->list = (bucket_entry_t *)xrealloc(entry->list,
 						2 * i * sizeof(bucket_entry_t));
 	}
-	new_entry.logprime = logprime;
-	new_entry.prime_index = prime_index;
-	new_entry.sieve_offset = sieve_offset & mask;
-	entry->list[i] = new_entry;
-	entry->num_used++;
+	new_entry = entry->list + i;
+	new_entry->logprime = logprime;
+	new_entry->prime_index = prime_index;
+	new_entry->sieve_offset = sieve_offset & mask;
 }
 	
 /*--------------------------------------------------------------------*/

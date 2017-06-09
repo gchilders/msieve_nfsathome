@@ -56,7 +56,7 @@ $Id$
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#ifndef _MSC_VER
+#if !defined(_MSC_VER) || _MSC_VER >= 1800
 	#define __STDC_FORMAT_MACROS
 	#include <inttypes.h>
 #endif
@@ -64,6 +64,12 @@ $Id$
 	#define _USE_MATH_DEFINES
 #endif
 #include <math.h>
+
+#if defined(_MSC_VER) && _MSC_VER >= 1900
+/* for _getcwd() and _access_s() used in stage1_sieve_gpu.c */
+    #include <direct.h>
+    #include <io.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -122,8 +128,10 @@ extern "C" {
 	#define ftello _ftelli64
 	#define fseeko _fseeki64
 
+#if _MSC_VER < 1900
 	int64 strtoll(const char *nptr, char **endptr, int base);
 	uint64 strtoull(const char *nptr, char **endptr, int base);
+#endif
 
     __inline double rint(double x)
     {

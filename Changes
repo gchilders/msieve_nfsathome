@@ -1,4 +1,46 @@
-Version 1.52:
+Vesrion 1.54:
+	- Updated the makefile to build GPU code for more recent GPUs
+
+
+Version 1.53: 11/11/16
+	- Replaced the GPU sorting library with calls to CUB; this is more
+		compatible with the latest GPU models and works with CUDA
+		toolkits more recent than v5.5, which the old library was
+		stuck with
+	- Added primality proving of factors found (thanks David Cleaver /
+		Brian Gladman)
+	- Added a primality test for factors of NFS relations; apparently
+		the sieving tools will occasionally output relations with 
+		factors that are composite, and this may be the cause of
+		mysterious problems with extremely large jobs
+	- Modified the matrix build in the NFS linear algebra to always use
+		quadratic characters near 2^32, to always choose them so they
+		do not occur in relations, and to decide the number of 
+		characters at runtime with a compiled-in maximum. This paranoia
+		should prevent huge factorizations from failing in the
+		square root, like almost happened to Greg Childers
+	- Added an old fix for potential memory corruption doing NFS filtering
+		with extremely large datasets, since the patch actually
+		saved a factorization from failing (thanks Greg Childers)
+	- Fixed a memory corruption bug in the linear algebra when using many 
+		MPI processes (thanks Ilya Popovyan)
+	- Fixed a bug in factor base generation that stopped NFS line sieving
+		from working (thanks DDEM)
+	- Fixed more problems with >4GB files in windows (thanks Nooby)
+	- Fixed a bug in the NFS line sieve (thanks Erik Branger)
+	- Simplify the inner loop of the QS hashtable sieving code;
+		modern processors run QS noticeably faster now
+		(thanks Mick Francis)
+	- Added a slight speedup for NFS relation parsing (thanks Lionel Debroux)
+	- Added an option to go straight to NFS skipping all preprocessing
+		(thanks Paul Zimmermann / Catalin Patulea)
+	- Fix a buffer overflow rating degree-8 polynomials (thanks jyb)
+        - Capped the number of GPU poly select stage 1 threads at 4
+	- Made the default compile flags include '-march=native' since it's
+		unlikely Apple's gcc still doesn't support it
+	- Overhaul the Visual Studio builds (thanks Brian Gladman)
+
+Version 1.52: 2/4/14
 	- Added a major overhaul of the liner algebra; this uses the
 		thread pool with tighter coordination between threads
 		and much-reduced memory use. On a fast modern processor 
@@ -16,6 +58,7 @@ Version 1.52:
 	- Turned off asm in QS when compiling debug builds
 	- Fixed a buffer overflow parsing large inputs (thanks Ryan Propper)
 	- Fixed Windows CPU time measurement (thanks Roman Rusakov)
+	- Modified makefiles to account for environment vars in CUDA 5.5
 
 
 Version 1.51: 2/17/13

@@ -994,21 +994,13 @@ static void
 load_sort_engine(msieve_obj *obj, device_data_t *d)
 {
 	char libname[256];
-	const char *arch;
 	#if defined(WIN32) || defined(_WIN64)
 	const char *suffix = ".dll";
 	#else
 	const char *suffix = ".so";
 	#endif
 
-	if (d->gpu_info->compute_version_major >= 2)
-		arch = "sm20";
-	else if (d->gpu_info->compute_version_minor >= 3)
-		arch = "sm13";
-	else
-		arch = "sm10";
-
-	sprintf(libname, "b40c/sort_engine_%s%s", arch, suffix);
+	sprintf(libname, "cub/sort_engine%s", suffix);
 
 	/* override from input args */
 
@@ -1027,12 +1019,51 @@ load_sort_engine(msieve_obj *obj, device_data_t *d)
 		}
 	}
 
-	d->sort_engine_handle = load_dynamic_lib(libname);
-	if (d->sort_engine_handle == NULL) {
-		printf("error: failed to load GPU sorting engine\n");
+#ifdef _MSC_VER && _MSC_VER >= 1900
+/*  convert the sort engine file path to an absolute path using
+    backslash directory separators  */
+	char libpath[256], *p, *q;
+	int len;
+
+	_getcwd(libpath, 256);
+	len = strlen(libpath);
+	p = libpath + len;
+	if(*(p - 1) != '\\')
+	{
+		*p++ = '\\';
+		len++;
+	}
+	q = libname - 1;
+	while(*++q && len < 256)
+	{
+		*p++ = (*q != '/' ? *q : '\\');
+		len++;
+	}
+	if(len < 256) {
+		*p++ = 0;
+	}
+	else {
+		printf("error: buffer overflow in %s at line %d\n", __FILE__, __LINE__);
 		exit(-1);
 	}
 
+	if(_access_s(libpath, 0)) {
+		printf("error: GPU sort engine not found at \"%s\"\n", libpath);
+		exit(-1);
+	}
+
+	d->sort_engine_handle = load_dynamic_lib(libpath);
+	if(d->sort_engine_handle == NULL) {
+		printf("error: cannot load GPU sort engine from \"%s\" (check dependencies)\n", libpath);
+		exit(-1);
+}
+#else
+	d->sort_engine_handle = load_dynamic_lib(libname);
+	if(d->sort_engine_handle == NULL) {
+		printf("error: failed to load GPU sorting engine from \"%s\"\n", libname);
+		exit(-1);
+	}
+#endif
 	/* the sort engine uses the same CUDA context */
 
 	d->sort_engine_init = get_lib_symbol(
@@ -1072,12 +1103,23 @@ gpu_thread_data_init(void *data, int threadid)
 
 	/* load GPU kernels */
 
-	if (d->gpu_info->compute_version_major >= 2)
+	if (d->gpu_info->compute_version_major == 2) {
 		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm20.ptx"))
-	else if (d->gpu_info->compute_version_minor >= 3)
-		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm13.ptx"))
-	else
-		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm11.ptx"))
+	}
+	else if (d->gpu_info->compute_version_major == 3) {
+		if (d->gpu_info->compute_version_minor < 5)
+			CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm30.ptx"))
+		else
+			CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm35.ptx"))
+	}
+	else if (d->gpu_info->compute_version_major >= 5) {
+		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm50.ptx"))
+	}
+	else 
+	{
+	    printf("sorry, Nvidia doesn't want to support your card\n");
+		exit(-1);
+	}
 
 	t->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
 				sizeof(gpu_launch_t));
@@ -1261,7 +1303,8 @@ gpu_data_init(msieve_obj *obj, poly_search_t *poly)
 	   pool should have a deeper queue of work */
 
 	d->poly = poly;
-	d->num_threads = num_threads = MAX(1, obj->num_threads);
+	num_threads = MAX(1, obj->num_threads);
+	d->num_threads = num_threads = MIN(4, num_threads);
 	d->max_sort_entries32 /= num_threads;
 	d->max_sort_entries64 /= num_threads;
 	d->threads = (device_thread_data_t *)xcalloc(num_threads,

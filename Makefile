@@ -14,12 +14,13 @@
 
 # override from command line
 WIN = 0
+WIN64 = 0
 
 # gcc with basic optimization (-march flag could
 # get overridden by architecture-specific builds)
 CC = gcc
 WARN_FLAGS = -Wall -W
-OPT_FLAGS = -O3 -fomit-frame-pointer -march=core2 \
+OPT_FLAGS = -O3 -fomit-frame-pointer -march=native \
 	    -D_FILE_OFFSET_BITS=64 -DNDEBUG -D_LARGEFILE64_SOURCE
 
 # use := instead of = so we only run the following once
@@ -30,7 +31,7 @@ endif
 
 CFLAGS = $(OPT_FLAGS) $(MACHINE_FLAGS) $(WARN_FLAGS) \
 	 	-DMSIEVE_SVN_VERSION="\"$(SVN_VERSION)\"" \
-		-I. -Iinclude -Ignfs -Ignfs/poly -Ignfs/poly/stage1
+		-I. -Iaprcl -Iinclude -Ignfs -Ignfs/poly -Ignfs/poly/stage1
 
 # tweak the compile flags
 
@@ -39,7 +40,7 @@ ifeq ($(ECM),1)
 	LIBS += -lecm
 endif
 ifeq ($(WIN),1)
-	LDFLAGS += -Wl,--large-address-aware
+
 else
 	LIBS += -ldl
 endif
@@ -48,13 +49,19 @@ ifeq ($(CUDA),1)
 ifeq ($(WIN),1)
 	CUDA_ROOT = $(shell echo $$CUDA_PATH)
 	NVCC = "$(CUDA_ROOT)/bin/nvcc"
+
+ifeq ($(WIN64),1)
+	CUDA_LIBS = "$(CUDA_ROOT)/lib/x64/cuda.lib"
+else
 	CUDA_LIBS = "$(CUDA_ROOT)/lib/win32/cuda.lib"
+endif
+
 else
 	NVCC = "$(shell which nvcc)"
 	CUDA_ROOT = $(shell dirname $(NVCC))/../
 	CUDA_LIBS = -lcuda
 endif
-	CFLAGS += -I"$(CUDA_ROOT)/include" -Ib40c -Imgpu -DHAVE_CUDA
+	CFLAGS += -I"$(CUDA_ROOT)/include" -Icub -Imgpu -DHAVE_CUDA
 	LIBS += $(CUDA_LIBS)
 endif
 ifeq ($(MPI),1)
@@ -84,6 +91,7 @@ LIBS += -lgmp -lm -lpthread
 #---------------------------------- Generic file lists -------------------
 
 COMMON_HDR = \
+	aprcl/mpz_aprcl32.h \
 	common/lanczos/lanczos.h \
 	common/filter/filter.h \
 	common/filter/filter_priv.h \
@@ -102,6 +110,7 @@ COMMON_HDR = \
 	include/util.h
 
 COMMON_GPU_HDR = \
+	common/lanczos/gpu/lanczos_kernel.cu \
 	common/lanczos/gpu/lanczos_gpu.h \
 	common/lanczos/gpu/lanczos_gpu_core.h
 
@@ -109,6 +118,7 @@ COMMON_NOGPU_HDR = \
 	common/lanczos/cpu/lanczos_cpu.h
 
 COMMON_SRCS = \
+	aprcl/mpz_aprcl32.c \
 	common/filter/clique.c \
 	common/filter/filter.c \
 	common/filter/merge.c \
@@ -190,6 +200,16 @@ QS_OBJS = \
 	mpqs/sieve_core_generic_32k.qo \
 	mpqs/sieve_core_generic_64k.qo
 
+#---------------------------------- GPU file lists -------------------------
+
+GPU_OBJS += \
+	stage1_core_sm20.ptx \
+	stage1_core_sm30.ptx \
+	stage1_core_sm35.ptx \
+	stage1_core_sm50.ptx \
+	cub/built \
+	mgpu/built
+
 #---------------------------------- NFS file lists -------------------------
 
 NFS_HDR = \
@@ -243,29 +263,28 @@ NFS_SRCS = \
 	gnfs/gnfs.c \
 	gnfs/relation.c
 
+NFS_OBJS = $(NFS_SRCS:.c=.no)
+
 NFS_GPU_SRCS = \
 	gnfs/poly/stage1/stage1_sieve_gpu.c
+
+NFS_GPU_OBJS = $(NFS_GPU_SRCS:.c=.no)
 
 NFS_NOGPU_SRCS = \
 	gnfs/poly/stage1/stage1_sieve_cpu.c
 
+NFS_NOGPU_OBJS = $(NFS_NOGPU_SRCS:.c=.no)
+
 ifeq ($(CUDA),1)
 	NFS_HDR += $(NFS_GPU_HDR)
 	NFS_SRCS += $(NFS_GPU_SRCS)
-	GPU_OBJS += \
-		stage1_core_sm11.ptx \
-		stage1_core_sm13.ptx \
-		stage1_core_sm20.ptx \
-		b40c/built \
-		mgpu/built
+	NFS_OBJS += $(NFS_GPU_OBJS)
 else
 	NFS_HDR += $(NFS_NOGPU_HDR)
 	NFS_SRCS += $(NFS_NOGPU_SRCS)
+	NFS_OBJS += $(NFS_NOGPU_OBJS)
+	GPU_OBJS =
 endif
-
-NFS_OBJS = $(NFS_SRCS:.c=.no)
-NFS_GPU_OBJS = $(NFS_GPU_SRCS:.c=.no)
-NFS_NOGPU_OBJS = $(NFS_NOGPU_SRCS:.c=.no)
 
 #---------------------------------- make targets -------------------------
 
@@ -273,6 +292,7 @@ help:
 	@echo "to build:"
 	@echo "make all"
 	@echo "add 'WIN=1 if building on windows"
+	@echo "add 'WIN64=1 if building on 64-bit windows"
 	@echo "add 'ECM=1' if GMP-ECM is available (enables ECM)"
 	@echo "add 'CUDA=1' for Nvidia graphics card support"
 	@echo "add 'MPI=1' for parallel processing using MPI"
@@ -287,11 +307,9 @@ all: $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(GPU_OBJS)
 			libmsieve.a $(LIBS)
 
 clean:
-	cd b40c && make clean WIN=$(WIN) && cd ..
-	cd mgpu && make clean WIN=$(WIN) && cd ..
+	cd cub && make clean WIN=$(WIN) WIN64=$(WIN64) && cd ..
 	rm -f msieve msieve.exe libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
-		$(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) \
-		$(COMMON_GPU_OBJS) $(COMMON_NOGPU_OBJS) *.ptx
+		$(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) *.ptx
 
 #----------------------------------------- build rules ----------------------
 
@@ -322,22 +340,22 @@ mpqs/sieve_core_generic_64k.qo: mpqs/sieve_core.c $(COMMON_HDR) $(QS_HDR)
 
 # GPU build rules
 
-stage1_core_sm11.ptx: $(NFS_GPU_HDR)
-	$(NVCC) -arch sm_11 -ptx -o $@ $<
-
-stage1_core_sm13.ptx: $(NFS_GPU_HDR)
-	$(NVCC) -arch sm_13 -ptx -o $@ $<
-
 stage1_core_sm20.ptx: $(NFS_GPU_HDR)
 	$(NVCC) -arch sm_20 -ptx -o $@ $<
 
-	
-lanczos_kernel_sm20.ptx:  common/lanczos/gpu/lanczos_kernel.cu \
-			$(COMMON_GPU_HDR)
+stage1_core_sm30.ptx: $(NFS_GPU_HDR)
+	$(NVCC) -arch sm_30 -ptx -o $@ $<
+
+stage1_core_sm35.ptx: $(NFS_GPU_HDR)
+	$(NVCC) -arch sm_35 -ptx -o $@ $<
+
+stage1_core_sm50.ptx: $(NFS_GPU_HDR)
+	$(NVCC) -arch sm_50 -ptx -o $@ $<
+
+lanczos_kernel_sm20.ptx: $(COMMON_GPU_HDR)
 	$(NVCC) -arch sm_20 -ptx -o $@ $<
 
-b40c/built:
-	cd b40c && make WIN=$(WIN) && cd ..
-
+cub/built:
+	cd cub && make WIN=$(WIN) WIN64=$(WIN64) sm=200,300,350,500 && cd ..
 mgpu/built:
 	cd mgpu && make WIN=$(WIN) && cd ..

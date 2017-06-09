@@ -654,7 +654,7 @@ static void get_zeros_rec(uint32 *zeros, uint32 shift,
 
 		poly_gcd(g, f, p);
 
-		if (g->degree > 0)
+		if (g->degree > 0 && g->degree < f->degree)
 			break;
 		shift++;
 	}
