@@ -1000,12 +1000,12 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 	}
 
 	if (dump_interval) {
-		/* avoid check (at dump) within 4*64 dim + some cushion */
-		next_dump = ((dim_solved + 400) / dump_interval + 1) * 
+		/* avoid check (at dump) within the next few iterations */
+		next_dump = ((dim_solved + 6 * VBITS) / dump_interval + 1) * 
 					dump_interval;
 		check_interval = 10000;
 		/* avoid next_check within 4*64 dim + some cushion */
-		next_check = ((dim_solved + 400) / check_interval + 1) * 
+		next_check = ((dim_solved + 6 * VBITS) / check_interval + 1) * 
 					check_interval;
 	}
 
@@ -1082,10 +1082,7 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 		if (!v_is_all_ones(mask0)) {
 			vv_mask(vnext, mask0, n);
 		}
-#if 0
-		if (dim_solved > 400)
-			obj->flags |= MSIEVE_FLAG_STOP_SIEVING;
-#endif
+
 		/* begin the computation of the next v' * v0. For 
 		   the first three iterations, this requires a full 
 		   inner product. For all succeeding iterations, the 
@@ -1133,8 +1130,8 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 				}
 			}
 			/* check passed */
-			next_check = ((dim_solved + 400) / check_interval + 1) * 
-							check_interval;
+			next_check = ((dim_solved + 6 * VBITS) / 
+					check_interval + 1) * check_interval;
 			vv_copy(v0, vnext, n);
 		}
 
@@ -1315,8 +1312,8 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 				MPI_TRY(MPI_Bcast(&dump_interval, 1, 
 						MPI_INT, 0, obj->mpi_la_grid))
 #endif
-				next_dump = ((dim_solved + 400) / dump_interval + 1) * 
-							dump_interval;
+				next_dump = ((dim_solved + 6 * VBITS) / 
+						dump_interval + 1) * dump_interval;
 				continue;
 			}
 
@@ -1331,7 +1328,7 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 						   vt_a_v, vt_a2_v, winv, 
 						   n, max_n, dim_solved, 
 						   iter, s, dim1, scratch);
-				next_dump = ((dim_solved + 400) / dump_interval + 1) * 
+				next_dump = ((dim_solved + 6 * VBITS) / dump_interval + 1) * 
 							dump_interval;
 			}
 			if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
@@ -1616,7 +1613,7 @@ uint64 * block_lanczos(msieve_obj *obj,
 	   just to establish timing information */
 
 	dump_interval = 0;
-	if (max_nrows > 100000) {
+	if (max_nrows > 1000000) {
 		dump_interval = DEFAULT_DUMP_INTERVAL;
 		obj->flags |= MSIEVE_FLAG_SIEVING_IN_PROGRESS;
 	}
