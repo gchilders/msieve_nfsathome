@@ -21,11 +21,113 @@ $Id$
 extern "C" {
 #endif
 
+/* the number of dependencies that will be generated
+   internally (a max of 64 dependencies will be exposed
+   to calling code) */
+
+#define VBITS 64
+#define VWORDS ((VBITS + 63) / 64)
+
+#if VBITS!=64 && VBITS!=128 && VBITS!=256
+#error "unsupported vector size"
+#endif
+
+typedef struct {
+	uint64 w[VWORDS];
+} v_t;
+
+static INLINE v_t v_and(v_t a, v_t b) {
+	v_t res;
+
+	res.w[0] = a.w[0] & b.w[0];
+	#if VWORDS > 1
+	res.w[1] = a.w[1] & b.w[1];
+	#if VWORDS > 2
+	res.w[2] = a.w[2] & b.w[2];
+	#if VWORDS > 3
+	res.w[3] = a.w[3] & b.w[3];
+	#endif
+	#endif
+	#endif
+	return res;
+}
+
+static INLINE v_t v_or(v_t a, v_t b) {
+	v_t res;
+
+	res.w[0] = a.w[0] | b.w[0];
+	#if VWORDS > 1
+	res.w[1] = a.w[1] | b.w[1];
+	#if VWORDS > 2
+	res.w[2] = a.w[2] | b.w[2];
+	#if VWORDS > 3
+	res.w[3] = a.w[3] | b.w[3];
+	#endif
+	#endif
+	#endif
+	return res;
+}
+
+static INLINE v_t v_xor(v_t a, v_t b) {
+	v_t res;
+
+	res.w[0] = a.w[0] ^ b.w[0];
+	#if VWORDS > 1
+	res.w[1] = a.w[1] ^ b.w[1];
+	#if VWORDS > 2
+	res.w[2] = a.w[2] ^ b.w[2];
+	#if VWORDS > 3
+	res.w[3] = a.w[3] ^ b.w[3];
+	#endif
+	#endif
+	#endif
+	return res;
+}
+
+static INLINE uint32 v_bitset(v_t a, uint32 bit) {
+	if (a.w[bit / 64] & ((uint64)1 << (bit % 64)))
+		return 1;
+	return 0;
+}
+
+static INLINE uint32 v_is_all_zeros(v_t a) {
+
+	uint32 i;
+
+	for (i = 0; i < VWORDS; i++)
+		if (a.w[i])
+			return 0;
+	return 1;
+}
+
+static INLINE uint32 v_is_all_ones(v_t a) {
+
+	uint32 i;
+
+	for (i = 0; i < VWORDS; i++)
+		if (a.w[i] != (uint64)(-1))
+			return 0;
+	return 1;
+}
+
+static INLINE v_t v_random(uint32 *seed1, uint32 *seed2) {
+	v_t res;
+	uint32 i;
+
+	for (i = 0; i < VWORDS; i++)
+		res.w[i] = (uint64)(get_rand(seed1, seed2)) << 32 |
+			   (uint64)(get_rand(seed1, seed2));
+
+	return res;
+}
+
+static const v_t v_zero = {{0}};
+
 /* for matrices of dimension exceeding MIN_POST_LANCZOS_DIM,
    the first POST_LANCZOS_ROWS rows are handled in a separate
    Gauss elimination phase after the Lanczos iteration
    completes. This means the lanczos code will produce about
-   64 - POST_LANCZOS_ROWS dependencies on average. 
+   VBITS - POST_LANCZOS_ROWS dependencies on average. 
    
    The code will still work if POST_LANCZOS_ROWS is 0, but I 
    don't know why you would want to do that. The first rows are 
@@ -34,7 +136,7 @@ extern "C" {
    in a matrix multiply, as well as the memory footprint of 
    the matrix */
 
-#define POST_LANCZOS_ROWS 48
+#define POST_LANCZOS_ROWS (VBITS - 16)
 #define MIN_POST_LANCZOS_DIM 10000
 
 /* the smallest matrix size that will be converted 
@@ -109,21 +211,19 @@ void matrix_extra_free(packed_matrix_t *packed_matrix);
 
 /* top-level calls for matrix multiplies */
 
-void mul_MxN_Nx64(packed_matrix_t *A, 
+void mul_MxN_NxB(packed_matrix_t *A, 
 			void *x, void *scratch);
 
-void mul_sym_NxN_Nx64(packed_matrix_t *A, void *x, 
+void mul_sym_NxN_NxB(packed_matrix_t *A, void *x, 
 			void *b, void *scratch);
 
 /* easy base cases for small problems */
 
-void mul_unpacked(packed_matrix_t *matrix,
-			  uint64 *x, uint64 *b); 
+void mul_unpacked(packed_matrix_t *matrix, v_t *x, v_t *b); 
 
-void mul_trans_unpacked(packed_matrix_t *matrix,
-				uint64 *x, uint64 *b);
+void mul_trans_unpacked(packed_matrix_t *matrix, v_t *x, v_t *b);
 
-/* implementation-specifc matrix-vector product */
+/* implementation-specific matrix-vector product */
 
 void mul_core(packed_matrix_t *A, void *x, void *b);
 void mul_trans_core(packed_matrix_t *A, void *x, void *b);
@@ -148,20 +248,20 @@ void global_xor_scatter(void *send_buf, void *recv_buf,
 
 /* top-level calls for vector-vector operations */
 
-void *v_alloc(uint32 n, void *extra);
-void v_free(void *v);
-void v_copyin(void *dest, uint64 *src, uint32 n);
-void v_copy(void *dest, void *src, uint32 n);
-void v_copyout(uint64 *dest, void *src, uint32 n);
-void v_clear(void *v, uint32 n);
-void v_xor(void *dest, void *src, uint32 n);
-void v_mask(void *v, uint64 mask, uint32 n);
+void *vv_alloc(uint32 n, void *extra);
+void vv_free(void *v);
+void vv_copyin(void *dest, v_t *src, uint32 n);
+void vv_copy(void *dest, void *src, uint32 n);
+void vv_copyout(v_t *dest, void *src, uint32 n);
+void vv_clear(void *v, uint32 n);
+void vv_xor(void *dest, void *src, uint32 n);
+void vv_mask(void *v, v_t mask, uint32 n);
 
-void v_mul_Nx64_64x64_acc(packed_matrix_t *A, void *v, uint64 *x, 
+void vv_mul_NxB_BxB_acc(packed_matrix_t *A, void *v, v_t *x, 
 			void *y, uint32 n);
 
-void v_mul_64xN_Nx64(packed_matrix_t *A, void *x, void *y, 
-			uint64 *xy, uint32 n);
+void vv_mul_BxN_NxB(packed_matrix_t *A, void *x, void *y, 
+			v_t *xy, uint32 n);
 
 #ifdef __cplusplus
 }

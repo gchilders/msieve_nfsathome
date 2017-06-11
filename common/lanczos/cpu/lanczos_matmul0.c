@@ -15,8 +15,7 @@ $Id$
 #include "lanczos_cpu.h"
 
 /*-------------------------------------------------------------------*/
-static void mul_packed(packed_matrix_t *p, 
-			uint64 *x, uint64 *b) 
+static void mul_packed(packed_matrix_t *p, v_t *x, v_t *b) 
 {
 	uint32 i, j;
 	task_control_t task = {NULL, NULL, NULL, NULL};
@@ -61,15 +60,14 @@ static void mul_packed(packed_matrix_t *p,
 
 	/* xor the small vectors from each thread */
 
-	memcpy(b, c->thread_data[0].tmp_b, 
-			MAX(c->first_block_size,
-				64 * ((p->num_dense_rows + 63) / 64)) *
-			sizeof(uint64));
+	vv_copy(b, c->thread_data[0].tmp_b, 
+			MAX(c->first_block_size, VBITS * 
+				((p->num_dense_rows + VBITS - 1) / VBITS)));
 
 	for (i = 1; i < p->num_threads; i++)
-		v_xor(b, c->thread_data[i].tmp_b,
-				MAX(c->first_block_size,
-				    64 * ((p->num_dense_rows + 63) / 64)));
+		vv_xor(b, c->thread_data[i].tmp_b,
+			MAX(c->first_block_size, VBITS * 
+				((p->num_dense_rows + VBITS - 1) / VBITS)));
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX)
 	ASM_G volatile ("emms");
@@ -79,8 +77,7 @@ static void mul_packed(packed_matrix_t *p,
 }
 
 /*-------------------------------------------------------------------*/
-static void mul_trans_packed(packed_matrix_t *p, 
-			uint64 *x, uint64 *b) 
+static void mul_trans_packed(packed_matrix_t *p, v_t *x, v_t *b) 
 {
 	uint32 i, j;
 	task_control_t task = {NULL, NULL, NULL, NULL};
@@ -147,9 +144,8 @@ static void matrix_thread_init(void *data, int thread_num) {
 	   MPI rows, so it is conceivable with enough MPI processes that
 	   the MAX() is necessary */
 
-	t->tmp_b = (uint64 *)xmalloc(MAX(c->first_block_size,
-				64 * (1 + (p->num_dense_rows + 63) / 64)) *
-				sizeof(uint64));
+	t->tmp_b = (v_t *)vv_alloc(MAX(c->first_block_size, VBITS *
+			(1 + (p->num_dense_rows + VBITS - 1) / VBITS)), p->extra);
 }
 
 /*-------------------------------------------------------------------*/
@@ -159,7 +155,7 @@ static void matrix_thread_free(void *data, int thread_num) {
 	cpudata_t *c = (cpudata_t *)p->extra;
 	thread_data_t *t = c->thread_data + thread_num;
 
-	free(t->tmp_b);
+	vv_free(t->tmp_b);
 }
 
 /*-------------------------------------------------------------------*/
@@ -238,24 +234,26 @@ static void pack_matrix_core(packed_matrix_t *p)
 	uint32 num_block_cols = c->num_block_cols;
 	uint32 first_block_size = c->first_block_size;
 
-	/* pack the dense rows 64 at a time */
+	/* pack the dense rows VBITS at a time */
 
-	dense_row_blocks = (p->num_dense_rows + 63) / 64;
+	dense_row_blocks = (p->num_dense_rows + VBITS - 1) / VBITS;
 	if (dense_row_blocks) {
-		c->dense_blocks = (uint64 **)xmalloc(dense_row_blocks *
-						sizeof(uint64 *));
+		c->dense_blocks = (v_t **)xmalloc(dense_row_blocks *
+						sizeof(v_t *));
 		for (i = 0; i < dense_row_blocks; i++) {
-			c->dense_blocks[i] = (uint64 *)xmalloc(ncols *
-							sizeof(uint64));
+			c->dense_blocks[i] = (v_t *)vv_alloc(ncols, p->extra);
 		}
 
 		for (i = 0; i < ncols; i++) {
 			la_col_t *col = A + i;
 			uint32 *src = col->data + col->weight;
 			for (j = 0; j < dense_row_blocks; j++) {
-				c->dense_blocks[j][i] = 
-						(uint64)src[2 * j + 1] << 32 |
-						(uint64)src[2 * j];
+				for (k = 0; k < VWORDS; k++) {
+					uint32 t = j * VWORDS + k;
+					c->dense_blocks[j][i].w[k] = 
+						(uint64)src[2 * t + 1] << 32 |
+						(uint64)src[2 * t];
+				}
 			}
 		}
 	}
@@ -458,8 +456,8 @@ void matrix_extra_free(packed_matrix_t *p) {
 		}
 	}
 	else {
-		for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)
-			free(c->dense_blocks[i]);
+		for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++)
+			vv_free(c->dense_blocks[i]);
 
 		for (i = 0; i < c->num_block_rows * c->num_block_cols; i++) 
 			free(c->blocks[i].d.entries);
@@ -488,9 +486,9 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 
 #ifdef HAVE_MPI
 	mem_use = (6 * p->nsubcols + 2 * 
-			MAX(p->nrows, p->ncols)) * sizeof(uint64);
+			MAX(p->nrows, p->ncols)) * sizeof(v_t);
 #else
-	mem_use = 7 * p->max_ncols * sizeof(uint64);
+	mem_use = 7 * p->max_ncols * sizeof(v_t);
 #endif
 
 	/* and for the matrix */
@@ -509,13 +507,13 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 		uint32 num_blocks = c->num_block_rows * 
 					c->num_block_cols;
 
-		mem_use += sizeof(uint64) * p->num_threads * 
+		mem_use += sizeof(v_t) * p->num_threads * 
 				c->first_block_size;
 
 		mem_use += sizeof(packed_block_t) * num_blocks;
 
-		mem_use += p->ncols * sizeof(uint64) *
-				((p->num_dense_rows + 63) / 64);
+		mem_use += p->ncols * sizeof(v_t) *
+				((p->num_dense_rows + VBITS - 1) / VBITS);
 
 		for (j = 0; j < num_blocks; j++) {
 			packed_block_t *b = c->blocks + j;
@@ -540,8 +538,8 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 	/* Multiply the vector x[] by the matrix A and put the 
 	   result in b[]. x must not alias b */
 
-	uint64 *x = (uint64 *)x_in;
-	uint64 *b = (uint64 *)b_in;
+	v_t *x = (v_t *)x_in;
+	v_t *b = (v_t *)b_in;
 
 	if (A->unpacked_cols)
 		mul_unpacked(A, x, b);
@@ -555,8 +553,8 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 	/* Multiply the vector x[] by the transpose of matrix A 
 	   and put the result in b[]. x must not alias b */
 
-	uint64 *x = (uint64 *)x_in;
-	uint64 *b = (uint64 *)b_in;
+	v_t *x = (v_t *)x_in;
+	v_t *b = (v_t *)b_in;
 
 	if (A->unpacked_cols)
 		mul_trans_unpacked(A, x, b);

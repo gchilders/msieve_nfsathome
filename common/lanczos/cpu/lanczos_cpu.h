@@ -51,13 +51,13 @@ typedef struct {
 typedef struct {
 	/* items for matrix-vector operations */
 
-	uint64 *tmp_b;
+	v_t *tmp_b;
 
 	/* items for vector-vector operations */
 
-	uint64 *x;
-	uint64 *b;
-	uint64 *y;
+	v_t *x;
+	v_t *b;
+	v_t *y;
 	uint32 vsize;
 
 } thread_data_t;
@@ -72,8 +72,8 @@ typedef struct {
 
 typedef struct {
 
-	uint64 *x;
-	uint64 *b;
+	v_t *x;
+	v_t *b;
 
 	/* used for block matrix multiplies */
 
@@ -87,7 +87,7 @@ typedef struct {
 
 	uint32 first_block_size;/* block size for the smallest row numbers */
 
-	uint64 **dense_blocks;  /* for holding dense matrix rows; 
+	v_t **dense_blocks;  /* for holding dense matrix rows; 
 				   dense_blocks[i] holds the i_th batch of
 				   64 matrix rows */
 	packed_block_t *blocks; /* sparse part of matrix, in block format */
@@ -113,9 +113,9 @@ void mul_trans_packed_small_core(void *data, int thread_num);
 /* internal stuff for vector-vector operations within the
    matrix multiply */
 
-void mul_Nx64_64x64_acc(uint64 *v, uint64 *x, uint64 *y, uint32 n);
+void mul_NxB_BxB_acc(v_t *v, v_t *x, v_t *y, uint32 n);
 
-void mul_64xN_Nx64(uint64 *x, uint64 *y, uint64 *xy, uint32 n);
+void mul_BxN_NxB(v_t *x, v_t *y, v_t *xy, uint32 n);
 
 #ifdef __cplusplus
 }

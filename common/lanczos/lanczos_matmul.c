@@ -16,22 +16,23 @@ $Id$
 
 /*-------------------------------------------------------------------*/
 void mul_unpacked(packed_matrix_t *matrix,
-			  uint64 *x, uint64 *b) 
+			  v_t *x, v_t *b) 
 {
 	uint32 ncols = matrix->ncols;
 	uint32 num_dense_rows = matrix->num_dense_rows;
 	la_col_t *A = matrix->unpacked_cols;
-	uint32 i, j;
+	uint32 i, j, k;
 
-	memset(b, 0, ncols * sizeof(uint64));
+	memset(b, 0, ncols * sizeof(v_t));
 	
 	for (i = 0; i < ncols; i++) {
 		la_col_t *col = A + i;
 		uint32 *row_entries = col->data;
-		uint64 tmp = x[i];
+		v_t tmp = x[i];
 
 		for (j = 0; j < col->weight; j++) {
-			b[row_entries[j]] ^= tmp;
+			k = row_entries[j]; 
+			b[k] = v_xor(b[k], tmp);
 		}
 	}
 
@@ -39,12 +40,12 @@ void mul_unpacked(packed_matrix_t *matrix,
 		for (i = 0; i < ncols; i++) {
 			la_col_t *col = A + i;
 			uint32 *row_entries = col->data + col->weight;
-			uint64 tmp = x[i];
+			v_t tmp = x[i];
 	
 			for (j = 0; j < num_dense_rows; j++) {
 				if (row_entries[j / 32] & 
 						((uint32)1 << (j % 32))) {
-					b[j] ^= tmp;
+					b[j] = v_xor(b[j], tmp);
 				}
 			}
 		}
@@ -53,7 +54,7 @@ void mul_unpacked(packed_matrix_t *matrix,
 
 /*-------------------------------------------------------------------*/
 void mul_trans_unpacked(packed_matrix_t *matrix,
-				uint64 *x, uint64 *b) 
+				v_t *x, v_t *b) 
 {
 	uint32 ncols = matrix->ncols;
 	uint32 num_dense_rows = matrix->num_dense_rows;
@@ -63,10 +64,10 @@ void mul_trans_unpacked(packed_matrix_t *matrix,
 	for (i = 0; i < ncols; i++) {
 		la_col_t *col = A + i;
 		uint32 *row_entries = col->data;
-		uint64 accum = 0;
+		v_t accum = v_zero;
 
 		for (j = 0; j < col->weight; j++) {
-			accum ^= x[row_entries[j]];
+			accum = v_xor(accum, x[row_entries[j]]);
 		}
 		b[i] = accum;
 	}
@@ -75,12 +76,12 @@ void mul_trans_unpacked(packed_matrix_t *matrix,
 		for (i = 0; i < ncols; i++) {
 			la_col_t *col = A + i;
 			uint32 *row_entries = col->data + col->weight;
-			uint64 accum = b[i];
+			v_t accum = b[i];
 	
 			for (j = 0; j < num_dense_rows; j++) {
 				if (row_entries[j / 32] &
 						((uint32)1 << (j % 32))) {
-					accum ^= x[j];
+					accum = v_xor(accum, x[j]);
 				}
 			}
 			b[i] = accum;
@@ -129,7 +130,7 @@ void packed_matrix_free(packed_matrix_t *p) {
 }
 
 /*-------------------------------------------------------------------*/
-void mul_MxN_Nx64(packed_matrix_t *A, void *x, 
+void mul_MxN_NxB(packed_matrix_t *A, void *x, 
 			void *scratch) {
     
 	/* Multiply the vector x[] by the matrix A and put the 
@@ -138,7 +139,7 @@ void mul_MxN_Nx64(packed_matrix_t *A, void *x,
 	   want to be out-of-place */
 
 #ifdef HAVE_MPI
-	uint64 *scratch2 = (uint64 *)scratch + MAX(A->ncols, A->nrows);
+	v_t *scratch2 = (v_t *)scratch + MAX(A->ncols, A->nrows);
 
 	if (A->mpi_size <= 1) {
 #endif
@@ -166,7 +167,7 @@ void mul_MxN_Nx64(packed_matrix_t *A, void *x,
 }
 
 /*-------------------------------------------------------------------*/
-void mul_sym_NxN_Nx64(packed_matrix_t *A, void *x, 
+void mul_sym_NxN_NxB(packed_matrix_t *A, void *x, 
 			void *b, void *scratch) {
 
 	/* Multiply x by A and write to scratch, then
@@ -175,7 +176,7 @@ void mul_sym_NxN_Nx64(packed_matrix_t *A, void *x,
 	   be distinct from scratch */
 
 #ifdef HAVE_MPI
-	uint64 *scratch2 = (uint64 *)scratch + MAX(A->ncols, A->nrows);
+	v_t *scratch2 = (v_t *)scratch + MAX(A->ncols, A->nrows);
         
 	if (A->mpi_size <= 1) {
 #endif

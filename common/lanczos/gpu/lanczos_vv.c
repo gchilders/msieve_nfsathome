@@ -15,7 +15,7 @@ $Id$
 #include "lanczos_gpu.h"
 
 /*-------------------------------------------------------------------*/
-void *v_alloc(uint32 n, void *extra) {
+void *vv_alloc(uint32 n, void *extra) {
 
 	gpuvec_t *v = (gpuvec_t *)xmalloc(sizeof(gpuvec_t));
 
@@ -28,7 +28,7 @@ void *v_alloc(uint32 n, void *extra) {
 	return v;
 }
 
-void v_free(void *v_in) {
+void vv_free(void *v_in) {
 
 	gpuvec_t *v = (gpuvec_t *)v_in;
 
@@ -38,7 +38,7 @@ void v_free(void *v_in) {
 	free(v);
 }
 
-void v_copyin(void *dest_in, uint64 *src, uint32 n) {
+void vv_copyin(void *dest_in, uint64 *src, uint32 n) {
 
 	gpuvec_t *dest = (gpuvec_t *)dest_in;
 
@@ -47,7 +47,7 @@ void v_copyin(void *dest_in, uint64 *src, uint32 n) {
 	CUDA_TRY(cuMemcpyHtoD(dest->gpu_vec, src, n * sizeof(uint64)))
 }
 
-void v_copy(void *dest_in, void *src_in, uint32 n) {
+void vv_copy(void *dest_in, void *src_in, uint32 n) {
 
 	gpuvec_t *src = (gpuvec_t *)src_in;
 	gpuvec_t *dest = (gpuvec_t *)dest_in;
@@ -57,14 +57,14 @@ void v_copy(void *dest_in, void *src_in, uint32 n) {
 	CUDA_TRY(cuMemcpyDtoD(dest->gpu_vec, src->gpu_vec, n * sizeof(uint64)))
 }
 
-void v_copyout(uint64 *dest, void *src_in, uint32 n) {
+void vv_copyout(uint64 *dest, void *src_in, uint32 n) {
 
 	gpuvec_t *src = (gpuvec_t *)src_in;
 
 	memcpy(dest, src->host_vec, n * sizeof(uint64));
 }
 
-void v_clear(void *v_in, uint32 n) {
+void vv_clear(void *v_in, uint32 n) {
 
 	gpuvec_t * v = (gpuvec_t *)v_in;
 
@@ -73,7 +73,7 @@ void v_clear(void *v_in, uint32 n) {
 	CUDA_TRY(cuMemsetD8(v->gpu_vec, 0, n * sizeof(uint64)));
 }
 
-void v_xor(void *dest_in, void *src_in, uint32 n) {
+void vv_xor(void *dest_in, void *src_in, uint32 n) {
 
 	gpuvec_t *src = (gpuvec_t *)src_in;
 	gpuvec_t *dest = (gpuvec_t *)dest_in;
@@ -95,7 +95,7 @@ void v_xor(void *dest_in, void *src_in, uint32 n) {
 				n * sizeof(uint64)))
 }
 
-void v_mask(void *v_in, uint64 mask, uint32 n) {
+void vv_mask(void *v_in, uint64 mask, uint32 n) {
 
 	gpuvec_t *v = (gpuvec_t *)v_in;
 	gpudata_t *d = v->gpudata;
@@ -361,7 +361,7 @@ void v_mul_Nx64_64x64_acc_gpu(packed_matrix_t *matrix,
 }
 
 /*-------------------------------------------------------------------*/
-void v_mul_Nx64_64x64_acc(packed_matrix_t *matrix, 
+void vv_mul_Nx64_64x64_acc(packed_matrix_t *matrix, 
 			void *v_in, uint64 *x,
 			void *y_in, uint32 n) {
 
@@ -585,7 +585,7 @@ void v_mul_64xN_Nx64_gpu(packed_matrix_t *matrix,
 }
 
 /*-------------------------------------------------------------------*/
-void v_mul_64xN_Nx64(packed_matrix_t *matrix,
+void vv_mul_64xN_Nx64(packed_matrix_t *matrix,
 		   void *x_in, void *y_in,
 		   uint64 *xy, uint32 n) {
 
