@@ -537,7 +537,8 @@ static v_t * gather_ncols(msieve_obj *obj,
 
 	MPI_NODE_0_START
 	if (out == NULL)
-		out = (v_t *)xmalloc(packed_matrix->max_ncols * sizeof(v_t));
+		out = (v_t *)aligned_malloc(packed_matrix->max_ncols * 
+						sizeof(v_t), 64);
 	MPI_NODE_0_END
 
 	/* gather v into MPI row 0 */
@@ -572,7 +573,8 @@ static v_t * gather_nrows(msieve_obj *obj,
 
 	MPI_NODE_0_START
 	if (out == NULL)
-		out = (v_t *)xmalloc(packed_matrix->max_ncols * sizeof(v_t));
+		out = (v_t *)aligned_malloc(packed_matrix->max_ncols * 
+						sizeof(v_t), 64);
 	MPI_NODE_0_END
 
 	/* gather column 0 into the root node */
@@ -1571,6 +1573,24 @@ uint64 * block_lanczos(msieve_obj *obj,
 			packed_matrix.subcol_offsets, 
 			1, MPI_INT, obj->mpi_la_col_grid))
 
+#if VWORDS > 1
+	/* scatter-gather operations count 64-bit words and not 
+	   VBITS-bit vectors, so scale the counts */
+	{
+		uint32 i;
+		for (i = 0; i < obj->mpi_nrows; i++) {
+			packed_matrix.row_counts *= VWORDS;
+			packed_matrix.row_offsets *= VWORDS;
+			packed_matrix.subcol_counts *= VWORDS;
+			packed_matrix.subcol_offsets *= VWORDS;
+		}
+		for (i = 0; i < obj->mpi_ncols; i++) {
+			packed_matrix.col_counts *= VWORDS;
+			packed_matrix.col_offsets *= VWORDS;
+		}
+	}
+#endif
+
 	/* if using a post-lanczos matrix, gather the matrix elements
 	   at the root node since all of them will be necessary at once */
 
@@ -1582,7 +1602,7 @@ uint64 * block_lanczos(msieve_obj *obj,
 
 		MPI_TRY(MPI_Gatherv((obj->mpi_la_col_rank == 0) ?
 					MPI_IN_PLACE : post_lanczos_matrix, 
-				ncols, MPI_LONG_LONG, 
+				VWORDS * ncols, MPI_LONG_LONG, 
 				post_lanczos_matrix,
 				packed_matrix.col_counts,
 				packed_matrix.col_offsets,

@@ -15,13 +15,14 @@
 # override from command line
 WIN = 0
 WIN64 = 0
+VBITS = 64
 
 # gcc with basic optimization (-march flag could
 # get overridden by architecture-specific builds)
 CC = gcc
 WARN_FLAGS = -Wall -W
 OPT_FLAGS = -O3 -fomit-frame-pointer -march=native \
-	    -D_FILE_OFFSET_BITS=64 -DNDEBUG -D_LARGEFILE64_SOURCE
+	    -D_FILE_OFFSET_BITS=64 -DNDEBUG -D_LARGEFILE64_SOURCE -DVBITS=$(VBITS)
 
 # use := instead of = so we only run the following once
 SVN_VERSION := $(shell svnversion .)
@@ -298,6 +299,7 @@ help:
 	@echo "add 'MPI=1' for parallel processing using MPI"
 	@echo "add 'BOINC=1' to add BOINC wrapper"
 	@echo "add 'NO_ZLIB=1' if you don't have zlib"
+	@echo "add 'VBITS=X' for linear algebra with X-bit vectors (64, 128, 256)"
 
 all: $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(GPU_OBJS)
 	rm -f libmsieve.a

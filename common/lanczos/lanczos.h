@@ -25,7 +25,10 @@ extern "C" {
    internally (a max of 64 dependencies will be exposed
    to calling code) */
 
-#define VBITS 64
+#ifndef VBITS
+#error "linear algebra vector length not specified"
+#endif
+
 #define VWORDS ((VBITS + 63) / 64)
 
 #if VBITS!=64 && VBITS!=128 && VBITS!=256
@@ -179,15 +182,16 @@ typedef struct packed_matrix_t {
 	MPI_Comm mpi_la_row_grid;
 	MPI_Comm mpi_la_col_grid;
 
+	uint32 nsubcols;
+	int32 subcol_counts[MAX_MPI_GRID_DIM];
+	int32 subcol_offsets[MAX_MPI_GRID_DIM];    
+
 	/* needed on root node only */
 	int32 col_counts[MAX_MPI_GRID_DIM];
 	int32 col_offsets[MAX_MPI_GRID_DIM]; 
 	int32 row_counts[MAX_MPI_GRID_DIM];
 	int32 row_offsets[MAX_MPI_GRID_DIM];
-	int32 subcol_counts[MAX_MPI_GRID_DIM];
-	int32 subcol_offsets[MAX_MPI_GRID_DIM];    
 
-	uint32 nsubcols;
 #endif
 
 } packed_matrix_t;

@@ -123,10 +123,7 @@ void packed_matrix_init(msieve_obj *obj,
 /*-------------------------------------------------------------------*/
 void packed_matrix_free(packed_matrix_t *p) {
 
-	uint32 i;
-
 	matrix_extra_free(p);
-
 }
 
 /*-------------------------------------------------------------------*/
@@ -158,7 +155,7 @@ void mul_MxN_NxB(packed_matrix_t *A, void *x,
 	/* make each MPI row combine all of its vectors. The
 	   matrix-vector product is redundantly stored in each
 	   MPI column, but this routine is called very rarely
-	   so it's not worth removing the rdundancy */
+	   so it's not worth removing the redundancy */
 	
 	global_xor(scratch2, scratch, A->nrows, A->mpi_ncols,
 			   A->mpi_la_col_rank, A->mpi_la_row_grid);

@@ -569,7 +569,7 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 	uint32 off;
 	task_control_t task = {NULL, NULL, NULL, NULL};
 #ifdef HAVE_MPI
-	uint64 xytmp[64];
+	v_t xytmp[VBITS];
 #endif
 
 	for (i = off = 0; i < matrix->num_threads; i++, off += vsize) {
@@ -610,13 +610,13 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 #ifdef HAVE_MPI
 	/* combine the results across an entire MPI row */
 
-	global_xor(xy, xytmp, 64, matrix->mpi_ncols,
+	global_xor(xy, xytmp, VBITS, matrix->mpi_ncols,
 			matrix->mpi_la_col_rank,
 			matrix->mpi_la_row_grid);
 
 	/* combine the results across an entire MPI column */
     
-	global_xor(xytmp, xy, 64, matrix->mpi_nrows,
+	global_xor(xytmp, xy, VBITS, matrix->mpi_nrows,
 			matrix->mpi_la_row_rank,
 			matrix->mpi_la_col_grid);    
 #endif
