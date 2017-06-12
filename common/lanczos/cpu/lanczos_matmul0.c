@@ -404,7 +404,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	   in multithreaded runs */
 
 	block_size = 8192;
-	superblock_size = 3 * obj->cache_size2 / (4 * sizeof(uint64));
+	superblock_size = 3 * obj->cache_size2 / (4 * sizeof(v_t));
 
 	/* possibly override from the command line */
 
