@@ -73,7 +73,7 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 				
 		/* asynchronously send the current chunk */
 
-		MPI_TRY(MPI_Isend(curr_buf + m * chunk, size, 
+		MPI_TRY(MPI_Isend(curr_buf + m * chunk, VWORDS * size, 
 				MPI_LONG_LONG, next_id, 97, 
 				comm, &mpi_req))
 

@@ -1579,14 +1579,14 @@ uint64 * block_lanczos(msieve_obj *obj,
 	{
 		uint32 i;
 		for (i = 0; i < obj->mpi_nrows; i++) {
-			packed_matrix.row_counts *= VWORDS;
-			packed_matrix.row_offsets *= VWORDS;
-			packed_matrix.subcol_counts *= VWORDS;
-			packed_matrix.subcol_offsets *= VWORDS;
+			packed_matrix.row_counts[i] *= VWORDS;
+			packed_matrix.row_offsets[i] *= VWORDS;
+			packed_matrix.subcol_counts[i] *= VWORDS;
+			packed_matrix.subcol_offsets[i] *= VWORDS;
 		}
 		for (i = 0; i < obj->mpi_ncols; i++) {
-			packed_matrix.col_counts *= VWORDS;
-			packed_matrix.col_offsets *= VWORDS;
+			packed_matrix.col_counts[i] *= VWORDS;
+			packed_matrix.col_offsets[i] *= VWORDS;
 		}
 	}
 #endif
@@ -1597,7 +1597,7 @@ uint64 * block_lanczos(msieve_obj *obj,
 	if (post_lanczos_matrix != NULL && obj->mpi_la_row_rank == 0) {
 		if (obj->mpi_la_col_rank == 0) {
 			post_lanczos_matrix = xrealloc(post_lanczos_matrix,
-						max_ncols * sizeof(uint64));
+						max_ncols * sizeof(v_t));
 		}
 
 		MPI_TRY(MPI_Gatherv((obj->mpi_la_col_rank == 0) ?
