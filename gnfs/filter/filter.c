@@ -156,7 +156,7 @@ static void set_filtering_bounds(msieve_obj *obj, factor_base_t *fb,
    average matrix column (may be overriden if you know
    what you are doing) */
 
-#define DEFAULT_TARGET_DENSITY 70.0
+#define DEFAULT_TARGET_DENSITY 90.0
 
 static uint32 do_merge(msieve_obj *obj, filter_t *filter, 
 			merge_t *merge, double target_density) {
@@ -184,7 +184,9 @@ static uint32 do_merge(msieve_obj *obj, filter_t *filter,
 	if (target_density != 0)
 		merge->target_density = target_density;
 
-	filter_make_relsets(obj, filter, merge, extra_needed);
+	if (filter_make_relsets(obj, filter, merge, extra_needed) != 0)
+		return 1000000;
+
 	return 0;
 }
 
@@ -193,15 +195,17 @@ static uint32 do_merge(msieve_obj *obj, filter_t *filter,
 
 static uint32 do_partial_filtering(msieve_obj *obj, filter_t *filter,
 				merge_t *merge, uint32 entries_r,
-				uint32 entries_a, double target_density) {
+				uint32 entries_a, double target_density,
+				uint32 max_weight) {
 
 	uint32 relations_needed;
-	uint32 max_weight = 20;
 	uint32 num_relations = filter->num_relations;
 	uint32 num_ideals = filter->num_ideals;
 
-	if (filter->num_relations < 20000000)
+	if (filter->num_relations < 20000000 && max_weight < 25) {
+		logprintf(obj, "raising initial max weight because there are few relations\n");
 		max_weight = 25;
+	}
 
 	for (; max_weight < MAX_KEEP_WEIGHT; max_weight += 5) {
 
@@ -246,6 +250,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	uint32 max_relations = 0;
 	uint32 filter_bound = 0;
 	double target_density = 0;
+	uint32 max_weight = 20;
 	char lp_filename[256];
 
 	logprintf(obj, "\n");
@@ -283,6 +288,23 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 			target_density = strtod(tmp + 15, NULL);
 			logprintf(obj, "setting target matrix density to %.1f\n",
 					target_density);
+		}
+
+		tmp = strstr(obj->nfs_args, "max_weight=");
+		if (tmp != NULL) {
+			max_weight = strtoul(tmp + 11, NULL, 10);
+			if (max_weight < MAX_KEEP_WEIGHT) {
+				logprintf(obj, "setting initial max weight to %u\n",
+						max_weight);
+			}
+			else {
+#define str(s) #s
+#define xstr(s) str(s)
+				logprintf(obj, "initial max weight must be <= " xstr(MAX_KEEP_WEIGHT) "\n");
+#undef xstr
+#undef str
+				exit(-1);
+			}
 		}
 
 		/* old-style 'X,Y' format */
@@ -401,7 +423,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 			if ((relations_needed = do_partial_filtering(obj,
 						&filter, &merge, entries_r,
-						entries_a, target_density)) > 0) {
+						entries_a, target_density,
+						max_weight)) > 0) {
 				goto finished;
 			}
 		}
