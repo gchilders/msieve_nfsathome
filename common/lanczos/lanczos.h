@@ -179,6 +179,7 @@ typedef struct packed_matrix_t {
 	uint32 mpi_ncols;
 	uint32 mpi_la_row_rank;
 	uint32 mpi_la_col_rank;
+	MPI_Datatype mpi_word;
 	MPI_Comm mpi_la_row_grid;
 	MPI_Comm mpi_la_col_grid;
 
@@ -235,19 +236,19 @@ void mul_trans_core(packed_matrix_t *A, void *x, void *b);
 #ifdef HAVE_MPI
 void global_xor(void *send_buf, void *recv_buf, 
 		uint32 bufsize, uint32 mpi_nodes, 
-		uint32 mpi_rank, MPI_Comm comm);
+		uint32 mpi_rank, MPI_Datatype, MPI_Comm comm);
 
 void global_chunk_info(uint32 total_size, uint32 num_nodes, 
 		uint32 my_id, uint32 *chunk_size, uint32 *chunk_start);
 
 void global_allgather(void *send_buf, void *recv_buf, 
                         uint32 bufsize, uint32 mpi_nodes, 
-                        uint32 mpi_rank, MPI_Comm comm);
+                        uint32 mpi_rank, MPI_Datatype, MPI_Comm comm);
 
 void global_xor_scatter(void *send_buf, void *recv_buf, 
 			void *scratch, uint32 bufsize, 
 			uint32 mpi_nodes, uint32 mpi_rank, 
-			MPI_Comm comm);
+			MPI_Datatype, MPI_Comm comm);
 #endif
 
 /* top-level calls for vector-vector operations */

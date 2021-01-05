@@ -612,12 +612,12 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 
 	global_xor(xy, xytmp, VBITS, matrix->mpi_ncols,
 			matrix->mpi_la_col_rank,
-			matrix->mpi_la_row_grid);
+			matrix->mpi_word, matrix->mpi_la_row_grid);
 
 	/* combine the results across an entire MPI column */
     
 	global_xor(xytmp, xy, VBITS, matrix->mpi_nrows,
 			matrix->mpi_la_row_rank,
-			matrix->mpi_la_col_grid);    
+			matrix->mpi_word, matrix->mpi_la_col_grid);    
 #endif
 }

@@ -38,7 +38,7 @@ $Id$
 /*------------------------------------------------------------------*/
 static void global_xor_async(v_t *send_buf, v_t *recv_buf, 
 			uint32 total_size, uint32 num_nodes, 
-			uint32 my_id, MPI_Comm comm) {
+			uint32 my_id, MPI_Datatype mpi_word, MPI_Comm comm) {
 	
 	uint32 i;
 	uint32 m, size, chunk, remainder;
@@ -73,8 +73,8 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 				
 		/* asynchronously send the current chunk */
 
-		MPI_TRY(MPI_Isend(curr_buf + m * chunk, VWORDS * size, 
-				MPI_LONG_LONG, next_id, 97, 
+		MPI_TRY(MPI_Isend(curr_buf + m * chunk, size, 
+				mpi_word, next_id, 97, 
 				comm, &mpi_req))
 
 		/* switch to the recvbuf after the first send */
@@ -90,8 +90,8 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 		/* don't wait for send to finish, start the recv 
 		   from the previous node */
 
-		MPI_TRY(MPI_Recv(curr_buf + m * chunk, VWORDS * size,
-				MPI_LONG_LONG, prev_id, 97, 
+		MPI_TRY(MPI_Recv(curr_buf + m * chunk, size,
+				mpi_word, prev_id, 97, 
 				comm, &mpi_status))
 
 		/* combine the new chunk with our own */
@@ -114,7 +114,7 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 		
 		/* async send to chunk the next proc in circle */
 
-		MPI_TRY(MPI_Isend(curr_buf, VWORDS * size, MPI_LONG_LONG, 
+		MPI_TRY(MPI_Isend(curr_buf, size, mpi_word, 
 				next_id, 98, comm, &mpi_req))
 		
 		size = chunk;
@@ -128,7 +128,7 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 		   from the previous proc in circle, put the new 
 		   data just where it should be in recv_buf */
 
-		MPI_TRY(MPI_Recv(curr_buf, VWORDS * size, MPI_LONG_LONG,
+		MPI_TRY(MPI_Recv(curr_buf, size, mpi_word,
 				prev_id, 98, comm, &mpi_status))
 				
 		/* now wait for the send to end */
@@ -140,7 +140,7 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 /*------------------------------------------------------------------*/
 void global_xor(void *send_buf_in, void *recv_buf_in, 
 		uint32 total_size, uint32 num_nodes, 
-		uint32 my_id, MPI_Comm comm) {
+		uint32 my_id, MPI_Datatype mpi_word, MPI_Comm comm) {
 	
 	v_t *send_buf = (v_t *)send_buf_in;
 	v_t *recv_buf = (v_t *)recv_buf_in;
@@ -148,16 +148,16 @@ void global_xor(void *send_buf_in, void *recv_buf_in,
 	/* only get fancy for large buffers; even the
 	   fancy method is only faster when many nodes 
 	   are involved */
-
+	/*
 	if (total_size < GLOBAL_BREAKOVER || num_nodes < 2) {
 		MPI_TRY(MPI_Allreduce(send_buf, 
 				recv_buf, VWORDS * total_size,
 				MPI_LONG_LONG, MPI_BXOR, comm))
 		return;
-	}
+	} */
 
 	global_xor_async(send_buf, recv_buf, 
-		total_size, num_nodes, my_id, comm);
+		total_size, num_nodes, my_id, mpi_word, comm);
 }
 
 /*------------------------------------------------------------------*/
@@ -185,7 +185,7 @@ void global_chunk_info(uint32 total_size, uint32 num_nodes,
 void global_xor_scatter(void *send_buf_in, void *recv_buf_in, 
 			void *scratch_in, uint32 total_size, 
 			uint32 num_nodes, uint32 my_id, 
-			MPI_Comm comm) {
+			MPI_Datatype mpi_word, MPI_Comm comm) {
 	
 	v_t *send_buf = (v_t *)send_buf_in;
 	v_t *recv_buf = (v_t *)recv_buf_in;
@@ -226,7 +226,7 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 		/* asynchroniously send the current chunk */
         
 		MPI_TRY(MPI_Isend(send_buf + m * chunk, 
-			VWORDS * size, MPI_LONG_LONG, next_id, 95, 
+			size, mpi_word, next_id, 95, 
                         comm, &mpi_req))
         
 		/* switch to the recvbuf after the first send */
@@ -240,8 +240,8 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 		/* don't wait for send to finish, start the recv 
 		   from the previous node */
         
-		MPI_TRY(MPI_Recv(scratch, VWORDS * size,
-                         MPI_LONG_LONG, prev_id, 95, 
+		MPI_TRY(MPI_Recv(scratch, size,
+                         mpi_word, prev_id, 95, 
                          comm, &mpi_status))
         
 		/* combine the new chunk with our own */
@@ -256,7 +256,7 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 	/* asynchronously send the current chunk */
     
 	MPI_TRY(MPI_Isend(send_buf + m * chunk, 
-			VWORDS * size, MPI_LONG_LONG, 
+			size, mpi_word, 
 			next_id, 95, comm, &mpi_req))
     
 	/* switch to the recvbuf after the first send */
@@ -270,8 +270,8 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 	/* don't wait for send to finish, start the recv 
 	   from the previous node */
     
-	MPI_TRY(MPI_Recv(recv_buf, VWORDS * size,
-                     MPI_LONG_LONG, prev_id, 95, 
+	MPI_TRY(MPI_Recv(recv_buf, size,
+                     mpi_word, prev_id, 95, 
                      comm, &mpi_status))
     
 	/* combine the new chunk with our own */
@@ -286,7 +286,7 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 /*------------------------------------------------------------------*/
 void global_allgather(void *send_buf_in, void *recv_buf_in, 
                         uint32 total_size, uint32 num_nodes, 
-                        uint32 my_id, MPI_Comm comm) {
+                        uint32 my_id, MPI_Datatype mpi_word, MPI_Comm comm) {
 	
 	v_t *send_buf = (v_t *)send_buf_in;
 	v_t *recv_buf = (v_t *)recv_buf_in;
@@ -326,7 +326,7 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 		
 		/* async send to chunk the next proc in circle */
         
-		MPI_TRY(MPI_Isend(curr_buf, VWORDS * size, MPI_LONG_LONG, 
+		MPI_TRY(MPI_Isend(curr_buf, size, mpi_word, 
 				next_id, 96, comm, &mpi_req))
 		
 		size = chunk;
@@ -340,7 +340,7 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 		   from the previous proc in circle, put the new 
 		   data just where it should be in recv_buf */
         
-		MPI_TRY(MPI_Recv(curr_buf, VWORDS * size, MPI_LONG_LONG,
+		MPI_TRY(MPI_Recv(curr_buf, size, mpi_word,
 				prev_id, 96, comm, &mpi_status))
         
 		/* now wait for the send to end */

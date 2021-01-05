@@ -115,6 +115,7 @@ void packed_matrix_init(msieve_obj *obj,
 	p->mpi_la_col_rank = obj->mpi_la_col_rank;
 	p->mpi_la_row_grid = obj->mpi_la_row_grid;
 	p->mpi_la_col_grid = obj->mpi_la_col_grid;
+	p->mpi_word = obj->mpi_word;
 #endif
 
 	matrix_extra_init(obj, p, first_block_size);
@@ -148,7 +149,7 @@ void mul_MxN_NxB(packed_matrix_t *A, void *x,
 	/* make each MPI column gather its own part of x */
 	
 	global_allgather(x, scratch, A->ncols, A->mpi_nrows, 
-			A->mpi_la_row_rank, A->mpi_la_col_grid);
+			A->mpi_la_row_rank, A->mpi_word, A->mpi_la_col_grid);
 		
 	mul_core(A, scratch, scratch2);
 	
@@ -158,7 +159,7 @@ void mul_MxN_NxB(packed_matrix_t *A, void *x,
 	   so it's not worth removing the redundancy */
 	
 	global_xor(scratch2, scratch, A->nrows, A->mpi_ncols,
-			   A->mpi_la_col_rank, A->mpi_la_row_grid);
+			   A->mpi_la_col_rank, A->mpi_word, A->mpi_la_row_grid);
 
 #endif
 }
@@ -186,20 +187,20 @@ void mul_sym_NxN_NxB(packed_matrix_t *A, void *x,
 	/* make each MPI column gather its own part of x */
 	 
 	global_allgather(x, scratch, A->ncols, A->mpi_nrows, 
-			A->mpi_la_row_rank, A->mpi_la_col_grid);
+			A->mpi_la_row_rank, A->mpi_word, A->mpi_la_col_grid);
 	
 	mul_core(A, scratch, scratch2);
 		
 	/* make each MPI row combine its own part of A*x */
 	
 	global_xor(scratch2, scratch, A->nrows, A->mpi_ncols,
-			   A->mpi_la_col_rank, A->mpi_la_row_grid);
+			   A->mpi_la_col_rank, A->mpi_word, A->mpi_la_row_grid);
 		
 	mul_trans_core(A, scratch, scratch2);
 		
 	/* make each MPI row combine and scatter its own part of A^T * A*x */
 		
 	global_xor_scatter(scratch2, b, scratch,  A->ncols, A->mpi_nrows, 
-			A->mpi_la_row_rank, A->mpi_la_col_grid);
+			A->mpi_la_row_rank, A->mpi_word, A->mpi_la_col_grid);
 #endif
 }
