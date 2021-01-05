@@ -660,6 +660,8 @@ static void dump_lanczos_state(msieve_obj *obj,
 	status &= (fwrite(vt_v0[2], sizeof(v_t), (size_t)VBITS, fp) == VBITS);
 	status &= (fwrite(s[1], sizeof(uint32), (size_t)VBITS, fp) == VBITS);
 	status &= (fwrite(&dim1, sizeof(uint32), (size_t)1, fp) == 1);
+
+	tmp = (v_t *)xmalloc(max_n * sizeof(v_t));
 	MPI_NODE_0_END
 
 #ifdef HAVE_MPI
@@ -688,8 +690,6 @@ static void dump_lanczos_state(msieve_obj *obj,
 	status &= (fwrite(tmp, sizeof(v_t), (size_t)max_n, fp) == max_n);
 	MPI_NODE_0_END
 #else
-	tmp = (v_t *)xmalloc(max_n * sizeof(v_t));
-
 	vv_copyout(tmp, x, max_n);
 	status &= (fwrite(tmp, sizeof(v_t), (size_t)max_n, fp) == max_n);
 
