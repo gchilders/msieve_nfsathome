@@ -152,6 +152,7 @@ typedef struct {
 	MPI_Comm mpi_la_col_grid; /* communicator for the current MPI col */
 	uint32 mpi_la_row_rank;
 	uint32 mpi_la_col_rank;
+	MPI_Datatype mpi_word;    /* Word size for MPI */
 #endif
 
 	char *mp_sprintf_buf;    /* scratch space for printing big integers */

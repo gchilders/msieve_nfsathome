@@ -544,22 +544,22 @@ static v_t * gather_ncols(msieve_obj *obj,
 	/* gather v into MPI row 0 */
 
 	MPI_TRY(MPI_Gatherv(v,
-			VWORDS * packed_matrix->nsubcols, 
-			MPI_LONG_LONG, scratch,
+			packed_matrix->nsubcols, 
+			obj->mpi_word, scratch,
 			packed_matrix->subcol_counts,
 			packed_matrix->subcol_offsets,
-			MPI_LONG_LONG, 0, 
+			obj->mpi_word, 0, 
 			obj->mpi_la_col_grid))
 
 	/* gather row 0 into the root node */
 
 	if (obj->mpi_la_row_rank == 0) {
 		MPI_TRY(MPI_Gatherv(scratch,
-				VWORDS * packed_matrix->ncols, 
-				MPI_LONG_LONG, out,
+				packed_matrix->ncols, 
+				obj->mpi_word, out,
 				packed_matrix->col_counts,
 				packed_matrix->col_offsets,
-				MPI_LONG_LONG, 0, 
+				obj->mpi_word, 0, 
 				obj->mpi_la_row_grid))
 	}
 	
@@ -581,11 +581,11 @@ static v_t * gather_nrows(msieve_obj *obj,
 
 	if (obj->mpi_la_col_rank == 0) {
 		MPI_TRY(MPI_Gatherv(scratch,
-				VWORDS * packed_matrix->nrows, 
-				MPI_LONG_LONG, out,
+				packed_matrix->nrows, 
+				obj->mpi_word, out,
 				packed_matrix->row_counts,
 				packed_matrix->row_offsets,
-				MPI_LONG_LONG, 0, 
+				obj->mpi_word, 0, 
 				obj->mpi_la_col_grid))
 	}
 	
@@ -603,18 +603,18 @@ static void scatter_ncols(msieve_obj *obj,
 	if (obj->mpi_la_row_rank == 0)
 		MPI_TRY(MPI_Scatterv(in, packed_matrix->col_counts,
 				packed_matrix->col_offsets, 
-				MPI_LONG_LONG, scratch,
-				VWORDS * packed_matrix->ncols,
-				MPI_LONG_LONG, 0, 
+				obj->mpi_word, scratch,
+				packed_matrix->ncols,
+				obj->mpi_word, 0, 
 				obj->mpi_la_row_grid))
 
 	/* push down each column */
 
 	MPI_TRY(MPI_Scatterv(scratch, packed_matrix->subcol_counts,
 	       			packed_matrix->subcol_offsets, 
-	      			MPI_LONG_LONG, out,
-				VWORDS * packed_matrix->ncols,
-	   			MPI_LONG_LONG, 0, 
+	      			obj->mpi_word, out,
+				packed_matrix->ncols,
+	   			obj->mpi_word, 0, 
        				obj->mpi_la_col_grid))
 }
 #endif
@@ -1521,6 +1521,11 @@ uint64 * block_lanczos(msieve_obj *obj,
 		max_nrows -= POST_LANCZOS_ROWS;
 
 #else
+	/* Construct necessary MPI datatype */
+
+        MPI_TRY(MPI_Type_contiguous(VWORDS, MPI_LONG_LONG, (MPI_Datatype *)&obj->mpi_word));
+        MPI_TRY(MPI_Type_commit((MPI_Datatype *)&obj->mpi_word));
+
 	/* tell all the MPI processes whether a post lanczos matrix
 	   was constructed */
 
@@ -1573,24 +1578,6 @@ uint64 * block_lanczos(msieve_obj *obj,
 			packed_matrix.subcol_offsets, 
 			1, MPI_INT, obj->mpi_la_col_grid))
 
-#if VWORDS > 1
-	/* scatter-gather operations count 64-bit words and not 
-	   VBITS-bit vectors, so scale the counts */
-	{
-		uint32 i;
-		for (i = 0; i < obj->mpi_nrows; i++) {
-			packed_matrix.row_counts[i] *= VWORDS;
-			packed_matrix.row_offsets[i] *= VWORDS;
-			packed_matrix.subcol_counts[i] *= VWORDS;
-			packed_matrix.subcol_offsets[i] *= VWORDS;
-		}
-		for (i = 0; i < obj->mpi_ncols; i++) {
-			packed_matrix.col_counts[i] *= VWORDS;
-			packed_matrix.col_offsets[i] *= VWORDS;
-		}
-	}
-#endif
-
 	/* if using a post-lanczos matrix, gather the matrix elements
 	   at the root node since all of them will be necessary at once */
 
@@ -1602,11 +1589,11 @@ uint64 * block_lanczos(msieve_obj *obj,
 
 		MPI_TRY(MPI_Gatherv((obj->mpi_la_col_rank == 0) ?
 					MPI_IN_PLACE : post_lanczos_matrix, 
-				VWORDS * ncols, MPI_LONG_LONG, 
+				ncols, obj->mpi_word, 
 				post_lanczos_matrix,
 				packed_matrix.col_counts,
 				packed_matrix.col_offsets,
-				MPI_LONG_LONG, 0, obj->mpi_la_row_grid))
+				obj->mpi_word, 0, obj->mpi_la_row_grid))
 
 		if (obj->mpi_la_col_rank != 0) {
 			free(post_lanczos_matrix);
@@ -1664,6 +1651,9 @@ uint64 * block_lanczos(msieve_obj *obj,
 	   matrix structures, and also frees the column entries from
 	   the input matrix (whether packed or not) */
 
+#ifdef HAVE_MPI
+        MPI_Type_free((MPI_Datatype *)&obj->mpi_word);
+#endif
 	packed_matrix_free(&packed_matrix);
 	aligned_free(lanczos_output);
 	return dependencies;
