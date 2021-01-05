@@ -705,9 +705,9 @@ static void dump_lanczos_state(msieve_obj *obj,
 	vv_copyout(tmp, v0, max_n);
 	status &= (fwrite(tmp, sizeof(v_t), (size_t)max_n, fp) == max_n);
 #endif
-	free(tmp);
 
 	MPI_NODE_0_START
+	free(tmp);
 	fclose(fp);
 
 	/* only delete an old checkpoint file if the current 
