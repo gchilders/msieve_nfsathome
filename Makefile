@@ -32,7 +32,9 @@ endif
 
 CFLAGS = $(OPT_FLAGS) $(MACHINE_FLAGS) $(WARN_FLAGS) \
 	 	-DMSIEVE_SVN_VERSION="\"$(SVN_VERSION)\"" \
-		-I. -Iaprcl -Iinclude -Ignfs -Ignfs/poly -Ignfs/poly/stage1
+		-I. -Iaprcl -Iinclude -Ignfs -Ignfs/poly -Ignfs/poly/stage1 -I$(ZLIB_DIR)/include -I$(GMP_DIR)/include
+
+LDFLAGS =  -L$(ZLIB_DIR)/lib -L$(GMP_DIR)/lib
 
 # tweak the compile flags
 
