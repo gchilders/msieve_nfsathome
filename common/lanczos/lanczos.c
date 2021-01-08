@@ -1638,12 +1638,12 @@ uint64 * block_lanczos(msieve_obj *obj,
 	if (*num_deps_found) {
 		uint32 i;
 
-		dependencies = (uint64 *)xmalloc(ncols * sizeof(uint64));
+		dependencies = (uint64 *)xmalloc(max_ncols * sizeof(uint64));
 
 		if (*num_deps_found > 64)
 			logprintf(obj, "saving only 64 dependencies\n");
 
-		for (i = 0; i < ncols; i++)
+		for (i = 0; i < max_ncols; i++)
 			dependencies[i] = lanczos_output[i].w[0];
 	}
 
