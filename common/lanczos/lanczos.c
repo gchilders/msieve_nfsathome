@@ -1501,18 +1501,19 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 
 	*num_deps_found = combine_cols(max_n, out0, out1, out2, out3);
 
-	MPI_NODE_0_END
-
-	aligned_free(out1);
-	aligned_free(out2);
-	aligned_free(out3);
-
 	if (*num_deps_found == 0)
 		logprintf(obj, "lanczos error: only trivial "
 				"dependencies found\n");
 	else
 		logprintf(obj, "recovered %u nontrivial dependencies\n", 
 				*num_deps_found);
+
+	MPI_NODE_0_END
+
+	aligned_free(out1);
+	aligned_free(out2);
+	aligned_free(out3);
+
 	return out0;
 }
 
