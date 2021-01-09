@@ -31,7 +31,7 @@ extern "C" {
 
 #define VWORDS ((VBITS + 63) / 64)
 
-#if VBITS!=64 && VBITS!=128 && VBITS!=256
+#if VBITS!=64 && VBITS!=128 && VBITS!=256 && VBITS!=512
 #error "unsupported vector size"
 #endif
 
@@ -49,6 +49,12 @@ static INLINE v_t v_and(v_t a, v_t b) {
 	res.w[2] = a.w[2] & b.w[2];
 	#if VWORDS > 3
 	res.w[3] = a.w[3] & b.w[3];
+	#if VWORDS > 4
+	res.w[4] = a.w[4] & b.w[4];
+	res.w[5] = a.w[5] & b.w[5];
+	res.w[6] = a.w[6] & b.w[6];
+	res.w[7] = a.w[7] & b.w[7];
+	#endif
 	#endif
 	#endif
 	#endif
@@ -65,6 +71,12 @@ static INLINE v_t v_or(v_t a, v_t b) {
 	res.w[2] = a.w[2] | b.w[2];
 	#if VWORDS > 3
 	res.w[3] = a.w[3] | b.w[3];
+	#if VWORDS > 4
+	res.w[4] = a.w[4] | b.w[4];
+	res.w[5] = a.w[5] | b.w[5];
+	res.w[6] = a.w[6] | b.w[6];
+	res.w[7] = a.w[7] | b.w[7];
+	#endif
 	#endif
 	#endif
 	#endif
@@ -81,6 +93,12 @@ static INLINE v_t v_xor(v_t a, v_t b) {
 	res.w[2] = a.w[2] ^ b.w[2];
 	#if VWORDS > 3
 	res.w[3] = a.w[3] ^ b.w[3];
+	#if VWORDS > 4
+	res.w[4] = a.w[4] ^ b.w[4];
+	res.w[5] = a.w[5] ^ b.w[5];
+	res.w[6] = a.w[6] ^ b.w[6];
+	res.w[7] = a.w[7] ^ b.w[7];
+	#endif
 	#endif
 	#endif
 	#endif

@@ -293,7 +293,7 @@ help:
 	@echo "add 'MPI=1' for parallel processing using MPI"
 	@echo "add 'BOINC=1' to add BOINC wrapper"
 	@echo "add 'NO_ZLIB=1' if you don't have zlib"
-	@echo "add 'VBITS=X' for linear algebra with X-bit vectors (64, 128, 256)"
+	@echo "add 'VBITS=X' for linear algebra with X-bit vectors (64, 128, 256, 512)"
 
 all: $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(GPU_OBJS)
 	rm -f libmsieve.a
