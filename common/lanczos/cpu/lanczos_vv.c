@@ -201,6 +201,40 @@ static void core_NxB_BxB_acc(v_t *v, v_t *c, v_t *y, uint32 n) {
 		accum = v_xor(accum, c[29*256 + ((uint8)(vi.w[3] >> 40))]);
 		accum = v_xor(accum, c[30*256 + ((uint8)(vi.w[3] >> 48))]);
 		accum = v_xor(accum, c[31*256 + ((uint8)(vi.w[3] >> 56))]);
+		#if VWORDS > 4
+		accum = v_xor(accum, c[32*256 + ((uint8)(vi.w[4] >>  0))]);
+		accum = v_xor(accum, c[33*256 + ((uint8)(vi.w[4] >>  8))]);
+		accum = v_xor(accum, c[34*256 + ((uint8)(vi.w[4] >> 16))]);
+		accum = v_xor(accum, c[35*256 + ((uint8)(vi.w[4] >> 24))]);
+		accum = v_xor(accum, c[36*256 + ((uint8)(vi.w[4] >> 32))]);
+		accum = v_xor(accum, c[37*256 + ((uint8)(vi.w[4] >> 40))]);
+		accum = v_xor(accum, c[38*256 + ((uint8)(vi.w[4] >> 48))]);
+		accum = v_xor(accum, c[39*256 + ((uint8)(vi.w[4] >> 56))]);
+		accum = v_xor(accum, c[40*256 + ((uint8)(vi.w[5] >>  0))]);
+		accum = v_xor(accum, c[41*256 + ((uint8)(vi.w[5] >>  8))]);
+		accum = v_xor(accum, c[42*256 + ((uint8)(vi.w[5] >> 16))]);
+		accum = v_xor(accum, c[43*256 + ((uint8)(vi.w[5] >> 24))]);
+		accum = v_xor(accum, c[44*256 + ((uint8)(vi.w[5] >> 32))]);
+		accum = v_xor(accum, c[45*256 + ((uint8)(vi.w[5] >> 40))]);
+		accum = v_xor(accum, c[46*256 + ((uint8)(vi.w[5] >> 48))]);
+		accum = v_xor(accum, c[47*256 + ((uint8)(vi.w[5] >> 56))]);
+		accum = v_xor(accum, c[48*256 + ((uint8)(vi.w[6] >>  0))]);
+		accum = v_xor(accum, c[49*256 + ((uint8)(vi.w[6] >>  8))]);
+		accum = v_xor(accum, c[50*256 + ((uint8)(vi.w[6] >> 16))]);
+		accum = v_xor(accum, c[51*256 + ((uint8)(vi.w[6] >> 24))]);
+		accum = v_xor(accum, c[52*256 + ((uint8)(vi.w[6] >> 32))]);
+		accum = v_xor(accum, c[53*256 + ((uint8)(vi.w[6] >> 40))]);
+		accum = v_xor(accum, c[54*256 + ((uint8)(vi.w[6] >> 48))]);
+		accum = v_xor(accum, c[55*256 + ((uint8)(vi.w[6] >> 56))]);
+		accum = v_xor(accum, c[56*256 + ((uint8)(vi.w[7] >>  0))]);
+		accum = v_xor(accum, c[57*256 + ((uint8)(vi.w[7] >>  8))]);
+		accum = v_xor(accum, c[58*256 + ((uint8)(vi.w[7] >> 16))]);
+		accum = v_xor(accum, c[59*256 + ((uint8)(vi.w[7] >> 24))]);
+		accum = v_xor(accum, c[60*256 + ((uint8)(vi.w[7] >> 32))]);
+		accum = v_xor(accum, c[61*256 + ((uint8)(vi.w[7] >> 40))]);
+		accum = v_xor(accum, c[62*256 + ((uint8)(vi.w[7] >> 48))]);
+		accum = v_xor(accum, c[63*256 + ((uint8)(vi.w[7] >> 56))]);
+		#endif
 		#endif
 		#endif
 		#endif
@@ -284,6 +318,16 @@ static void mul_NxB_BxB_precomp(v_t *c, v_t *x) {
 		#if VWORDS > 3
 		BXB_ACC(24); BXB_ACC(25); BXB_ACC(26); BXB_ACC(27);
 		BXB_ACC(28); BXB_ACC(29); BXB_ACC(30); BXB_ACC(31);
+		#if VWORDS > 4
+		BXB_ACC(32); BXB_ACC(33); BXB_ACC(34); BXB_ACC(35);
+		BXB_ACC(36); BXB_ACC(37); BXB_ACC(38); BXB_ACC(39);
+		BXB_ACC(40); BXB_ACC(41); BXB_ACC(42); BXB_ACC(43);
+		BXB_ACC(44); BXB_ACC(45); BXB_ACC(46); BXB_ACC(47);
+		BXB_ACC(48); BXB_ACC(49); BXB_ACC(50); BXB_ACC(51);
+		BXB_ACC(52); BXB_ACC(53); BXB_ACC(54); BXB_ACC(55);
+		BXB_ACC(56); BXB_ACC(57); BXB_ACC(58); BXB_ACC(59);
+		BXB_ACC(60); BXB_ACC(61); BXB_ACC(62); BXB_ACC(63);
+		#endif
 		#endif
 		#endif
 		#endif
@@ -485,6 +529,16 @@ static void core_BxN_NxB(v_t *x, v_t *c, v_t *y, uint32 n) {
 		#if VWORDS > 3
 		NXB_ACC(24); NXB_ACC(25); NXB_ACC(26); NXB_ACC(27);
 		NXB_ACC(28); NXB_ACC(29); NXB_ACC(30); NXB_ACC(31);
+		#if VWORDS > 4
+		NXB_ACC(32); NXB_ACC(33); NXB_ACC(34); NXB_ACC(35);
+		NXB_ACC(36); NXB_ACC(37); NXB_ACC(38); NXB_ACC(39);
+		NXB_ACC(40); NXB_ACC(41); NXB_ACC(42); NXB_ACC(43);
+		NXB_ACC(44); NXB_ACC(45); NXB_ACC(46); NXB_ACC(47);
+		NXB_ACC(48); NXB_ACC(49); NXB_ACC(50); NXB_ACC(51);
+		NXB_ACC(52); NXB_ACC(53); NXB_ACC(54); NXB_ACC(55);
+		NXB_ACC(56); NXB_ACC(57); NXB_ACC(58); NXB_ACC(59);
+		NXB_ACC(60); NXB_ACC(61); NXB_ACC(62); NXB_ACC(63);
+		#endif
 		#endif
 		#endif
 		#endif
@@ -520,6 +574,16 @@ static void mul_BxN_NxB_postproc(v_t *c, v_t *xy) {
 				#if VWORDS > 3
 				NXB_POST(24); NXB_POST(25); NXB_POST(26); NXB_POST(27);
 				NXB_POST(28); NXB_POST(29); NXB_POST(30); NXB_POST(31);
+				#if VWORDS > 4
+				NXB_POST(32); NXB_POST(33); NXB_POST(34); NXB_POST(35);
+				NXB_POST(36); NXB_POST(37); NXB_POST(38); NXB_POST(39);
+				NXB_POST(40); NXB_POST(41); NXB_POST(42); NXB_POST(43);
+				NXB_POST(44); NXB_POST(45); NXB_POST(46); NXB_POST(47);
+				NXB_POST(48); NXB_POST(49); NXB_POST(50); NXB_POST(51);
+				NXB_POST(52); NXB_POST(53); NXB_POST(54); NXB_POST(55);
+				NXB_POST(56); NXB_POST(57); NXB_POST(58); NXB_POST(59);
+				NXB_POST(60); NXB_POST(61); NXB_POST(62); NXB_POST(63);
+				#endif
 				#endif
 				#endif
 				#endif

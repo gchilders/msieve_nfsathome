@@ -30,6 +30,10 @@ $Id$
 #define BIT1(x) {{(uint64)0, (uint64)(1) << (x)}}
 #define BIT2(x) {{(uint64)0, (uint64)0, (uint64)(1) << (x)}}
 #define BIT3(x) {{(uint64)0, (uint64)0, (uint64)0, (uint64)(1) << (x)}}
+#define BIT4(x) {{(uint64)0, (uint64)0, (uint64)0, (uint64)0, (uint64)(1) << (x)}}
+#define BIT5(x) {{(uint64)0, (uint64)0, (uint64)0, (uint64)0, (uint64)0, (uint64)(1) << (x)}}
+#define BIT6(x) {{(uint64)0, (uint64)0, (uint64)0, (uint64)0, (uint64)0, (uint64)0, (uint64)(1) << (x)}}
+#define BIT7(x) {{(uint64)0, (uint64)0, (uint64)0, (uint64)0, (uint64)0, (uint64)0, (uint64)0, (uint64)(1) << (x)}}
 
 static const v_t bitmask[VBITS] = {
 
@@ -68,6 +72,40 @@ BIT3(32), BIT3(33), BIT3(34), BIT3(35), BIT3(36), BIT3(37), BIT3(38), BIT3(39),
 BIT3(40), BIT3(41), BIT3(42), BIT3(43), BIT3(44), BIT3(45), BIT3(46), BIT3(47),
 BIT3(48), BIT3(49), BIT3(50), BIT3(51), BIT3(52), BIT3(53), BIT3(54), BIT3(55),
 BIT3(56), BIT3(57), BIT3(58), BIT3(59), BIT3(60), BIT3(61), BIT3(62), BIT3(63),
+#if VBITS > 256
+BIT4( 0), BIT4( 1), BIT4( 2), BIT4( 3), BIT4( 4), BIT4( 5), BIT4( 6), BIT4( 7),
+BIT4( 8), BIT4( 9), BIT4(10), BIT4(11), BIT4(12), BIT4(13), BIT4(14), BIT4(15),
+BIT4(16), BIT4(17), BIT4(18), BIT4(19), BIT4(20), BIT4(21), BIT4(22), BIT4(23),
+BIT4(24), BIT4(25), BIT4(26), BIT4(27), BIT4(28), BIT4(29), BIT4(30), BIT4(31),
+BIT4(32), BIT4(33), BIT4(34), BIT4(35), BIT4(36), BIT4(37), BIT4(38), BIT4(39),
+BIT4(40), BIT4(41), BIT4(42), BIT4(43), BIT4(44), BIT4(45), BIT4(46), BIT4(47),
+BIT4(48), BIT4(49), BIT4(50), BIT4(51), BIT4(52), BIT4(53), BIT4(54), BIT4(55),
+BIT4(56), BIT4(57), BIT4(58), BIT4(59), BIT4(60), BIT4(61), BIT4(62), BIT4(63),
+BIT5( 0), BIT5( 1), BIT5( 2), BIT5( 3), BIT5( 4), BIT5( 5), BIT5( 6), BIT5( 7),
+BIT5( 8), BIT5( 9), BIT5(10), BIT5(11), BIT5(12), BIT5(13), BIT5(14), BIT5(15),
+BIT5(16), BIT5(17), BIT5(18), BIT5(19), BIT5(20), BIT5(21), BIT5(22), BIT5(23),
+BIT5(24), BIT5(25), BIT5(26), BIT5(27), BIT5(28), BIT5(29), BIT5(30), BIT5(31),
+BIT5(32), BIT5(33), BIT5(34), BIT5(35), BIT5(36), BIT5(37), BIT5(38), BIT5(39),
+BIT5(40), BIT5(41), BIT5(42), BIT5(43), BIT5(44), BIT5(45), BIT5(46), BIT5(47),
+BIT5(48), BIT5(49), BIT5(50), BIT5(51), BIT5(52), BIT5(53), BIT5(54), BIT5(55),
+BIT5(56), BIT5(57), BIT5(58), BIT5(59), BIT5(60), BIT5(61), BIT5(62), BIT5(63),
+BIT6( 0), BIT6( 1), BIT6( 2), BIT6( 3), BIT6( 4), BIT6( 5), BIT6( 6), BIT6( 7),
+BIT6( 8), BIT6( 9), BIT6(10), BIT6(11), BIT6(12), BIT6(13), BIT6(14), BIT6(15),
+BIT6(16), BIT6(17), BIT6(18), BIT6(19), BIT6(20), BIT6(21), BIT6(22), BIT6(23),
+BIT6(24), BIT6(25), BIT6(26), BIT6(27), BIT6(28), BIT6(29), BIT6(30), BIT6(31),
+BIT6(32), BIT6(33), BIT6(34), BIT6(35), BIT6(36), BIT6(37), BIT6(38), BIT6(39),
+BIT6(40), BIT6(41), BIT6(42), BIT6(43), BIT6(44), BIT6(45), BIT6(46), BIT6(47),
+BIT6(48), BIT6(49), BIT6(50), BIT6(51), BIT6(52), BIT6(53), BIT6(54), BIT6(55),
+BIT6(56), BIT6(57), BIT6(58), BIT6(59), BIT6(60), BIT6(61), BIT6(62), BIT6(63),
+BIT7( 0), BIT7( 1), BIT7( 2), BIT7( 3), BIT7( 4), BIT7( 5), BIT7( 6), BIT7( 7),
+BIT7( 8), BIT7( 9), BIT7(10), BIT7(11), BIT7(12), BIT7(13), BIT7(14), BIT7(15),
+BIT7(16), BIT7(17), BIT7(18), BIT7(19), BIT7(20), BIT7(21), BIT7(22), BIT7(23),
+BIT7(24), BIT7(25), BIT7(26), BIT7(27), BIT7(28), BIT7(29), BIT7(30), BIT7(31),
+BIT7(32), BIT7(33), BIT7(34), BIT7(35), BIT7(36), BIT7(37), BIT7(38), BIT7(39),
+BIT7(40), BIT7(41), BIT7(42), BIT7(43), BIT7(44), BIT7(45), BIT7(46), BIT7(47),
+BIT7(48), BIT7(49), BIT7(50), BIT7(51), BIT7(52), BIT7(53), BIT7(54), BIT7(55),
+BIT7(56), BIT7(57), BIT7(58), BIT7(59), BIT7(60), BIT7(61), BIT7(62), BIT7(63),
+#endif
 #endif
 #endif
 #endif
@@ -1463,18 +1501,19 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 
 	*num_deps_found = combine_cols(max_n, out0, out1, out2, out3);
 
-	MPI_NODE_0_END
-
-	aligned_free(out1);
-	aligned_free(out2);
-	aligned_free(out3);
-
 	if (*num_deps_found == 0)
 		logprintf(obj, "lanczos error: only trivial "
 				"dependencies found\n");
 	else
 		logprintf(obj, "recovered %u nontrivial dependencies\n", 
 				*num_deps_found);
+
+	MPI_NODE_0_END
+
+	aligned_free(out1);
+	aligned_free(out2);
+	aligned_free(out3);
+
 	return out0;
 }
 
@@ -1638,12 +1677,12 @@ uint64 * block_lanczos(msieve_obj *obj,
 	if (*num_deps_found) {
 		uint32 i;
 
-		dependencies = (uint64 *)xmalloc(ncols * sizeof(uint64));
+		dependencies = (uint64 *)xmalloc(max_ncols * sizeof(uint64));
 
 		if (*num_deps_found > 64)
 			logprintf(obj, "saving only 64 dependencies\n");
 
-		for (i = 0; i < ncols; i++)
+		for (i = 0; i < max_ncols; i++)
 			dependencies[i] = lanczos_output[i].w[0];
 	}
 
