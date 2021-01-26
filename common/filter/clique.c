@@ -192,6 +192,49 @@ static int compare_score_descending(const void *x, const void *y) {
 }
 
 /*--------------------------------------------------------------------*/
+
+void check_relations_array(filter_t *filter, uint32 location) {
+
+        relation_ideal_t *curr_relation;
+        uint32 num_relations;
+        uint32 num_ideals, ideal;
+        uint32 i, j;
+        uint32 num_bad = 0;
+        uint32 badrel = 0;
+
+        printf("checking relations array at location %u\n", location);
+	fflush(stdout);
+
+        curr_relation = filter->relation_array;
+        num_relations = filter->num_relations;
+        num_ideals = filter->num_ideals;
+
+        for (i = 0; i < num_relations; i++) {
+            	for (j = 0; j < curr_relation->ideal_count; j++) {
+                	ideal = curr_relation->ideal_list[j];
+                	if (ideal >= num_ideals) badrel = 1; 
+            	}
+	    	if (badrel == 1) {
+                	printf("Loc %u: bad relation %u of %u, num_ideals is %u\n",
+                        	location, i, num_relations, num_ideals);
+                	printf("rel_index: %u, ideal_count: %hhu, gf2_factors: %hhu, connected: %hhu\nIdeals: ",
+                        	curr_relation->rel_index, curr_relation->ideal_count, curr_relation->gf2_factors, curr_relation->connected);
+                	for (j = 0; j < curr_relation->ideal_count; j++)
+                        	printf("%u, ", curr_relation->ideal_list[j]);
+                	printf("\n");
+			badrel = 0;
+			num_bad++;
+		}
+            	curr_relation = next_relation_ptr(curr_relation);
+        }
+		
+	if (num_bad > 0) printf("Found %u bad relations in array.\n", num_bad);
+	fflush(stdout);
+
+        return;
+}
+
+/*--------------------------------------------------------------------*/
 static void delete_relations(filter_t *filter,
 			uint32 *delete_array, uint32 num_delete) {
 
@@ -249,6 +292,7 @@ static void delete_relations(filter_t *filter,
 				(size_t)(old_relation + 1 - relation_array) *
 				sizeof(relation_ideal_t));
 	filter->num_relations = num_relations - num_delete;
+        check_relations_array(filter, 6);
 }
 
 /*--------------------------------------------------------------------*/

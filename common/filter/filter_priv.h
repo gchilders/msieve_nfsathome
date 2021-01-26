@@ -72,6 +72,10 @@ typedef struct ideal_set_t {
 
 #define MAX_RELSET_SIZE 28
 
+/* check relations array for errors */
+
+void check_relations_array(filter_t *filter, uint32 location);
+
 /* perform clique removal on the current set of relations */
 
 void filter_purge_cliques(msieve_obj *obj, filter_t *filter);
