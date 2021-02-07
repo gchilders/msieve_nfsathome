@@ -99,13 +99,11 @@ static void filter_read_lp_file_1pass(msieve_obj *obj,
 
 		/* trim the allocated memory */
 
-		check_relations_array(filter, 1);
 		filter->relation_array = (relation_ideal_t *)xrealloc(
 					filter->relation_array, 
 					(size_t)((uint32 *)r_old - 
 					(uint32 *)filter->relation_array) *
 					sizeof(uint32));
-		check_relations_array(filter, 2);
 	}
 
 	free(counts);
@@ -120,7 +118,7 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
 	size_t header_words;
 	relation_ideal_t tmp;
 	relation_ideal_t *relation_array;
-	uint32 curr_word;
+	uint64 curr_word;
 	size_t num_relation_alloc;
 	uint32 *counts;
 	uint32 num_relations = filter->num_relations;
@@ -228,12 +226,10 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
 
 	/* finish up: trim the allocated relation array */
 
-	check_relations_array(filter, 3);
 	filter->relation_array = (relation_ideal_t *)xrealloc(
 						relation_array, 
 						curr_word * 
 						sizeof(uint32));
-	check_relations_array(filter, 4);
 	free(counts);
 	fclose(fp);
 	mem_use = num_ideals * sizeof(uint32) +
@@ -548,5 +544,4 @@ void filter_purge_singletons_core(msieve_obj *obj,
 		curr_relation = next_relation_ptr(curr_relation);
 	}
 	free(freqtable);
-	check_relations_array(filter, 5);
 }
