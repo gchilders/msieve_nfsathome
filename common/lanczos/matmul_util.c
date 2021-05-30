@@ -148,13 +148,13 @@ void global_xor(void *send_buf_in, void *recv_buf_in,
 	/* only get fancy for large buffers; even the
 	   fancy method is only faster when many nodes 
 	   are involved */
-	/*
+	
 	if (total_size < GLOBAL_BREAKOVER || num_nodes < 2) {
 		MPI_TRY(MPI_Allreduce(send_buf, 
 				recv_buf, VWORDS * total_size,
 				MPI_LONG_LONG, MPI_BXOR, comm))
 		return;
-	} */
+	} 
 
 	global_xor_async(send_buf, recv_buf, 
 		total_size, num_nodes, my_id, mpi_word, comm);
