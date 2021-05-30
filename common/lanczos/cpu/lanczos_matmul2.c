@@ -276,6 +276,12 @@ static void mul_trans_one_block(packed_block_t *curr_block,
 		 "g"(num_entries & (uint32)(~15))
 		:"%eax", "%ecx", "%mm0", "memory", "cc");
 
+	#undef _txor
+
+	for (; i < num_entries; i++) {
+		curr_b[entries[i].col_off] = v_xor(curr_b[entries[i].col_off],
+						curr_row[entries[i].row_off]);
+	}
 #elif defined(MSC_ASM32A) && defined(HAS_MMX) && VWORDS == 1
 
 	#define _txor(x)			\
@@ -310,27 +316,21 @@ static void mul_trans_one_block(packed_block_t *curr_block,
 		pop ebx
 	}
 
-#else
-	#define _txor(x) curr_b[entries[i+x].col_off] = v_xor(\
-				curr_b[entries[i+x].col_off], \
-				 curr_row[entries[i+x].row_off])
-
-	for (i = 0; i < (num_entries & (uint32)(~15)); i += 16) {
-		#ifdef MANUAL_PREFETCH
-		PREFETCH(entries + i + 48 / VWORDS);
-		#endif
-		_txor( 0); _txor( 1); _txor( 2); _txor( 3);
-		_txor( 4); _txor( 5); _txor( 6); _txor( 7);
-		_txor( 8); _txor( 9); _txor(10); _txor(11);
-		_txor(12); _txor(13); _txor(14); _txor(15);
-	}
-#endif
 	#undef _txor
 
 	for (; i < num_entries; i++) {
 		curr_b[entries[i].col_off] = v_xor(curr_b[entries[i].col_off],
 						curr_row[entries[i].row_off]);
 	}
+#else
+	for (i = 0; i < num_entries; i++) {
+		#ifdef MANUAL_PREFETCH
+		PREFETCH(entries + i + 48 / VWORDS);
+		#endif
+		curr_b[entries[i].col_off] = v_xor(curr_b[entries[i].col_off],
+						curr_row[entries[i].row_off]);
+	}
+#endif
 }
 
 /*-------------------------------------------------------------------*/

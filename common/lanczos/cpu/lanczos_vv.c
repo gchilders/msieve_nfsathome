@@ -51,16 +51,6 @@ void vv_xor(void *dest_in, void *src_in, uint32 n) {
 	v_t *dest = (v_t *)dest_in;
 	uint32 i;
 
-	/* for (i = 0; i < (n & ~7); i += 8) {
-		dest[i + 0] = v_xor(dest[i + 0], src[i + 0]);
-		dest[i + 1] = v_xor(dest[i + 1], src[i + 1]);
-		dest[i + 2] = v_xor(dest[i + 2], src[i + 2]);
-		dest[i + 3] = v_xor(dest[i + 3], src[i + 3]);
-		dest[i + 4] = v_xor(dest[i + 4], src[i + 4]);
-		dest[i + 5] = v_xor(dest[i + 5], src[i + 5]);
-		dest[i + 6] = v_xor(dest[i + 6], src[i + 6]);
-		dest[i + 7] = v_xor(dest[i + 7], src[i + 7]);
-	} */
 	for (i = 0; i < n; i++)
 		dest[i] = v_xor(dest[i], src[i]);
 }
@@ -70,16 +60,6 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 	v_t *v = (v_t *)v_in;
 	uint32 i;
 
-	/* for (i = 0; i < (n & ~7); i += 8) {
-		v[i + 0] = v_and(v[i + 0], mask);
-		v[i + 1] = v_and(v[i + 1], mask);
-		v[i + 2] = v_and(v[i + 2], mask);
-		v[i + 3] = v_and(v[i + 3], mask);
-		v[i + 4] = v_and(v[i + 4], mask);
-		v[i + 5] = v_and(v[i + 5], mask);
-		v[i + 6] = v_and(v[i + 6], mask);
-		v[i + 7] = v_and(v[i + 7], mask);
-	} */
 	for (i = 0; i < n; i++)
 		v[i] = v_and(v[i], mask);
 }
