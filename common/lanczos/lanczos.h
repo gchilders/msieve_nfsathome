@@ -41,67 +41,22 @@ typedef struct {
 
 static INLINE v_t v_and(v_t a, v_t b) {
 	v_t res;
-
-	res.w[0] = a.w[0] & b.w[0];
-	#if VWORDS > 1
-	res.w[1] = a.w[1] & b.w[1];
-	#if VWORDS > 2
-	res.w[2] = a.w[2] & b.w[2];
-	#if VWORDS > 3
-	res.w[3] = a.w[3] & b.w[3];
-	#if VWORDS > 4
-	res.w[4] = a.w[4] & b.w[4];
-	res.w[5] = a.w[5] & b.w[5];
-	res.w[6] = a.w[6] & b.w[6];
-	res.w[7] = a.w[7] & b.w[7];
-	#endif
-	#endif
-	#endif
-	#endif
+	int i;
+	for (i = 0; i < VWORDS; i++) res.w[i] = a.w[i] & b.w[i];
 	return res;
 }
 
 static INLINE v_t v_or(v_t a, v_t b) {
 	v_t res;
-
-	res.w[0] = a.w[0] | b.w[0];
-	#if VWORDS > 1
-	res.w[1] = a.w[1] | b.w[1];
-	#if VWORDS > 2
-	res.w[2] = a.w[2] | b.w[2];
-	#if VWORDS > 3
-	res.w[3] = a.w[3] | b.w[3];
-	#if VWORDS > 4
-	res.w[4] = a.w[4] | b.w[4];
-	res.w[5] = a.w[5] | b.w[5];
-	res.w[6] = a.w[6] | b.w[6];
-	res.w[7] = a.w[7] | b.w[7];
-	#endif
-	#endif
-	#endif
-	#endif
+	int i;
+	for (i = 0; i < VWORDS; i++) res.w[i] = a.w[i] | b.w[i];
 	return res;
 }
 
 static INLINE v_t v_xor(v_t a, v_t b) {
 	v_t res;
-
-	res.w[0] = a.w[0] ^ b.w[0];
-	#if VWORDS > 1
-	res.w[1] = a.w[1] ^ b.w[1];
-	#if VWORDS > 2
-	res.w[2] = a.w[2] ^ b.w[2];
-	#if VWORDS > 3
-	res.w[3] = a.w[3] ^ b.w[3];
-	#if VWORDS > 4
-	res.w[4] = a.w[4] ^ b.w[4];
-	res.w[5] = a.w[5] ^ b.w[5];
-	res.w[6] = a.w[6] ^ b.w[6];
-	res.w[7] = a.w[7] ^ b.w[7];
-	#endif
-	#endif
-	#endif
-	#endif
+	int i;
+	for (i = 0; i < VWORDS; i++) res.w[i] = a.w[i] ^ b.w[i];
 	return res;
 }
 
