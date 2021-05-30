@@ -123,8 +123,8 @@ void set_idle_priority(void) {
 
 /*--------------------------------------------------------------------*/
 /* safe default values */
-#define DEFAULT_L1_CACHE_SIZE (32 * 1024)
-#define DEFAULT_L2_CACHE_SIZE (512 * 1024)
+#define DEFAULT_L1_CACHE_SIZE (64 * 1024)
+#define DEFAULT_L2_CACHE_SIZE (8 * 1024 * 1024)
 
 typedef union {
 	uint32 data;
