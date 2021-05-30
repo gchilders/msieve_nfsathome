@@ -51,7 +51,7 @@ void vv_xor(void *dest_in, void *src_in, uint32 n) {
 	v_t *dest = (v_t *)dest_in;
 	uint32 i;
 
-	for (i = 0; i < (n & ~7); i += 8) {
+	/* for (i = 0; i < (n & ~7); i += 8) {
 		dest[i + 0] = v_xor(dest[i + 0], src[i + 0]);
 		dest[i + 1] = v_xor(dest[i + 1], src[i + 1]);
 		dest[i + 2] = v_xor(dest[i + 2], src[i + 2]);
@@ -60,8 +60,8 @@ void vv_xor(void *dest_in, void *src_in, uint32 n) {
 		dest[i + 5] = v_xor(dest[i + 5], src[i + 5]);
 		dest[i + 6] = v_xor(dest[i + 6], src[i + 6]);
 		dest[i + 7] = v_xor(dest[i + 7], src[i + 7]);
-	}
-	for (; i < n; i++)
+	} */
+	for (i = 0; i < n; i++)
 		dest[i] = v_xor(dest[i], src[i]);
 }
 
@@ -70,7 +70,7 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 	v_t *v = (v_t *)v_in;
 	uint32 i;
 
-	for (i = 0; i < (n & ~7); i += 8) {
+	/* for (i = 0; i < (n & ~7); i += 8) {
 		v[i + 0] = v_and(v[i + 0], mask);
 		v[i + 1] = v_and(v[i + 1], mask);
 		v[i + 2] = v_and(v[i + 2], mask);
@@ -79,8 +79,8 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 		v[i + 5] = v_and(v[i + 5], mask);
 		v[i + 6] = v_and(v[i + 6], mask);
 		v[i + 7] = v_and(v[i + 7], mask);
-	}
-	for (; i < n; i++)
+	} */
+	for (i = 0; i < n; i++)
 		v[i] = v_and(v[i], mask);
 }
 
@@ -165,6 +165,9 @@ static void core_NxB_BxB_acc(v_t *v, v_t *c, v_t *y, uint32 n) {
 	}
 #else
 	for (i = 0; i < n; i++) {
+		#ifdef MANUAL_PREFETCH
+		PREFETCH(y+i+4);
+		#endif
 		v_t vi = v[i];
 		v_t accum =          c[ 0*256 + ((uint8)(vi.w[0] >>  0))];
 		accum = v_xor(accum, c[ 1*256 + ((uint8)(vi.w[0] >>  8))]);
@@ -293,7 +296,7 @@ static void mul_NxB_BxB_precomp(v_t *c, v_t *x) {
 	 
 	   We iterate through i in Gray code order to minimize overhead */
 
-	uint32 i;
+	uint32 i, j;
 	v_t acc[8 * VWORDS];
 
 	for (i = 0; i < 8 * VWORDS; i++)
@@ -307,29 +310,11 @@ static void mul_NxB_BxB_precomp(v_t *c, v_t *x) {
 		uint32 word = graycode[2 * i];
 		uint32 bit = graycode[2 * i + 1];
 
+		#if VWORDS == 1
 		BXB_ACC(0); BXB_ACC(1); BXB_ACC(2); BXB_ACC(3);
 		BXB_ACC(4); BXB_ACC(5); BXB_ACC(6); BXB_ACC(7);
-		#if VWORDS > 1
-		BXB_ACC(8); BXB_ACC(9); BXB_ACC(10); BXB_ACC(11);
-		BXB_ACC(12); BXB_ACC(13); BXB_ACC(14); BXB_ACC(15);
-		#if VWORDS > 2
-		BXB_ACC(16); BXB_ACC(17); BXB_ACC(18); BXB_ACC(19);
-		BXB_ACC(20); BXB_ACC(21); BXB_ACC(22); BXB_ACC(23);
-		#if VWORDS > 3
-		BXB_ACC(24); BXB_ACC(25); BXB_ACC(26); BXB_ACC(27);
-		BXB_ACC(28); BXB_ACC(29); BXB_ACC(30); BXB_ACC(31);
-		#if VWORDS > 4
-		BXB_ACC(32); BXB_ACC(33); BXB_ACC(34); BXB_ACC(35);
-		BXB_ACC(36); BXB_ACC(37); BXB_ACC(38); BXB_ACC(39);
-		BXB_ACC(40); BXB_ACC(41); BXB_ACC(42); BXB_ACC(43);
-		BXB_ACC(44); BXB_ACC(45); BXB_ACC(46); BXB_ACC(47);
-		BXB_ACC(48); BXB_ACC(49); BXB_ACC(50); BXB_ACC(51);
-		BXB_ACC(52); BXB_ACC(53); BXB_ACC(54); BXB_ACC(55);
-		BXB_ACC(56); BXB_ACC(57); BXB_ACC(58); BXB_ACC(59);
-		BXB_ACC(60); BXB_ACC(61); BXB_ACC(62); BXB_ACC(63);
-		#endif
-		#endif
-		#endif
+		#else
+		for (j = 0; j < 8 * VWORDS; j++) { BXB_ACC(j); }
 		#endif
 	}
 }
@@ -341,7 +326,7 @@ void mul_NxB_BxB_acc(v_t *v, v_t *x, v_t *y, uint32 n) {
 	   represented as an array of n v_t structures. Let c[][]
 	   be an (8*VWORDS) x 256 scratch matrix of v_t structures.
 	   This code multiplies v[][] by the BxB matrix 
-	   x[][], then XORs the n x 64 result into y[][] */
+	   x[][], then XORs the N x B result into y[][] */
 
 	v_t c[8 * VWORDS * 256];
 
@@ -404,7 +389,7 @@ void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 /*-------------------------------------------------------------------*/
 static void core_BxN_NxB(v_t *x, v_t *c, v_t *y, uint32 n) {
 
-	uint32 i;
+	uint32 i, j;
 
 	memset(c, 0, 8 * VWORDS * 256 * sizeof(v_t));
 
@@ -518,29 +503,11 @@ static void core_BxN_NxB(v_t *x, v_t *c, v_t *y, uint32 n) {
 		v_t xi = x[i];
 		v_t yi = y[i];
 
+		#if VWORDS == 1
 		NXB_ACC(0); NXB_ACC(1); NXB_ACC(2); NXB_ACC(3);
 		NXB_ACC(4); NXB_ACC(5); NXB_ACC(6); NXB_ACC(7);
-		#if VWORDS > 1
-		NXB_ACC(8); NXB_ACC(9); NXB_ACC(10); NXB_ACC(11);
-		NXB_ACC(12); NXB_ACC(13); NXB_ACC(14); NXB_ACC(15);
-		#if VWORDS > 2
-		NXB_ACC(16); NXB_ACC(17); NXB_ACC(18); NXB_ACC(19);
-		NXB_ACC(20); NXB_ACC(21); NXB_ACC(22); NXB_ACC(23);
-		#if VWORDS > 3
-		NXB_ACC(24); NXB_ACC(25); NXB_ACC(26); NXB_ACC(27);
-		NXB_ACC(28); NXB_ACC(29); NXB_ACC(30); NXB_ACC(31);
-		#if VWORDS > 4
-		NXB_ACC(32); NXB_ACC(33); NXB_ACC(34); NXB_ACC(35);
-		NXB_ACC(36); NXB_ACC(37); NXB_ACC(38); NXB_ACC(39);
-		NXB_ACC(40); NXB_ACC(41); NXB_ACC(42); NXB_ACC(43);
-		NXB_ACC(44); NXB_ACC(45); NXB_ACC(46); NXB_ACC(47);
-		NXB_ACC(48); NXB_ACC(49); NXB_ACC(50); NXB_ACC(51);
-		NXB_ACC(52); NXB_ACC(53); NXB_ACC(54); NXB_ACC(55);
-		NXB_ACC(56); NXB_ACC(57); NXB_ACC(58); NXB_ACC(59);
-		NXB_ACC(60); NXB_ACC(61); NXB_ACC(62); NXB_ACC(63);
-		#endif
-		#endif
-		#endif
+		#else
+		for (j = 0; j < 8 * VWORDS; j++) { NXB_ACC(j); }
 		#endif
 	}
 #endif
@@ -549,7 +516,7 @@ static void core_BxN_NxB(v_t *x, v_t *c, v_t *y, uint32 n) {
 /*-------------------------------------------------------------------*/
 static void mul_BxN_NxB_postproc(v_t *c, v_t *xy) {
 
-	uint32 i, j;
+	uint32 i, j, k;
 
 	#define NXB_POST(i) \
 		a[i] = v_xor(a[i], c[i*256 + j])
@@ -563,29 +530,11 @@ static void mul_BxN_NxB_postproc(v_t *c, v_t *xy) {
 
 		for (j = 0; j < 256; j++) {
 			if ((j >> i) & 1) {
+				#if VWORDS == 1
 				NXB_POST(0); NXB_POST(1); NXB_POST(2); NXB_POST(3);
 				NXB_POST(4); NXB_POST(5); NXB_POST(6); NXB_POST(7);
-				#if VWORDS > 1
-				NXB_POST(8); NXB_POST(9); NXB_POST(10); NXB_POST(11);
-				NXB_POST(12); NXB_POST(13); NXB_POST(14); NXB_POST(15);
-				#if VWORDS > 2
-				NXB_POST(16); NXB_POST(17); NXB_POST(18); NXB_POST(19);
-				NXB_POST(20); NXB_POST(21); NXB_POST(22); NXB_POST(23);
-				#if VWORDS > 3
-				NXB_POST(24); NXB_POST(25); NXB_POST(26); NXB_POST(27);
-				NXB_POST(28); NXB_POST(29); NXB_POST(30); NXB_POST(31);
-				#if VWORDS > 4
-				NXB_POST(32); NXB_POST(33); NXB_POST(34); NXB_POST(35);
-				NXB_POST(36); NXB_POST(37); NXB_POST(38); NXB_POST(39);
-				NXB_POST(40); NXB_POST(41); NXB_POST(42); NXB_POST(43);
-				NXB_POST(44); NXB_POST(45); NXB_POST(46); NXB_POST(47);
-				NXB_POST(48); NXB_POST(49); NXB_POST(50); NXB_POST(51);
-				NXB_POST(52); NXB_POST(53); NXB_POST(54); NXB_POST(55);
-				NXB_POST(56); NXB_POST(57); NXB_POST(58); NXB_POST(59);
-				NXB_POST(60); NXB_POST(61); NXB_POST(62); NXB_POST(63);
-				#endif
-				#endif
-				#endif
+				#else
+				for (k = 0; k < 8 * VWORDS; k++) { NXB_POST(k); }
 				#endif
 			}
 		}
