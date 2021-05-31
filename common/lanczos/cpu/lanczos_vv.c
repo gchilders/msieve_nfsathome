@@ -65,9 +65,9 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 }
 
 /*-------------------------------------------------------------------*/
-static void core_NxB_BxB_acc(v_t *v, v_t *c, v_t *y, uint32 n) {
+static void core_NxB_BxB_acc(const v_t *v, const v_t *c, v_t * __restrict__ y, uint32 n) {
 
-	uint32 i;
+	uint32 i, j;
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX) && defined(NDEBUG) && VWORDS == 1
 	i = 0;
@@ -149,7 +149,11 @@ static void core_NxB_BxB_acc(v_t *v, v_t *c, v_t *y, uint32 n) {
 		PREFETCH(y+i+4);
 		#endif
 		v_t vi = v[i];
-		v_t accum =          c[ 0*256 + ((uint8)(vi.w[0] >>  0))];
+		v_t accum;
+		memset(&accum, 0, sizeof(v_t));
+
+		#if VWORDS == 1
+		accum = v_xor(accum, c[ 0*256 + ((uint8)(vi.w[0] >>  0))]);
 		accum = v_xor(accum, c[ 1*256 + ((uint8)(vi.w[0] >>  8))]);
 		accum = v_xor(accum, c[ 2*256 + ((uint8)(vi.w[0] >> 16))]);
 		accum = v_xor(accum, c[ 3*256 + ((uint8)(vi.w[0] >> 24))]);
@@ -157,69 +161,10 @@ static void core_NxB_BxB_acc(v_t *v, v_t *c, v_t *y, uint32 n) {
 		accum = v_xor(accum, c[ 5*256 + ((uint8)(vi.w[0] >> 40))]);
 		accum = v_xor(accum, c[ 6*256 + ((uint8)(vi.w[0] >> 48))]);
 		accum = v_xor(accum, c[ 7*256 + ((uint8)(vi.w[0] >> 56))]);
-		#if VWORDS > 1
-		accum = v_xor(accum, c[ 8*256 + ((uint8)(vi.w[1] >>  0))]);
-		accum = v_xor(accum, c[ 9*256 + ((uint8)(vi.w[1] >>  8))]);
-		accum = v_xor(accum, c[10*256 + ((uint8)(vi.w[1] >> 16))]);
-		accum = v_xor(accum, c[11*256 + ((uint8)(vi.w[1] >> 24))]);
-		accum = v_xor(accum, c[12*256 + ((uint8)(vi.w[1] >> 32))]);
-		accum = v_xor(accum, c[13*256 + ((uint8)(vi.w[1] >> 40))]);
-		accum = v_xor(accum, c[14*256 + ((uint8)(vi.w[1] >> 48))]);
-		accum = v_xor(accum, c[15*256 + ((uint8)(vi.w[1] >> 56))]);
-		#if VWORDS > 2
-		accum = v_xor(accum, c[16*256 + ((uint8)(vi.w[2] >>  0))]);
-		accum = v_xor(accum, c[17*256 + ((uint8)(vi.w[2] >>  8))]);
-		accum = v_xor(accum, c[18*256 + ((uint8)(vi.w[2] >> 16))]);
-		accum = v_xor(accum, c[19*256 + ((uint8)(vi.w[2] >> 24))]);
-		accum = v_xor(accum, c[20*256 + ((uint8)(vi.w[2] >> 32))]);
-		accum = v_xor(accum, c[21*256 + ((uint8)(vi.w[2] >> 40))]);
-		accum = v_xor(accum, c[22*256 + ((uint8)(vi.w[2] >> 48))]);
-		accum = v_xor(accum, c[23*256 + ((uint8)(vi.w[2] >> 56))]);
-		#if VWORDS > 3
-		accum = v_xor(accum, c[24*256 + ((uint8)(vi.w[3] >>  0))]);
-		accum = v_xor(accum, c[25*256 + ((uint8)(vi.w[3] >>  8))]);
-		accum = v_xor(accum, c[26*256 + ((uint8)(vi.w[3] >> 16))]);
-		accum = v_xor(accum, c[27*256 + ((uint8)(vi.w[3] >> 24))]);
-		accum = v_xor(accum, c[28*256 + ((uint8)(vi.w[3] >> 32))]);
-		accum = v_xor(accum, c[29*256 + ((uint8)(vi.w[3] >> 40))]);
-		accum = v_xor(accum, c[30*256 + ((uint8)(vi.w[3] >> 48))]);
-		accum = v_xor(accum, c[31*256 + ((uint8)(vi.w[3] >> 56))]);
-		#if VWORDS > 4
-		accum = v_xor(accum, c[32*256 + ((uint8)(vi.w[4] >>  0))]);
-		accum = v_xor(accum, c[33*256 + ((uint8)(vi.w[4] >>  8))]);
-		accum = v_xor(accum, c[34*256 + ((uint8)(vi.w[4] >> 16))]);
-		accum = v_xor(accum, c[35*256 + ((uint8)(vi.w[4] >> 24))]);
-		accum = v_xor(accum, c[36*256 + ((uint8)(vi.w[4] >> 32))]);
-		accum = v_xor(accum, c[37*256 + ((uint8)(vi.w[4] >> 40))]);
-		accum = v_xor(accum, c[38*256 + ((uint8)(vi.w[4] >> 48))]);
-		accum = v_xor(accum, c[39*256 + ((uint8)(vi.w[4] >> 56))]);
-		accum = v_xor(accum, c[40*256 + ((uint8)(vi.w[5] >>  0))]);
-		accum = v_xor(accum, c[41*256 + ((uint8)(vi.w[5] >>  8))]);
-		accum = v_xor(accum, c[42*256 + ((uint8)(vi.w[5] >> 16))]);
-		accum = v_xor(accum, c[43*256 + ((uint8)(vi.w[5] >> 24))]);
-		accum = v_xor(accum, c[44*256 + ((uint8)(vi.w[5] >> 32))]);
-		accum = v_xor(accum, c[45*256 + ((uint8)(vi.w[5] >> 40))]);
-		accum = v_xor(accum, c[46*256 + ((uint8)(vi.w[5] >> 48))]);
-		accum = v_xor(accum, c[47*256 + ((uint8)(vi.w[5] >> 56))]);
-		accum = v_xor(accum, c[48*256 + ((uint8)(vi.w[6] >>  0))]);
-		accum = v_xor(accum, c[49*256 + ((uint8)(vi.w[6] >>  8))]);
-		accum = v_xor(accum, c[50*256 + ((uint8)(vi.w[6] >> 16))]);
-		accum = v_xor(accum, c[51*256 + ((uint8)(vi.w[6] >> 24))]);
-		accum = v_xor(accum, c[52*256 + ((uint8)(vi.w[6] >> 32))]);
-		accum = v_xor(accum, c[53*256 + ((uint8)(vi.w[6] >> 40))]);
-		accum = v_xor(accum, c[54*256 + ((uint8)(vi.w[6] >> 48))]);
-		accum = v_xor(accum, c[55*256 + ((uint8)(vi.w[6] >> 56))]);
-		accum = v_xor(accum, c[56*256 + ((uint8)(vi.w[7] >>  0))]);
-		accum = v_xor(accum, c[57*256 + ((uint8)(vi.w[7] >>  8))]);
-		accum = v_xor(accum, c[58*256 + ((uint8)(vi.w[7] >> 16))]);
-		accum = v_xor(accum, c[59*256 + ((uint8)(vi.w[7] >> 24))]);
-		accum = v_xor(accum, c[60*256 + ((uint8)(vi.w[7] >> 32))]);
-		accum = v_xor(accum, c[61*256 + ((uint8)(vi.w[7] >> 40))]);
-		accum = v_xor(accum, c[62*256 + ((uint8)(vi.w[7] >> 48))]);
-		accum = v_xor(accum, c[63*256 + ((uint8)(vi.w[7] >> 56))]);
-		#endif
-		#endif
-		#endif
+		#else
+		for (j = 0; j < 8 * VWORDS; j++) {
+			accum = v_xor(accum, c[ j*256 + (uint8)(vi.w[(j >> 3)] >> (8*(j % 8)))]);
+		}
 		#endif
 		y[i] = v_xor(y[i], accum);
 	}
@@ -367,7 +312,7 @@ void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 }
 
 /*-------------------------------------------------------------------*/
-static void core_BxN_NxB(v_t *x, v_t *c, v_t *y, uint32 n) {
+static void core_BxN_NxB(const v_t *x, v_t * __restrict__ c, const v_t *y, const uint32 n) {
 
 	uint32 i, j;
 
@@ -476,8 +421,8 @@ static void core_BxN_NxB(v_t *x, v_t *c, v_t *y, uint32 n) {
 #else
 
 	#define NXB_ACC(i) \
-		c[i*256 + (uint8)(xi.w[i/8] >> (8*(i % 8)))] = \
-		v_xor(c[i*256 + (uint8)(xi.w[i/8] >> (8*(i % 8)))], yi)
+		c[i*256 + (uint8)(xi.w[(i >> 3)] >> (8*(i % 8)))] = \
+		v_xor(c[i*256 + (uint8)(xi.w[(i >> 3)] >> (8*(i % 8)))], yi)
 
 	for (i = 0; i < n; i++) {
 		v_t xi = x[i];

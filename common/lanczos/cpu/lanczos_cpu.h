@@ -15,6 +15,10 @@ $Id$
 #ifndef _COMMON_LANCZOS_CPU_LANCZOS_CPU_H_
 #define _COMMON_LANCZOS_CPU_LANCZOS_CPU_H_
 
+#ifdef A64FX
+#include <arm_sve.h>
+#endif
+
 #include <thread.h>
 #include "../lanczos.h"
 
