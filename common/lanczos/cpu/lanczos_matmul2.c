@@ -229,8 +229,8 @@ static void mul_trans_one_med_block(packed_block_t *curr_block,
 }
 
 /*-------------------------------------------------------------------*/
-static void mul_trans_one_block(packed_block_t *curr_block,
-				v_t *curr_row, v_t *curr_b) {
+static void mul_trans_one_block(const packed_block_t *curr_block,
+				const v_t *curr_row, v_t * __restrict__ curr_b) {
 
 	uint32 i = 0;
 	uint32 num_entries = curr_block->num_entries;
@@ -322,6 +322,20 @@ static void mul_trans_one_block(packed_block_t *curr_block,
 		curr_b[entries[i].col_off] = v_xor(curr_b[entries[i].col_off],
 						curr_row[entries[i].row_off]);
 	}
+#elif defined(A64FX) && VWORDS == 8
+        svbool_t __attribute__((arm_sve_vector_bits(512))) everything=svptrue_b64();
+        for (i = 0; i < num_entries; i++) {
+                #ifdef MANUAL_PREFETCH
+                PREFETCH(entries + i + 48 / VWORDS);
+                #endif
+                uint64* b = (uint64*)(curr_b  + entries[i].col_off);
+                const uint64* c = (const uint64*)(curr_row +entries[i].row_off);
+                svstnt1_u64(everything,
+                        b,
+                        sveor_u64_x(everything,
+                                svld1_u64(everything, b),
+                                svldnt1_u64(everything, c)));
+        }
 #else
 	for (i = 0; i < num_entries; i++) {
 		#ifdef MANUAL_PREFETCH
