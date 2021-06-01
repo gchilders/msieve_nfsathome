@@ -150,7 +150,7 @@ static void core_NxB_BxB_acc(const v_t *v, const v_t *c, v_t * __restrict__ y, u
 		#endif
 		v_t vi = v[i];
 		v_t accum;
-		memset(&accum, 0, sizeof(v_t));
+		for (j = 0; j < VWORDS; j++) accum.w[j] = 0;
 
 		#if VWORDS == 1
 		accum = v_xor(accum, c[ 0*256 + ((uint8)(vi.w[0] >>  0))]);
@@ -163,7 +163,8 @@ static void core_NxB_BxB_acc(const v_t *v, const v_t *c, v_t * __restrict__ y, u
 		accum = v_xor(accum, c[ 7*256 + ((uint8)(vi.w[0] >> 56))]);
 		#else
 		for (j = 0; j < 8 * VWORDS; j++) {
-			accum = v_xor(accum, c[ j*256 + (uint8)(vi.w[(j >> 3)] >> (8*(j % 8)))]);
+			uint32 k = j*256 + ((vi.w[(j >> 3)] >> (8*(j % 8))) & 255);
+			accum = v_xor(accum, c[k]);
 		}
 		#endif
 		y[i] = v_xor(y[i], accum);
@@ -316,7 +317,9 @@ static void core_BxN_NxB(const v_t *x, v_t * __restrict__ c, const v_t *y, const
 
 	uint32 i, j;
 
-	memset(c, 0, 8 * VWORDS * 256 * sizeof(v_t));
+	// memset(c, 0, 8 * VWORDS * 256 * sizeof(v_t));
+	for (i = 0; i < 8 * VWORDS * 256; i++)
+		for (j = 0; j < VWORDS; j++) c[i].w[j] = 0;
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX) && defined(NDEBUG) && VWORDS == 1
 	i = 0;
@@ -421,18 +424,23 @@ static void core_BxN_NxB(const v_t *x, v_t * __restrict__ c, const v_t *y, const
 #else
 
 	#define NXB_ACC(i) \
-		c[i*256 + (uint8)(xi.w[(i >> 3)] >> (8*(i % 8)))] = \
-		v_xor(c[i*256 + (uint8)(xi.w[(i >> 3)] >> (8*(i % 8)))], yi)
+		k = i*256 + ((xi.w[(i >> 3)] >> (8*(i % 8))) & 255); c[k] = v_xor(c[k], yi)
 
 	for (i = 0; i < n; i++) {
 		v_t xi = x[i];
 		v_t yi = y[i];
 
 		#if VWORDS == 1
-		NXB_ACC(0); NXB_ACC(1); NXB_ACC(2); NXB_ACC(3);
-		NXB_ACC(4); NXB_ACC(5); NXB_ACC(6); NXB_ACC(7);
+		{
+			uint32 k;
+			NXB_ACC(0); NXB_ACC(1); NXB_ACC(2); NXB_ACC(3);
+			NXB_ACC(4); NXB_ACC(5); NXB_ACC(6); NXB_ACC(7);
+		}
 		#else
-		for (j = 0; j < 8 * VWORDS; j++) { NXB_ACC(j); }
+		for (j = 0; j < 8 * VWORDS; j++) { 
+			uint32 k;
+			NXB_ACC(j); 
+		}
 		#endif
 	}
 #endif
