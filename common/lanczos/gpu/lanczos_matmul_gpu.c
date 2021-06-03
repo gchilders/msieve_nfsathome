@@ -383,7 +383,6 @@ static void
 load_spmv_engine(msieve_obj *obj, gpudata_t *d)
 {
 	char libname[256];
-	const char *arch;
 	#if defined(WIN32) || defined(_WIN64)
 	const char *suffix = ".dll";
 	#else
@@ -395,14 +394,7 @@ load_spmv_engine(msieve_obj *obj, gpudata_t *d)
 		exit(-1);
 	}
 
-	if (d->gpu_info->compute_version_major == 2)
-		arch = "sm20";
-	else if (d->gpu_info->compute_version_minor >= 5)
-		arch = "sm35";
-	else
-		arch = "sm30";
-
-	sprintf(libname, "mgpu/spmv_engine_%s%s", arch, suffix);
+	sprintf(libname, "mgpu/spmv_engine%s", suffix);
 
 	/* override from input args */
 
@@ -494,7 +486,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 
 	/* load kernels */
 
-	CUDA_TRY(cuModuleLoad(&d->gpu_module, "lanczos_kernel_sm20.ptx"))
+	CUDA_TRY(cuModuleLoad(&d->gpu_module, "lanczos_kernel.ptx"))
 
 	d->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
 				sizeof(gpu_launch_t));

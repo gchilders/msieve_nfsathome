@@ -11,12 +11,12 @@ ifeq ($(WIN64),1)
 else
 	NVCCFLAGS += -m32
 endif
-	NVCCFLAGS += -Xptxas -v -Xcudafe -\# -shared -Xptxas -abi=no
+	NVCCFLAGS += -Xptxas -v -Xcudafe -\# -shared
 else
 	NVCC = "$(shell which nvcc)"
 	CUDA_ROOT = $(shell dirname $(NVCC))/../
 	EXT = so
-	NVCCFLAGS += -Xptxas -v -Xcudafe -\# -shared -Xptxas -abi=no \
+	NVCCFLAGS += -Xptxas -v -Xcudafe -\# -shared \
 			-Xcompiler -fPIC -Xcompiler -fvisibility=hidden
 endif
 
