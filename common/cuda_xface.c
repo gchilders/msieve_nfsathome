@@ -153,6 +153,12 @@ void gpu_launch_init(CUmodule gpu_module, const char *func_name,
 			j += sizeof(uint64);
 			break;
 
+		case GPU_ARG_VT:
+			CUDA_ALIGN_PARAM(j, __alignof(uint64));
+			launch->arg_offsets[i] = j;
+			j += sizeof(v_t);
+			break;
+
 		default:
 			printf("unknown GPU argument type\n");
 			exit(-1);
@@ -192,6 +198,13 @@ void gpu_launch_set(gpu_launch_t *launch, gpu_arg_t *args)
 					launch->arg_offsets[i],
 					&args[i].uint64_arg, 
 					sizeof(args[i].uint64_arg)))
+			break;
+
+		case GPU_ARG_VT:
+			CUDA_TRY(cuParamSetv(launch->kernel_func,
+					launch->arg_offsets[i],
+					&args[i].vt_arg, 
+					sizeof(args[i].vt_arg)))
 			break;
 
 		case GPU_ARG_INT32: 

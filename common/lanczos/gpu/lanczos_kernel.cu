@@ -20,32 +20,32 @@ extern "C" {
 
 /*------------------------------------------------------------------------*/
 __global__ void
-lanczos_kernel_mask(uint64 *x, uint64 mask, uint32 n)
+lanczos_kernel_mask(v_t *x, v_t mask, uint32 n)
 {
 	uint32 i;
 	uint32 num_threads = gridDim.x * blockDim.x;
 	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
 
 	for (i = grid_id; i < n; i += num_threads)
-		x[i] &= mask;
+		x[i] = v_and(x[i], mask);
 }
 
 /*------------------------------------------------------------------------*/
 __global__ void
-lanczos_kernel_xor(uint64 *dest, uint64 *src, uint32 n)
+lanczos_kernel_xor(v_t *dest, v_t *src, uint32 n)
 {
 	uint32 i;
 	uint32 num_threads = gridDim.x * blockDim.x;
 	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
 
 	for (i = grid_id; i < n; i += num_threads)
-		dest[i] ^= src[i];
+		dest[i] = v_xor(dest[i], src[i]);
 }
 
 /*------------------------------------------------------------------------*/
 __global__ void
-lanczos_kernel_inner_prod(uint64 *y, uint64 *v, 
-			uint64 *lookup, uint32 n)
+lanczos_kernel_inner_prod(v_t *y, v_t *v, 
+			v_t *lookup, uint32 n) /* fixme */
 {
 	uint32 i;
 	uint32 num_threads = gridDim.x * blockDim.x;
@@ -76,8 +76,8 @@ lanczos_kernel_inner_prod(uint64 *y, uint64 *v,
 #define MAX_OUTER_THREADS 256
 
 __global__ void
-lanczos_kernel_outer_prod(uint64 *x, uint64 *y,
-			uint32 *xy, uint32 n)
+lanczos_kernel_outer_prod(v_t *x, v_t *y,
+			uint32 *xy, uint32 n) /* fixme */
 {
 	uint32 i;
 	uint32 num_threads = gridDim.x * blockDim.x;

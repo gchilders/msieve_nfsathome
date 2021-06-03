@@ -21,9 +21,9 @@ void *vv_alloc(uint32 n, void *extra) {
 
 	v->gpudata = (gpudata_t *)extra;
 
-	v->host_vec = malloc(n * sizeof(uint64));
+	v->host_vec = aligned_malloc(n * sizeof(v_t), 64);
 
-	CUDA_TRY(cuMemAlloc(&v->gpu_vec, n * sizeof(uint64)))
+	CUDA_TRY(cuMemAlloc(&v->gpu_vec, n * sizeof(v_t)))
 
 	return v;
 }
@@ -34,17 +34,17 @@ void vv_free(void *v_in) {
 
 	CUDA_TRY(cuMemFree(v->gpu_vec))
 
-	free(v->host_vec);
+	aligned_free(v->host_vec);
 	free(v);
 }
 
-void vv_copyin(void *dest_in, uint64 *src, uint32 n) {
+void vv_copyin(void *dest_in, v_t *src, uint32 n) {
 
 	gpuvec_t *dest = (gpuvec_t *)dest_in;
 
-	memcpy(dest->host_vec, src, n * sizeof(uint64));
+	memcpy(dest->host_vec, src, n * sizeof(v_t));
 
-	CUDA_TRY(cuMemcpyHtoD(dest->gpu_vec, src, n * sizeof(uint64)))
+	CUDA_TRY(cuMemcpyHtoD(dest->gpu_vec, src, n * sizeof(v_t)))
 }
 
 void vv_copy(void *dest_in, void *src_in, uint32 n) {
@@ -52,25 +52,25 @@ void vv_copy(void *dest_in, void *src_in, uint32 n) {
 	gpuvec_t *src = (gpuvec_t *)src_in;
 	gpuvec_t *dest = (gpuvec_t *)dest_in;
 
-	memcpy(dest->host_vec, src->host_vec, n * sizeof(uint64));
+	memcpy(dest->host_vec, src->host_vec, n * sizeof(v_t));
 
-	CUDA_TRY(cuMemcpyDtoD(dest->gpu_vec, src->gpu_vec, n * sizeof(uint64)))
+	CUDA_TRY(cuMemcpyDtoD(dest->gpu_vec, src->gpu_vec, n * sizeof(v_t)))
 }
 
-void vv_copyout(uint64 *dest, void *src_in, uint32 n) {
+void vv_copyout(v_t *dest, void *src_in, uint32 n) {
 
 	gpuvec_t *src = (gpuvec_t *)src_in;
 
-	memcpy(dest, src->host_vec, n * sizeof(uint64));
+	memcpy(dest, src->host_vec, n * sizeof(v_t));
 }
 
 void vv_clear(void *v_in, uint32 n) {
 
 	gpuvec_t * v = (gpuvec_t *)v_in;
 
-	memset(v->host_vec, 0, n * sizeof(uint64));
+	memset(v->host_vec, 0, n * sizeof(v_t));
 
-	CUDA_TRY(cuMemsetD8(v->gpu_vec, 0, n * sizeof(uint64)));
+	CUDA_TRY(cuMemsetD8(v->gpu_vec, 0, n * sizeof(v_t)));
 }
 
 void vv_xor(void *dest_in, void *src_in, uint32 n) {
@@ -92,10 +92,10 @@ void vv_xor(void *dest_in, void *src_in, uint32 n) {
 	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
 
 	CUDA_TRY(cuMemcpyDtoH(dest->host_vec, dest->gpu_vec, 
-				n * sizeof(uint64)))
+				n * sizeof(v_t)))
 }
 
-void vv_mask(void *v_in, uint64 mask, uint32 n) {
+void vv_mask(void *v_in, v_t mask, uint32 n) {
 
 	gpuvec_t *v = (gpuvec_t *)v_in;
 	gpudata_t *d = v->gpudata;
@@ -106,13 +106,13 @@ void vv_mask(void *v_in, uint64 mask, uint32 n) {
 				launch->threads_per_block;
 
 	gpu_args[0].ptr_arg = (void *)(size_t)v->gpu_vec;
-	gpu_args[1].uint64_arg = mask;
+	gpu_args[1].vt_arg = mask;
 	gpu_args[2].uint32_arg = n;
 	gpu_launch_set(launch, gpu_args);
 
 	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
 
-	CUDA_TRY(cuMemcpyDtoH(v->host_vec, v->gpu_vec, n * sizeof(uint64)))
+	CUDA_TRY(cuMemcpyDtoH(v->host_vec, v->gpu_vec, n * sizeof(v_t)))
 }
 
 /*-------------------------------------------------------------------*/

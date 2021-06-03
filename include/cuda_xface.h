@@ -26,6 +26,20 @@ extern "C" {
 
 #define MAX_GPU 4
 
+#ifndef VBITS
+#error "linear algebra vector length not specified"
+#endif
+
+#define VWORDS ((VBITS + 63) / 64)
+
+#if VBITS!=64 && VBITS!=128 && VBITS!=256 && VBITS!=512
+#error "unsupported vector size"
+#endif
+
+typedef struct {
+        uint64 w[VWORDS];
+} v_t;
+
 typedef struct {
 	char name[32];
 	int32 compute_version_major;
@@ -75,7 +89,8 @@ typedef enum {
 	GPU_ARG_INT32,
 	GPU_ARG_UINT32,
 	GPU_ARG_INT64,
-	GPU_ARG_UINT64
+	GPU_ARG_UINT64,
+	GPU_ARG_VT
 } gpu_arg_type_t;
 
 #define GPU_MAX_KERNEL_ARGS 15
@@ -91,6 +106,7 @@ typedef union {
 	uint32 uint32_arg;
 	int64 int64_arg;
 	uint64 uint64_arg;
+	v_t vt_arg;
 } gpu_arg_t;
 
 typedef struct {

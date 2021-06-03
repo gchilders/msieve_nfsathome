@@ -168,7 +168,7 @@ ifeq ($(CUDA),1)
 	COMMON_SRCS += $(COMMON_GPU_SRCS)
 	COMMON_HDR += $(COMMON_GPU_HDR)
 	GPU_OBJS += \
-		lanczos_kernel_sm20.ptx
+		lanczos_kernel_sm35.ptx
 else
 	COMMON_SRCS += $(COMMON_NOGPU_SRCS)
 	COMMON_HDR += $(COMMON_NOGPU_HDR)
@@ -354,8 +354,8 @@ stage1_core_sm35.ptx: $(NFS_GPU_HDR)
 stage1_core_sm50.ptx: $(NFS_GPU_HDR)
 	$(NVCC) -arch sm_50 -ptx -o $@ $<
 
-lanczos_kernel_sm20.ptx: $(COMMON_GPU_HDR)
-	$(NVCC) -arch sm_20 -ptx -o $@ $<
+lanczos_kernel_sm35.ptx: $(COMMON_GPU_HDR)
+	$(NVCC) -arch sm_35 -ptx -o $@ $<
 
 cub/built:
 	cd cub && make WIN=$(WIN) WIN64=$(WIN64) sm=200,300,350,500 && cd ..
