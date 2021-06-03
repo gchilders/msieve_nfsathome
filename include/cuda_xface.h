@@ -19,26 +19,13 @@ $Id$
 
 #include <util.h>
 #include <cuda.h>
+#include "common/lanczos/lanczos.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define MAX_GPU 4
-
-#ifndef VBITS
-#error "linear algebra vector length not specified"
-#endif
-
-#define VWORDS ((VBITS + 63) / 64)
-
-#if VBITS!=64 && VBITS!=128 && VBITS!=256 && VBITS!=512
-#error "unsupported vector size"
-#endif
-
-typedef struct {
-        uint64 w[VWORDS];
-} v_t;
 
 typedef struct {
 	char name[32];
