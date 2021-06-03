@@ -699,7 +699,7 @@ static void dump_lanczos_state(msieve_obj *obj,
 	status &= (fwrite(s[1], sizeof(uint32), (size_t)VBITS, fp) == VBITS);
 	status &= (fwrite(&dim1, sizeof(uint32), (size_t)1, fp) == 1);
 
-	tmp = (v_t *)aligned_malloc(max_n * sizeof(v_t));
+	tmp = (v_t *)aligned_malloc(max_n * sizeof(v_t), 64);
 	MPI_NODE_0_END
 
 #ifdef HAVE_MPI
