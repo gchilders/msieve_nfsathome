@@ -90,12 +90,12 @@ enum {
 	NUM_GPU_FUNCTIONS /* must be last */
 };
 
-void v_mul_64xN_Nx64_gpu(packed_matrix_t *matrix,
+void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 		   CUdeviceptr x, CUdeviceptr y,
 		   CUdeviceptr xy, uint32 n);
 
-void v_mul_Nx64_64x64_acc_gpu(packed_matrix_t *matrix, 
-			CUdeviceptr v, uint64 *x,
+void mul_NxB_BxB_acc_gpu(packed_matrix_t *matrix, 
+			CUdeviceptr v, v_t *x,
 			CUdeviceptr y, uint32 n);
 
 #ifdef __cplusplus
