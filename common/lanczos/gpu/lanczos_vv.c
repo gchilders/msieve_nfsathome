@@ -116,12 +116,11 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 }
 
 /*-------------------------------------------------------------------*/
-static void core_Nx64_64x64_acc(uint64 *v, uint64 *c,
-			uint64 *y, uint32 n) {
+static void core_NxB_BxB_acc(const v_t *v, const v_t *c, v_t * __restrict__ y, uint32 n) {
 
-	uint32 i;
+	uint32 i, j;
 
-#if defined(GCC_ASM32A) && defined(HAS_MMX) && defined(NDEBUG)
+#if defined(GCC_ASM32A) && defined(HAS_MMX) && defined(NDEBUG) && VWORDS == 1
 	i = 0;
 	ASM_G volatile(
 		     ALIGN_LOOP
@@ -154,10 +153,10 @@ static void core_Nx64_64x64_acc(uint64 *v, uint64 *c,
 		     "jne 0b                               \n\t"
 		     "emms                                 \n\t"
 			:"+r"(i)
-			:"r"(v), "r"(c), "r"(y), "g"(n)
+			:"r"(v.w), "r"(c.w), "r"(y.w), "g"(n)
 			:"%eax", "%ecx", "%mm0", "%mm1", "memory");
 
-#elif defined(MSC_ASM32A)
+#elif defined(MSC_ASM32A) && VWORDS == 1
 	ASM_M
 	{
 		push    ebx
@@ -197,15 +196,29 @@ static void core_Nx64_64x64_acc(uint64 *v, uint64 *c,
 	}
 #else
 	for (i = 0; i < n; i++) {
-		uint64 word = v[i];
-		y[i] ^=  c[ 0*256 + ((uint8)(word >>  0)) ]
-		       ^ c[ 1*256 + ((uint8)(word >>  8)) ]
-		       ^ c[ 2*256 + ((uint8)(word >> 16)) ]
-		       ^ c[ 3*256 + ((uint8)(word >> 24)) ]
-		       ^ c[ 4*256 + ((uint8)(word >> 32)) ]
-		       ^ c[ 5*256 + ((uint8)(word >> 40)) ]
-		       ^ c[ 6*256 + ((uint8)(word >> 48)) ]
-		       ^ c[ 7*256 + ((uint8)(word >> 56)) ];
+		#ifdef MANUAL_PREFETCH
+		PREFETCH(y+i+4);
+		#endif
+		v_t vi = v[i];
+		v_t accum;
+		for (j = 0; j < VWORDS; j++) accum.w[j] = 0;
+
+		#if VWORDS == 1
+		accum = v_xor(accum, c[ 0*256 + ((uint8)(vi.w[0] >>  0))]);
+		accum = v_xor(accum, c[ 1*256 + ((uint8)(vi.w[0] >>  8))]);
+		accum = v_xor(accum, c[ 2*256 + ((uint8)(vi.w[0] >> 16))]);
+		accum = v_xor(accum, c[ 3*256 + ((uint8)(vi.w[0] >> 24))]);
+		accum = v_xor(accum, c[ 4*256 + ((uint8)(vi.w[0] >> 32))]);
+		accum = v_xor(accum, c[ 5*256 + ((uint8)(vi.w[0] >> 40))]);
+		accum = v_xor(accum, c[ 6*256 + ((uint8)(vi.w[0] >> 48))]);
+		accum = v_xor(accum, c[ 7*256 + ((uint8)(vi.w[0] >> 56))]);
+		#else
+		for (j = 0; j < 8 * VWORDS; j++) {
+			uint32 k = j*256 + ((vi.w[(j >> 3)] >> (8*(j % 8))) & 255);
+			accum = v_xor(accum, c[k]);
+		}
+		#endif
+		y[i] = v_xor(y[i], accum);
 	}
 #endif
 }
@@ -246,110 +259,75 @@ static const uint8 graycode[2 * 256] = {
  132, 3,  133, 0,  135, 1,  134, 0,  130, 2,  131, 0,  129, 1,  128, 0,  
 };
 
-static void mul_precomp_256x8(uint64 *c, uint64 *x) {
+static void mul_NxB_BxB_precomp(v_t *c, v_t *x) {
 
-	/* Let c[][] be an 8 x 256 scratch matrix of 64-bit words;
-	   let x[][] be a 64 x 64 matrix
+	/* fill c[][] with a bunch of "partial matrix multiplies". 
+	   For 0<=j<256 and 0<=i<8*VWORDS, the i_th row of c[][] 
+	   contains the matrix product
 
-	   Fill c[][] with a bunch of "partial matrix multiplies". 
-	   For 0<=i<256, the j_th row of c[][] contains the matrix 
-	   product
-
-	   	( i << (8*j) ) * x[][]
+	   	( j << (8*i) ) * x[][]
 
 	   where the quantity in parentheses is considered a 
-	   1 x 64 vector of elements in GF(2). The resulting
-	   table will dramatically speed up matrix multiplies
-	   by x[][]. 
+	   1 x VBITS vector of elements in GF(2). The resulting
+	   table will make matrix multiplies by x[][] about 8x faster
 	 
-	   We iterate through i in Gray code order and unroll
-	   by 8 to minimize overhead */
+	   We iterate through i in Gray code order to minimize overhead */
 
-	uint32 i;
-	uint64 c0, c1, c2, c3, c4, c5, c6, c7;
+	uint32 i, j;
+	v_t acc[8 * VWORDS];
 
-	c0 = c1 = c2 = c3 = c4 = c5 = c6 = c7 = 0;
+	for (i = 0; i < 8 * VWORDS; i++)
+		acc[i] = c[i * 256] = v_zero;
 
-	c[0*256] = c[1*256] = c[2*256] = c[3*256] = 
-	c[4*256] = c[5*256] = c[6*256] = c[7*256] = 0;
+#define BXB_ACC(i) \
+	acc[i] = v_xor(acc[i], x[i*8 + bit]); c[i*256 + word] = acc[i]
 
 	for (i = 1; i < 256; i++) {
 
 		uint32 word = graycode[2 * i];
 		uint32 bit = graycode[2 * i + 1];
 
-		c0 ^= x[0*8 + bit]; c[0*256 + word] = c0;
-		c1 ^= x[1*8 + bit]; c[1*256 + word] = c1;
-		c2 ^= x[2*8 + bit]; c[2*256 + word] = c2;
-		c3 ^= x[3*8 + bit]; c[3*256 + word] = c3;
-		c4 ^= x[4*8 + bit]; c[4*256 + word] = c4;
-		c5 ^= x[5*8 + bit]; c[5*256 + word] = c5;
-		c6 ^= x[6*8 + bit]; c[6*256 + word] = c6;
-		c7 ^= x[7*8 + bit]; c[7*256 + word] = c7;
-	}
-}
-
-static void mul_precomp_64x11(uint64 *c, uint64 *x) {
-
-	/* As above, except that the main loop breaks 64-bit
-	   words into 11 groups of 6 bits */
-
-	uint32 i;
-	uint64 c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10;
-
-	c0 = c1 = c2 = c3 = c4 = c5 = c6 = c7 = c8 = c9 = c10 = 0;
-
-	c[0*64] = c[1*64] = c[2*64] = c[3*64] = 
-	c[4*64] = c[5*64] = c[6*64] = c[7*64] = 
-	c[8*64] = c[9*64] = c[10*64] = 0;
-
-	for (i = 1; i < 64; i++) {
-
-		uint32 word = graycode[2 * i];
-		uint32 bit = graycode[2 * i + 1];
-
-		c0 ^= x[0*6 + bit]; c[0*64 + word] = c0;
-		c1 ^= x[1*6 + bit]; c[1*64 + word] = c1;
-		c2 ^= x[2*6 + bit]; c[2*64 + word] = c2;
-		c3 ^= x[3*6 + bit]; c[3*64 + word] = c3;
-		c4 ^= x[4*6 + bit]; c[4*64 + word] = c4;
-		c5 ^= x[5*6 + bit]; c[5*64 + word] = c5;
-		c6 ^= x[6*6 + bit]; c[6*64 + word] = c6;
-		c7 ^= x[7*6 + bit]; c[7*64 + word] = c7;
-		c8 ^= x[8*6 + bit]; c[8*64 + word] = c8;
-		c9 ^= x[9*6 + bit]; c[9*64 + word] = c9;
-		if (i < 16)
-			c10 ^= x[10*6 + bit]; c[10*64 + word] = c10;
+		#if VWORDS == 1
+		BXB_ACC(0); BXB_ACC(1); BXB_ACC(2); BXB_ACC(3);
+		BXB_ACC(4); BXB_ACC(5); BXB_ACC(6); BXB_ACC(7);
+		#else
+		for (j = 0; j < 8 * VWORDS; j++) { BXB_ACC(j); }
+		#endif
 	}
 }
 
 /*-------------------------------------------------------------------*/
-static void v_mul_Nx64_64x64_acc_cpu(uint64 *v, uint64 *x,
-			uint64 *y, uint32 n) {
+void mul_NxB_BxB_acc_cpu(v_t *v, v_t *x, v_t *y, uint32 n) {
 
-	uint64 c[8 * 256];
+	/* let v[][] be a N x B matrix with elements in GF(2), 
+	   represented as an array of n v_t structures. Let c[][]
+	   be an (8*VWORDS) x 256 scratch matrix of v_t structures.
+	   This code multiplies v[][] by the BxB matrix 
+	   x[][], then XORs the N x B result into y[][] */
 
-	mul_precomp_256x8(c, x);
+	v_t c[8 * VWORDS * 256];
 
-	core_Nx64_64x64_acc(v, c, y, n);
+	mul_NxB_BxB_precomp(c, x);
+
+	core_NxB_BxB_acc(v, c, y, n);
 }
 
 /*-------------------------------------------------------------------*/
-void v_mul_Nx64_64x64_acc_gpu(packed_matrix_t *matrix, 
-			CUdeviceptr v, uint64 *x,
+void mul_NxB_BxB_acc_gpu(packed_matrix_t *matrix, 
+			CUdeviceptr v, v_t *x,
 			CUdeviceptr y, uint32 n) {
 
-	uint64 c[8 * 256];
+	v_t c[8 * VWORDS * 256];
 	gpudata_t *d = (gpudata_t *)matrix->extra;
 	gpu_launch_t *launch = d->launch + GPU_K_INNER_PROD;
 	gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
 	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 				launch->threads_per_block;
 
-	mul_precomp_64x11(c, x);
+	mul_NxB_BxB_precomp(c, x);
 
 	CUDA_TRY(cuMemcpyHtoD(d->inner_scratch, c, 
-				256 * 8 * sizeof(uint64)))
+				256 * 8 * VWORDS * sizeof(v_t)))
 
 	gpu_args[0].ptr_arg = (void *)(size_t)y;
 	gpu_args[1].ptr_arg = (void *)(size_t)v;
@@ -361,27 +339,27 @@ void v_mul_Nx64_64x64_acc_gpu(packed_matrix_t *matrix,
 }
 
 /*-------------------------------------------------------------------*/
-void vv_mul_Nx64_64x64_acc(packed_matrix_t *matrix, 
-			void *v_in, uint64 *x,
+void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix, 
+			void *v_in, v_t *x,
 			void *y_in, uint32 n) {
 
 	gpuvec_t *v = (gpuvec_t *)v_in;
 	gpuvec_t *y = (gpuvec_t *)y_in;
 
-	v_mul_Nx64_64x64_acc_gpu(matrix, v->gpu_vec, x,
+	mul_NxB_BxB_acc_gpu(matrix, v->gpu_vec, x,
 				y->gpu_vec, n);
 
 #ifdef LANCZOS_GPU_DEBUG
 	{
-		uint64 *tmp = (uint64 *)xmalloc(n * sizeof(uint64));
+		v_t *tmp = (uint64 *)xmalloc(n * sizeof(v_t));
 		uint32 i;
 
-		v_mul_Nx64_64x64_acc_cpu(v->host_vec, x, y->host_vec, n);
+		mul_NxB_BxB_acc_cpu(v->host_vec, x, y->host_vec, n);
 
-		CUDA_TRY(cuMemcpyDtoH(tmp, y->gpu_vec, n * sizeof(uint64)))
+		CUDA_TRY(cuMemcpyDtoH(tmp, y->gpu_vec, n * sizeof(v_t)))
 
 		for (i = 0; i < n; i++) {
-			if (y->host_vec[i] != tmp[i]) {
+			if (y->host_vec[i] != tmp[i]) { /* fix me */
 				printf("error offset %u\n", i);
 				exit(-1);
 			}
@@ -389,19 +367,20 @@ void vv_mul_Nx64_64x64_acc(packed_matrix_t *matrix,
 		free(tmp);
 	}
 #else
-	CUDA_TRY(cuMemcpyDtoH(y->host_vec, y->gpu_vec, n * sizeof(uint64)))
+	CUDA_TRY(cuMemcpyDtoH(y->host_vec, y->gpu_vec, n * sizeof(v_t)))
 #endif
 }
 
 /*-------------------------------------------------------------------*/
-static void core_64xN_Nx64(uint64 *x, uint64 *c, 
-			uint64 *y, uint32 n) {
+static void core_BxN_NxB(const v_t *x, v_t * __restrict__ c, const v_t *y, const uint32 n) {
 
-	uint32 i;
+	uint32 i, j;
 
-	memset(c, 0, 8 * 256 * sizeof(uint64));
+	// memset(c, 0, 8 * VWORDS * 256 * sizeof(v_t));
+	for (i = 0; i < 8 * VWORDS * 256; i++)
+		for (j = 0; j < VWORDS; j++) c[i].w[j] = 0;
 
-#if defined(GCC_ASM32A) && defined(HAS_MMX) && defined(NDEBUG)
+#if defined(GCC_ASM32A) && defined(HAS_MMX) && defined(NDEBUG) && VWORDS == 1
 	i = 0;
 	ASM_G volatile(
 		     ALIGN_LOOP
@@ -450,7 +429,7 @@ static void core_64xN_Nx64(uint64 *x, uint64 *c,
 			:"r"(x), "r"(c), "r"(y), "g"(n)
 			:"%eax", "%ecx", "%mm0", "%mm1", "memory");
 
-#elif defined(MSC_ASM32A)
+#elif defined(MSC_ASM32A) && VWORDS == 1
 	ASM_M
 	{
 		push    ebx
@@ -503,65 +482,76 @@ static void core_64xN_Nx64(uint64 *x, uint64 *c,
 	}
 #else
 
+	#define NXB_ACC(i) \
+		k = i*256 + ((xi.w[(i >> 3)] >> (8*(i % 8))) & 255); c[k] = v_xor(c[k], yi)
+
 	for (i = 0; i < n; i++) {
-		uint64 xi = x[i];
-		uint64 yi = y[i];
-		c[ 0*256 + ((uint8) xi       ) ] ^= yi;
-		c[ 1*256 + ((uint8)(xi >>  8)) ] ^= yi;
-		c[ 2*256 + ((uint8)(xi >> 16)) ] ^= yi;
-		c[ 3*256 + ((uint8)(xi >> 24)) ] ^= yi;
-		c[ 4*256 + ((uint8)(xi >> 32)) ] ^= yi;
-		c[ 5*256 + ((uint8)(xi >> 40)) ] ^= yi;
-		c[ 6*256 + ((uint8)(xi >> 48)) ] ^= yi;
-		c[ 7*256 + ((uint8)(xi >> 56)) ] ^= yi;
+		v_t xi = x[i];
+		v_t yi = y[i];
+
+		#if VWORDS == 1
+		{
+			uint32 k;
+			NXB_ACC(0); NXB_ACC(1); NXB_ACC(2); NXB_ACC(3);
+			NXB_ACC(4); NXB_ACC(5); NXB_ACC(6); NXB_ACC(7);
+		}
+		#else
+		for (j = 0; j < 8 * VWORDS; j++) { 
+			uint32 k;
+			NXB_ACC(j); 
+		}
+		#endif
 	}
 #endif
 }
 
 /*-------------------------------------------------------------------*/
-static void mul_64xN_Nx64_postproc(uint64 *c, uint64 *xy) {
+static void mul_BxN_NxB_postproc(v_t *c, v_t *xy) {
 
-	uint32 i, j;
+	uint32 i, j, k;
+
+	#define NXB_POST(i) \
+		a[i] = v_xor(a[i], c[i*256 + j])
 
 	for (i = 0; i < 8; i++) {
 
-		uint64 a0, a1, a2, a3, a4, a5, a6, a7;
+		v_t a[8 * VWORDS];
 
-		a0 = a1 = a2 = a3 = 0;
-		a4 = a5 = a6 = a7 = 0;
+		for (j = 0; j < 8 * VWORDS; j++)
+			a[j] = v_zero;
 
 		for (j = 0; j < 256; j++) {
 			if ((j >> i) & 1) {
-				a0 ^= c[0*256 + j];
-				a1 ^= c[1*256 + j];
-				a2 ^= c[2*256 + j];
-				a3 ^= c[3*256 + j];
-				a4 ^= c[4*256 + j];
-				a5 ^= c[5*256 + j];
-				a6 ^= c[6*256 + j];
-				a7 ^= c[7*256 + j];
+				#if VWORDS == 1
+				NXB_POST(0); NXB_POST(1); NXB_POST(2); NXB_POST(3);
+				NXB_POST(4); NXB_POST(5); NXB_POST(6); NXB_POST(7);
+				#else
+				for (k = 0; k < 8 * VWORDS; k++) { NXB_POST(k); }
+				#endif
 			}
 		}
 
-		xy[ 0] = a0; xy[ 8] = a1; xy[16] = a2; xy[24] = a3;
-		xy[32] = a4; xy[40] = a5; xy[48] = a6; xy[56] = a7;
+		for (j = 0; j < 8 * VWORDS; j++)
+			xy[8 * j] = a[j];
 		xy++;
 	}
 }
 
 /*-------------------------------------------------------------------*/
-static void v_mul_64xN_Nx64_cpu(uint64 *x, uint64 *y,
-		   uint64 *xy, uint32 n) {
+void mul_BxN_NxB(v_t *x, v_t *y, v_t *xy, uint32 n) {
 
-	uint64 c[8 * 256];
+	/* Let x and y be N x B matrices. This routine computes
+	   the B x B matrix xy[][] given by transpose(x) * y */
 
-	core_64xN_Nx64(x, c, y, n);
+	v_t c[8 * VWORDS * 256];
 
-	mul_64xN_Nx64_postproc(c, xy);
+	core_BxN_NxB(x, c, y, n);
+
+	mul_BxN_NxB_postproc(c, xy);
 }
 
 /*-------------------------------------------------------------------*/
-void v_mul_64xN_Nx64_gpu(packed_matrix_t *matrix,
+void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 		   CUdeviceptr x, CUdeviceptr y,
 		   CUdeviceptr xy, uint32 n) {
 
@@ -585,38 +575,56 @@ void v_mul_64xN_Nx64_gpu(packed_matrix_t *matrix,
 }
 
 /*-------------------------------------------------------------------*/
-void vv_mul_64xN_Nx64(packed_matrix_t *matrix,
+void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 		   void *x_in, void *y_in,
-		   uint64 *xy, uint32 n) {
+		   v_t *xy, uint32 n) {
 
 
 	gpuvec_t *x = (gpuvec_t *)x_in;
 	gpuvec_t *y = (gpuvec_t *)y_in;
 	gpudata_t *d = (gpudata_t *)matrix->extra;
 
-	CUDA_TRY(cuMemsetD8(d->outer_scratch, 0, 64 * sizeof(uint64)));
+#ifdef HAVE_MPI
+	v_t xytmp[VBITS];
+#endif
 
-	v_mul_64xN_Nx64_gpu(matrix, x->gpu_vec, y->gpu_vec, 
+	CUDA_TRY(cuMemsetD8(d->outer_scratch, 0, VBITS * sizeof(v_t)));
+
+	mul_BxN_NxB_gpu(matrix, x->gpu_vec, y->gpu_vec, 
 			d->outer_scratch, n);
 
 #ifdef LANCZOS_GPU_DEBUG
 	{
-		uint64 tmp[64];
+		v_t tmp[VBITS];
 		uint32 i;
 
-		v_mul_64xN_Nx64_cpu(x->host_vec, y->host_vec, xy, n);
+		mul_BxN_NxB_cpu(x->host_vec, y->host_vec, xy, n);
 
 		CUDA_TRY(cuMemcpyDtoH(tmp, d->outer_scratch, 
-					64 * sizeof(uint64)))
+					VBITS * sizeof(v_t)))
 
-		for (i = 0; i < 64; i++) {
-			if (xy[i] != tmp[i]) {
+		for (i = 0; i < VBITS; i++) {
+			if (xy[i] != tmp[i]) { // v_compare
 				printf("error offset %u\n", i);
 				exit(-1);
 			}
 		}
 	}
 #else
-	CUDA_TRY(cuMemcpyDtoH(xy, d->outer_scratch, 64 * sizeof(uint64)))
+	CUDA_TRY(cuMemcpyDtoH(xy, d->outer_scratch, VBITS * sizeof(v_t)))
+#endif
+
+#ifdef HAVE_MPI
+	/* combine the results across an entire MPI row */
+
+	global_xor(xy, xytmp, VBITS, matrix->mpi_ncols,
+			matrix->mpi_la_col_rank,
+			matrix->mpi_word, matrix->mpi_la_row_grid);
+
+	/* combine the results across an entire MPI column */
+    
+	global_xor(xytmp, xy, VBITS, matrix->mpi_nrows,
+			matrix->mpi_la_row_rank,
+			matrix->mpi_word, matrix->mpi_la_col_grid);    
 #endif
 }
