@@ -107,7 +107,11 @@ void print_usage(char *progname) {
 		 "             as well as to logfile\n"
 		 "   -z        you are Paul Zimmermann\n"
 #ifdef HAVE_CUDA
+#ifdef HAVE_MPI
+		 "   -g <num>  number of GPU's per node>\n"
+#else
 		 "   -g <num>  use GPU <num>, 0 <= num < (# graphics cards)>\n"
+#endif
 #endif
 	         "   -t <num>  use at most <num> threads\n"
 		 "\n"
@@ -516,6 +520,14 @@ int main(int argc, char **argv) {
 					which_gpu = atol(argv[i+1]);
 					i += 2;
 				}
+#ifdef HAVE_MPI
+				{
+					/* With MPI, -g records the number of GPUs per node */
+					int rank = 0;
+					MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+					which_gpu = rank % which_gpu;
+				}
+#endif
 				else {
 					print_usage(argv[0]);
 					return -1;
