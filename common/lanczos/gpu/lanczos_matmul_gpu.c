@@ -71,11 +71,11 @@ static void copy_dense(packed_matrix_t *p)
 {
 	/* copy the dense arrays to device memory */
 
-	uint32 i, j;
+	uint32 i, j, k;
 	uint32 ncols = p->ncols;
 	gpudata_t *d = (gpudata_t *)p->extra;
-	uint32 num_dense_blocks = (p->num_dense_rows + 63) / 64;
-	uint64 *tmp = (uint64 *)xmalloc(ncols * sizeof(uint64));
+	uint32 num_dense_blocks = (p->num_dense_rows + VBITS - 1) / VBITS;
+	v_t *tmp = (v_t *)xmalloc(ncols * sizeof(v_t));
 
 	d->dense_blocks = (CUdeviceptr *)xmalloc(num_dense_blocks *
 						sizeof(CUdeviceptr));
@@ -85,15 +85,17 @@ static void copy_dense(packed_matrix_t *p)
 		for (j = 0; j < ncols; j++) {
 			la_col_t *col = p->unpacked_cols + j;
 			uint32 *src = col->data + col->weight;
-
-			tmp[j] = (uint64)src[2 * i + 1] << 32 |
-				 (uint64)src[2 * i];
+			for (k = 0; k < VWORDS; k++) {
+				uint32 t = i * VWORDS + k;
+				tmp[j].w[k] = (uint64)src[2 * t + 1] << 32 |
+					(uint64)src[2 * t];
+			}
 		}
 
 		CUDA_TRY(cuMemAlloc(&d->dense_blocks[i], 
-					ncols * sizeof(uint64)))
+					ncols * sizeof(v_t)))
 		CUDA_TRY(cuMemcpyHtoD(d->dense_blocks[i], tmp,
-					ncols * sizeof(uint64)))
+					ncols * sizeof(v_t)))
 	}
 
 	free(tmp);
@@ -345,7 +347,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 	d->trans_block_rows = trans_block_rows;
 
 	CUDA_TRY(cuMemAlloc(&d->matmul_scratch,
-				p->ncols * sizeof(uint64)))
+				p->ncols * sizeof(v_t)))
 	free(entries);
 }
 
@@ -373,7 +375,7 @@ static void gpu_matrix_free(packed_matrix_t *p) {
 	}
 	free(d->trans_block_rows);
 
-	for (i = 0; i < (p->num_dense_rows + 63) / 64; i++)
+	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++)
 		CUDA_TRY(cuMemFree(d->dense_blocks[i]))
 	free(d->dense_blocks);
 }
@@ -560,7 +562,7 @@ static void mul_packed_gpu(packed_matrix_t *p,
 		spmv_data.num_col_entries = blk->num_col_entries;
 		spmv_data.col_entries = blk->col_entries;
 		spmv_data.row_entries = blk->row_entries;
-		spmv_data.vector_in = (CUdeviceptr)((uint64 *)x->gpu_vec + start_col);
+		spmv_data.vector_in = (CUdeviceptr)((v_t *)x->gpu_vec + start_col);
 		spmv_data.vector_out = d->matmul_scratch;
 
 		d->spmv_engine_run(blk->spmv_preprocess_handle, &spmv_data);
@@ -590,11 +592,11 @@ static void mul_packed_gpu(packed_matrix_t *p,
 
 	/* handle dense rows */
 
-	for (i = 0; i < (p->num_dense_rows + 63) / 64; i++) {
+	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++) {
 		mul_BxN_NxB_gpu(p, 
 			d->dense_blocks[i], 
 			x->gpu_vec, 
-			(CUdeviceptr)((v_t *)b->gpu_vec + 64 * i), 
+			(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i), 
 			p->ncols);
 	}
 }
@@ -654,17 +656,17 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 
 	/* handle dense rows */
 
-	for (i = 0; i < (p->num_dense_rows + 63) / 64; i++) {
+	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++) {
 		v_t tmp[VBITS];
 
 		CUDA_TRY(cuMemcpyDtoH(tmp,
-			(CUdeviceptr)((v_t *)x->gpu_vec + 64 * i), 
+			(CUdeviceptr)((v_t *)x->gpu_vec + VBITS * i),
 			sizeof(tmp)))
 
 		mul_NxB_BxB_acc_gpu(p, 
 			d->dense_blocks[i], 
 			tmp,
-			(CUdeviceptr)((v_t *)b->gpu_vec + 64 * i), 
+			(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i), 
 			p->ncols);
 	}
 }
@@ -679,8 +681,8 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 
 #ifdef LANCZOS_GPU_DEBUG
 	{
-		uint32 i;
-		uint64 *tmp = (v_t *)xmalloc(A->ncols * 
+		uint32 i, j;
+		v_t *tmp = (v_t *)xmalloc(A->ncols * 
 						sizeof(v_t));
 
 		CUDA_TRY(cuMemcpyDtoH(tmp, b->gpu_vec, 
@@ -689,10 +691,12 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 		mul_unpacked(A, x->host_vec, b->host_vec);
 #if 1
 		for (i = 0; i < A->nrows; i++) {
-			if (tmp[i] != b->host_vec[i]) { /* fix me */
-				printf("m error %u %" PRIx64 " %" PRIx64 "\n", 
-						i, b->host_vec[i], tmp[i]);
-				exit(-1);
+			for (j = 0; j < VWORDS; j++ {				
+				if (tmp[i].w[j] != b->host_vec[i].w[j]) { 
+					printf("m error %u %" PRIx64 " %" PRIx64 "\n", 
+							i, b->host_vec[i].w[j], tmp[i].w[j]);
+					exit(-1);
+				}
 			}
 		}
 #endif
@@ -717,8 +721,8 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 
 #ifdef LANCZOS_GPU_DEBUG
 	{
-		uint32 i;
-		uint64 *tmp = (v_t *)xmalloc(A->ncols * 
+		uint32 i, j;
+		v_t *tmp = (v_t *)xmalloc(A->ncols * 
 						sizeof(v_t));
 
 		CUDA_TRY(cuMemcpyDtoH(tmp, b->gpu_vec, 
@@ -727,10 +731,12 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 		mul_trans_unpacked(A, x->host_vec, b->host_vec);
 #if 1
 		for (i = 0; i < A->ncols; i++) {
-			if (tmp[i] != b->host_vec[i]) { /* fix me */
-				printf("tr error %u %" PRIx64 " %" PRIx64 "\n", 
-						i, b->host_vec[i], tmp[i]);
-				exit(-1);
+			for (j = 0; j < VWORDS; j++ {				
+				if (tmp[i].w[j] != b->host_vec[i].w[j]) { 
+					printf("tr error %u %" PRIx64 " %" PRIx64 "\n", 
+							i, b->host_vec[i].w[j], tmp[i].w[j]);
+					exit(-1);
+				}
 			}
 		}
 #endif

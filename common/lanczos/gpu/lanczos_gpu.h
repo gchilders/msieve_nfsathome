@@ -75,7 +75,7 @@ typedef struct {
 
 typedef struct {
 	gpudata_t *gpudata;
-	uint64 *host_vec;
+	v_t *host_vec;
 	CUdeviceptr gpu_vec;
 } gpuvec_t;
 

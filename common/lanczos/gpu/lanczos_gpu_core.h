@@ -115,7 +115,7 @@ bfe(uint64 x, uint32 pos, uint32 bits)
 __device__ uint64
 load_bypassL1(uint64 *addr)
 {
-#if __CUDA_ARCH__ >= 200
+#if __CUDA_ARCH__ >= 200 && VBITS == 64
 
 	uint64 res;
 
@@ -128,78 +128,16 @@ load_bypassL1(uint64 *addr)
 #endif
 }
 
-__device__ uint32
-load_bypassL1(uint32 *addr)
-{
-#if __CUDA_ARCH__ >= 200
-
-	uint32 res;
-
-	asm("ld.global.cg.u32 %0, [%1]; \n\t"
-		: "=r"(res) : PTR_CONSTRAINT(addr));
-
-	return res;
-#else
-	return addr[0];
-#endif
-}
-
 __device__ void
 store_bypassL1(uint64 x, uint64 *addr)
 {
-#if __CUDA_ARCH__ >= 200
+#if __CUDA_ARCH__ >= 200 && VBITS == 64
 
 	asm("st.global.cg.u64 [%0], %1; \n\t"
 		: : PTR_CONSTRAINT(addr), "l"(x));
 #else
 	addr[0] = x;
 #endif
-}
-
-__device__ void
-store_bypassL1(uint32 x, uint32 *addr)
-{
-#if __CUDA_ARCH__ >= 200
-
-	asm("st.global.cg.u32 [%0], %1; \n\t"
-		: : PTR_CONSTRAINT(addr), "r"(x));
-#else
-	addr[0] = x;
-#endif
-}
-
-__device__ uint32
-load_streaming(uint32 *addr)
-{
-#if __CUDA_ARCH__ >= 200
-
-	uint32 res;
-
-	asm("ld.global.cs.u32 %0, [%1]; \n\t"
-		: "=r"(res) : PTR_CONSTRAINT(addr));
-
-	return res;
-#else
-	return addr[0];
-#endif
-}
-
-__device__ void
-store_streaming(uint32 x, uint32 *addr)
-{
-#if __CUDA_ARCH__ >= 200
-
-	asm("st.global.cs.u32 [%0], %1; \n\t"
-		: : PTR_CONSTRAINT(addr), "r"(x));
-#else
-	addr[0] = x;
-#endif
-}
-
-__device__ uint64
-uint2_to_uint64(uint2 v)
-{
-	return (uint64)v.y << 32 | v.x;
 }
 
 #endif  /*--------------------------- device code -----------------*/
