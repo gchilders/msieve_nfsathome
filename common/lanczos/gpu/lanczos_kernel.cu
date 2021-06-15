@@ -45,31 +45,26 @@ lanczos_kernel_xor(v_t *dest, v_t *src, uint32 n)
 /*------------------------------------------------------------------------*/
 __global__ void
 lanczos_kernel_inner_prod(v_t *y, v_t *v, 
-			v_t *lookup, uint32 n) /* fixme */
+			v_t *lookup, uint32 n)
 {
-	uint32 i;
+	uint32 i, j;
 	uint32 num_threads = gridDim.x * blockDim.x;
 	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
-	uint64 * lookup2 = (uint64 *) lookup; /* fixme */
 
 	for (i = grid_id; i < n; i += num_threads) {
 
-		uint64 vi = load_bypassL1((uint64 *)(v + i)); /* fixme */
-		uint64 yi = load_bypassL1((uint64 *)(y + i));
-		yi ^=    lookup2[ 0*64 + bfe(vi,  0, 6)]
-		       ^ lookup2[ 1*64 + bfe(vi,  6, 6)]
-		       ^ lookup2[ 2*64 + bfe(vi, 12, 6)]
-		       ^ lookup2[ 3*64 + bfe(vi, 18, 6)]
-		       ^ lookup2[ 4*64 + bfe(vi, 24, 6)]
-		       ^ lookup2[ 5*64 + bfe(vi, 30, 6)]
-		       ^ lookup2[ 6*64 + bfe(vi, 36, 6)]
-		       ^ lookup2[ 7*64 + bfe(vi, 42, 6)]
-		       ^ lookup2[ 8*64 + bfe(vi, 48, 6)]
-		       ^ lookup2[ 9*64 + bfe(vi, 54, 6)]
-		       ^ lookup2[10*64 + bfe(vi, 60, 6)];
-		store_bypassL1(yi, (uint64 *)(y + i));
+		v_t vi = v[i];
+		v_t accum;
+		for (j = 0; j < VWORDS; j++) accum.w[j] = 0;
+		
+		for (j = 0; j < 8 * VWORDS; j++) {
+			uint32 k = j*256 + ((vi.w[(j >> 3)] >> (8*(j % 8))) & 255);
+			// uint32 k = j*256 + bfe(vi.w[(j >> 3)], 8*(j % 8), 8); // faster?			
+			accum = v_xor(accum, lookup[k]);
+		}
+		y[i] = v_xor(y[i], accum);
 	}
-}
+}	
 
 /*------------------------------------------------------------------------*/
 /* thanks to Patrick Stach for ideas on this */

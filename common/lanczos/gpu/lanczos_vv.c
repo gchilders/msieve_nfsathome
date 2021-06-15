@@ -15,6 +15,8 @@ $Id$
 #include "lanczos_gpu.h"
 
 /*-------------------------------------------------------------------*/
+/* Vectors are kept synced on host and gpu. How long do these copies take? */
+
 void *vv_alloc(uint32 n, void *extra) {
 
 	gpuvec_t *v = (gpuvec_t *)xmalloc(sizeof(gpuvec_t));
@@ -60,8 +62,9 @@ void vv_copy(void *dest_in, void *src_in, uint32 n) {
 void vv_copyout(v_t *dest, void *src_in, uint32 n) {
 
 	gpuvec_t *src = (gpuvec_t *)src_in;
-
-	memcpy(dest, src->host_vec, n * sizeof(v_t));
+	
+	/* Just copy synchronized vector on host */
+	memcpy(dest, src->host_vec, n * sizeof(v_t)); 
 }
 
 void vv_clear(void *v_in, uint32 n) {
@@ -351,17 +354,19 @@ void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 
 #ifdef LANCZOS_GPU_DEBUG
 	{
-		v_t *tmp = (uint64 *)xmalloc(n * sizeof(v_t));
-		uint32 i;
+		v_t *tmp = (v_t *)xmalloc(n * sizeof(v_t));
+		uint32 i, j;
 
 		mul_NxB_BxB_acc_cpu(v->host_vec, x, y->host_vec, n);
 
 		CUDA_TRY(cuMemcpyDtoH(tmp, y->gpu_vec, n * sizeof(v_t)))
 
 		for (i = 0; i < n; i++) {
-			if (y->host_vec[i] != tmp[i]) { /* fix me */
-				printf("error offset %u\n", i);
-				exit(-1);
+			for (j = 0; j < VWORDS; j++) {
+				if (y->host_vec[i].w[j] != tmp[i].w[j]) {
+					printf("error offset %u\n", i);
+					exit(-1);
+				}
 			}
 		}
 		free(tmp);
