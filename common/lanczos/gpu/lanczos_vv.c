@@ -543,7 +543,7 @@ static void mul_BxN_NxB_postproc(v_t *c, v_t *xy) {
 }
 
 /*-------------------------------------------------------------------*/
-void mul_BxN_NxB(v_t *x, v_t *y, v_t *xy, uint32 n) {
+void mul_BxN_NxB_cpu(v_t *x, v_t *y, v_t *xy, uint32 n) {
 
 	/* Let x and y be N x B matrices. This routine computes
 	   the B x B matrix xy[][] given by transpose(x) * y */
@@ -601,7 +601,7 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 #ifdef LANCZOS_GPU_DEBUG
 	{
 		v_t tmp[VBITS];
-		uint32 i;
+		uint32 i, j;
 
 		mul_BxN_NxB_cpu(x->host_vec, y->host_vec, xy, n);
 
@@ -609,9 +609,11 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 					VBITS * sizeof(v_t)))
 
 		for (i = 0; i < VBITS; i++) {
-			if (xy[i] != tmp[i]) { // v_compare
-				printf("error offset %u\n", i);
-				exit(-1);
+			for (j = 0; j < VWORDS; j++ ) {
+				if (xy[i].w[j] != tmp[i].w[j]) {
+					printf("error offset %u\n", i);
+					exit(-1);
+				}
 			}
 		}
 	}
