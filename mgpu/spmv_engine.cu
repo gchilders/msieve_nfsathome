@@ -44,11 +44,11 @@ spmv_engine_preprocess(spmv_data_t * data)
 #if 0
 	spmv_preprocess * new_ptr = new spmv_preprocess();
 
-	SpmvPreprocessUnary<uint64, int *>(
+	SpmvPreprocessUnary<v_t, int *>(
 			data->num_col_entries,
 			(int *)data->row_entries,
 			data->num_rows,
-			true,
+			true, // support empty segments
 			new_ptr,
 			**local_ctx);
 
@@ -61,29 +61,28 @@ SPMV_ENGINE_DECL void
 spmv_engine_run(int preprocess_handle, spmv_data_t * data)
 {
 #if 0
-	SpmvUnaryApply<int *, uint64 *, uint64 *, uint64,
-			bit_and<uint64>, bit_xor<uint64> > (
+	SpmvUnaryApply<int *, v_t *, v_t *, v_t,
+			v_and, v_xor > (
 				**preproc_list[preprocess_handle],
 				(int *)data->col_entries,
-				(uint64 *)data->vector_in,
-				(uint64 *)data->vector_out,
-				(uint64)0,
-				bit_xor<uint64>(),
+				(v_t *)data->vector_in,
+				(v_t *)data->vector_out,
+				v_zero,
+				v_xor(),
 				**local_ctx);
 #else
-       SpmvCsrUnary<int *, int *, uint64 *, uint64 *, uint64,
-                        bit_xor<uint64> > (
+       SpmvCsrUnary<int *, int *, v_t *, v_t *, v_t,
+                        v_xor > (
                                 (int *)data->col_entries,
                                 data->num_col_entries,      
                                 (int *)data->row_entries,         
                                 data->num_rows,          
-                                (uint64 *)data->vector_in,
-                                true,
-                                (uint64 *)data->vector_out,
-                                (uint64)0,
-                                bit_xor<uint64>(),
+                                (v_t *)data->vector_in,
+                                true, // support empty segments
+                                (v_t *)data->vector_out,
+                                v_zero,
+                                v_xor(),
                                 **local_ctx);
-
 #endif
 }
 

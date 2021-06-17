@@ -348,4 +348,4 @@ lanczos_kernel.ptx: $(COMMON_GPU_HDR)
 cub/built:
 	cd cub && make WIN=$(WIN) WIN64=$(WIN64) sm=350 && cd ..
 mgpu/built:
-	cd mgpu && make WIN=$(WIN) && cd ..
+	cd mgpu && make WIN=$(WIN) VBITS=$(VBITS) && cd ..

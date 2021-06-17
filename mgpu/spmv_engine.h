@@ -5,6 +5,8 @@
 
 #include <stdlib.h>
 #include <cuda.h>
+#include "../common/lanczos/gpu/lanczos_gpu_core.h"
+
 
 #ifdef __cplusplus
 extern "C"

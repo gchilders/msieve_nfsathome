@@ -80,6 +80,8 @@ __device__ v_t v_xor(v_t a, v_t b) {
 	return res;
 }
 
+static const v_t v_zero = {{0}};
+
 __device__ uint32
 bfe(uint64 x, uint32 pos, uint32 bits)
 {

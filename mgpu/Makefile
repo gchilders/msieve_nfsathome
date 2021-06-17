@@ -6,14 +6,14 @@ ifeq ($(WIN),1)
 	NVCC = "$(CUDA_ROOT)/bin/nvcc"
 	CUDA_LIBS = "$(CUDA_ROOT)/lib/win32/cuda.lib"
 	EXT = dll
-	NVCCFLAGS = -Xptxas -v -Xcudafe -\# -shared 
+	NVCCFLAGS = -Xptxas -v -Xcudafe -\# -shared -DVBITS=$(VBITS)
 else
 	NVCC = "$(shell which nvcc)"
 	CUDA_ROOT = $(shell dirname $(NVCC))/../
 	CUDA_LIBS = -lcuda
 	EXT = so
 	NVCCFLAGS = -Xptxas -v -Xcudafe -\# -shared \
-			-Xcompiler -fPIC -Xcompiler -fvisibility=hidden
+			-Xcompiler -fPIC -Xcompiler -fvisibility=hidden -DVBITS=$(VBITS)
 endif
 
 GEN_ARCH = -gencode=arch=compute_35,code=\"sm_35,compute_35\" 
