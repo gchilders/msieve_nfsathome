@@ -15,6 +15,16 @@ using namespace mgpu;
 typedef unsigned int uint32;
 typedef std::auto_ptr<SpmvPreprocessData> spmv_preprocess;
 
+template<typename T>
+struct v_bit_and : public std::binary_function<T, T, T> {
+        MGPU_HOST_DEVICE T operator()(T a, T b) { return v_and(a, b); }
+};
+
+template<typename T>
+struct v_bit_xor : public std::binary_function<T, T, T> {
+        MGPU_HOST_DEVICE T operator()(T a, T b) { return v_xor(a, b); }
+};
+
 ContextPtr *local_ctx;
 
 std::vector<spmv_preprocess *> preproc_list;

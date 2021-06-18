@@ -7,16 +7,6 @@
 #include <cuda.h>
 #include "../common/lanczos/gpu/lanczos_gpu_core.h"
 
-template<typename T>
-struct v_bit_and : public std::binary_function<T, T, T> {
-        MGPU_HOST_DEVICE T operator()(T a, T b) { return v_and(a, b); }
-};
-
-template<typename T>
-struct v_bit_xor : public std::binary_function<T, T, T> {
-        MGPU_HOST_DEVICE T operator()(T a, T b) { return v_xor(a, b); }
-};
-
 #ifdef __cplusplus
 extern "C"
 {
