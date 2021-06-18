@@ -691,7 +691,7 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 		mul_unpacked(A, x->host_vec, b->host_vec);
 #if 1
 		for (i = 0; i < A->nrows; i++) {
-			for (j = 0; j < VWORDS; j++ {				
+			for (j = 0; j < VWORDS; j++) {				
 				if (tmp[i].w[j] != b->host_vec[i].w[j]) { 
 					printf("m error %u %" PRIx64 " %" PRIx64 "\n", 
 							i, b->host_vec[i].w[j], tmp[i].w[j]);
@@ -731,7 +731,7 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 		mul_trans_unpacked(A, x->host_vec, b->host_vec);
 #if 1
 		for (i = 0; i < A->ncols; i++) {
-			for (j = 0; j < VWORDS; j++ {				
+			for (j = 0; j < VWORDS; j++) {				
 				if (tmp[i].w[j] != b->host_vec[i].w[j]) { 
 					printf("tr error %u %" PRIx64 " %" PRIx64 "\n", 
 							i, b->host_vec[i].w[j], tmp[i].w[j]);
