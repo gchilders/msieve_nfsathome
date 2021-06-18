@@ -62,17 +62,17 @@ spmv_engine_run(int preprocess_handle, spmv_data_t * data)
 {
 #if 0
 	SpmvUnaryApply<int *, v_t *, v_t *, v_t,
-			v_and, v_xor > (
+			v_bit_and<v_t>, v_bit_xor<v_t> > (
 				**preproc_list[preprocess_handle],
 				(int *)data->col_entries,
 				(v_t *)data->vector_in,
 				(v_t *)data->vector_out,
 				v_zero,
-				v_xor(),
+				v_bit_xor<v_t>(),
 				**local_ctx);
 #else
        SpmvCsrUnary<int *, int *, v_t *, v_t *, v_t,
-                        v_xor > (
+                        v_bit_xor<v_t> > (
                                 (int *)data->col_entries,
                                 data->num_col_entries,      
                                 (int *)data->row_entries,         
@@ -81,7 +81,7 @@ spmv_engine_run(int preprocess_handle, spmv_data_t * data)
                                 true, // support empty segments
                                 (v_t *)data->vector_out,
                                 v_zero,
-                                v_xor(),
+                                v_bit_xor<v_t>(),
                                 **local_ctx);
 #endif
 }
