@@ -595,10 +595,8 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 
 	CUDA_TRY(cuMemsetD8(d->outer_scratch, 0, VBITS * sizeof(v_t)));
 
-/*
 	mul_BxN_NxB_gpu(matrix, x->gpu_vec, y->gpu_vec, 
 			d->outer_scratch, n);
-
 
 #ifdef LANCZOS_GPU_DEBUG
 	{
@@ -622,9 +620,6 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 #else
 	CUDA_TRY(cuMemcpyDtoH(xy, d->outer_scratch, VBITS * sizeof(v_t)))
 #endif
-*/ 
-
-mul_BxN_NxB_cpu(x->host_vec, y->host_vec, xy, n); /* fix me */
 
 #ifdef HAVE_MPI
 	/* combine the results across an entire MPI row */
