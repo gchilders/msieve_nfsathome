@@ -519,15 +519,15 @@ int main(int argc, char **argv) {
 				if (i + 1 < argc && isdigit(argv[i+1][0])) {
 					which_gpu = atol(argv[i+1]);
 					i += 2;
-				}
 #ifdef HAVE_MPI
-				{
-					/* With MPI, -g records the number of GPUs per node */
-					int rank = 0;
-					MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-					which_gpu = rank % which_gpu;
-				}
+					{
+						/* With MPI, -g records the number of GPUs per node */
+						int rank = 0;
+						MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+						which_gpu = rank % which_gpu;
+					}
 #endif
+				} 
 				else {
 					print_usage(argv[0]);
 					return -1;
