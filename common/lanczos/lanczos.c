@@ -870,7 +870,7 @@ static void read_lanczos_state(msieve_obj *obj,
 
 /*-----------------------------------------------------------------------*/
 static void init_lanczos_state(msieve_obj *obj, 
-			packed_matrix_t *packed_matrix, void *scratch,
+			packed_matrix_t *packed_matrix, void *scratch, void *scratch2,
 			void *x, void *v0, v_t **vt_v0, void **v, 
 			v_t **vt_a_v, v_t **vt_a2_v, v_t **winv,
 			uint32 n, uint32 s[2][VBITS], uint32 *dim1) {
@@ -893,7 +893,7 @@ static void init_lanczos_state(msieve_obj *obj,
 	vv_copyin(x, tmp, n);
 	free(tmp);
 
-	mul_sym_NxN_NxB(packed_matrix, x, v[0], scratch);
+	mul_sym_NxN_NxB(packed_matrix, x, v[0], scratch, scratch2);
 	vv_copy(v0, v[0], n);
 
 	/* Subscripts larger than zero represent past versions of 
@@ -930,6 +930,7 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 	uint32 n = packed_matrix->ncols;
 	uint32 max_n = packed_matrix->max_ncols;
 	void *vnext, *v[3], *x, *v0, *scratch, *tmp;
+	void *scratch2 = NULL;
 	v_t *out0, *out1, *out2, *out3;
 	v_t *winv[3], *vt_v0_next;
 	v_t *vt_a_v[2], *vt_a2_v[2], *vt_v0[3];
@@ -964,7 +965,10 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 	/* we'll need 2 scratch vectors for the matrix multiply
 	   and for scatter-gather operations */
 
-	scratch = vv_alloc(2 * MAX(packed_matrix->nrows, 
+	scratch = vv_alloc(MAX(packed_matrix->nrows, 
+				packed_matrix->ncols),
+			  packed_matrix->extra);
+	scratch2 = vv_alloc(MAX(packed_matrix->nrows, 
 				packed_matrix->ncols),
 			  packed_matrix->extra);
 #else	
@@ -1011,7 +1015,7 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 				iter, dim_solved);
 	}
 	else {
-		init_lanczos_state(obj, packed_matrix, scratch, x, 
+		init_lanczos_state(obj, packed_matrix, scratch, scratch2, x, 
 				v0, vt_v0, v, vt_a_v, vt_a2_v, 
 				winv, packed_matrix->ncols, s, &dim1);
 	}
@@ -1057,7 +1061,7 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 		/* multiply the current v[0] by the matrix and write
 		   to vnext */
               
-		mul_sym_NxN_NxB(packed_matrix, v[0], vnext, scratch);
+		mul_sym_NxN_NxB(packed_matrix, v[0], vnext, scratch, scratch2);
                 
 		/* compute v0'*A*v0 and (A*v0)'(A*v0) */
 
@@ -1407,6 +1411,9 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 	if (dim0 == 0 || (obj->flags & MSIEVE_FLAG_STOP_SIEVING)) {
 		vv_free(x);
 		vv_free(scratch);
+#ifdef HAVE_MPI
+		vv_free(scratch2);
+#endif
 		vv_free(v[0]);
 		vv_free(v[1]);
 		vv_free(v[2]);
@@ -1432,22 +1439,23 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 	vv_free(v[1]);
 	vv_free(v[2]);
 
-	mul_MxN_NxB(packed_matrix, x, scratch);
+	mul_MxN_NxB(packed_matrix, x, scratch, scratch2);
 
 	out2 = gather_nrows(obj, packed_matrix, scratch, NULL);
 	out0 = gather_ncols(obj, packed_matrix, x, scratch, NULL);
 	vv_free(x);
     
-	mul_MxN_NxB(packed_matrix, v[0], scratch);
+	mul_MxN_NxB(packed_matrix, v[0], scratch, scratch2);
 
 	out3 = gather_nrows(obj, packed_matrix, scratch, NULL);
 	out1 = gather_ncols(obj, packed_matrix, v[0], scratch, NULL);
 	vv_free(v[0]);
     
 	vv_free(scratch);
+	vv_free(scratch2);
 #else
-	mul_MxN_NxB(packed_matrix, x, v[1]);
-	mul_MxN_NxB(packed_matrix, v[0], v[2]);
+	mul_MxN_NxB(packed_matrix, x, v[1], NULL);
+	mul_MxN_NxB(packed_matrix, v[0], v[2], NULL);
 	vv_free(scratch);
 
 	out0 = (v_t *)aligned_malloc(max_n * sizeof(v_t), 64);

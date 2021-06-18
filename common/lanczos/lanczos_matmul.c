@@ -129,7 +129,7 @@ void packed_matrix_free(packed_matrix_t *p) {
 
 /*-------------------------------------------------------------------*/
 void mul_MxN_NxB(packed_matrix_t *A, void *x, 
-			void *scratch) {
+			void *scratch, void *scratch2) {
     
 	/* Multiply the vector x[] by the matrix A and put the 
 	   result in scratch[]. The MPI version needs an extra
@@ -137,8 +137,6 @@ void mul_MxN_NxB(packed_matrix_t *A, void *x,
 	   want to be out-of-place */
 
 #ifdef HAVE_MPI
-	v_t *scratch2 = (v_t *)scratch + MAX(A->ncols, A->nrows);
-
 	if (A->mpi_size <= 1) {
 #endif
 		mul_core(A, x, scratch);
@@ -166,7 +164,7 @@ void mul_MxN_NxB(packed_matrix_t *A, void *x,
 
 /*-------------------------------------------------------------------*/
 void mul_sym_NxN_NxB(packed_matrix_t *A, void *x, 
-			void *b, void *scratch) {
+			void *b, void *scratch, void *scratch2) {
 
 	/* Multiply x by A and write to scratch, then
 	   multiply scratch by the transpose of A and
@@ -174,8 +172,6 @@ void mul_sym_NxN_NxB(packed_matrix_t *A, void *x,
 	   be distinct from scratch */
 
 #ifdef HAVE_MPI
-	v_t *scratch2 = (v_t *)scratch + MAX(A->ncols, A->nrows);
-        
 	if (A->mpi_size <= 1) {
 #endif
 		mul_core(A, x, scratch);

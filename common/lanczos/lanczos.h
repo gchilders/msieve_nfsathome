@@ -235,10 +235,10 @@ void matrix_extra_free(packed_matrix_t *packed_matrix);
 /* top-level calls for matrix multiplies */
 
 void mul_MxN_NxB(packed_matrix_t *A, 
-			void *x, void *scratch);
+			void *x, void *scratch, void *scratch2);
 
 void mul_sym_NxN_NxB(packed_matrix_t *A, void *x, 
-			void *b, void *scratch);
+			void *b, void *scratch, void *scratch2);
 
 /* easy base cases for small problems */
 
