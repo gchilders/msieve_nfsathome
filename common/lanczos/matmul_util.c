@@ -12,7 +12,11 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
+#ifdef HAVE_CUDA
+#include "gpu/lanczos_gpu.h"
+#else
 #include "lanczos.h"
+#endif
 
 #ifdef HAVE_MPI
 
@@ -142,6 +146,14 @@ void global_xor(void *send_buf_in, void *recv_buf_in,
 		uint32 total_size, uint32 num_nodes, 
 		uint32 my_id, MPI_Datatype mpi_word, MPI_Comm comm) {
 	
+#ifdef HAVE_CUDA
+	v_t *send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
+	v_t *recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
+	vv_copyout(send_buf, send_buf_in, total_size);
+	MPI_TRY(MPI_Allreduce(send_buf, recv_buf, VWORDS * total_size,
+		MPI_LONG_LONG, MPI_BXOR, comm))
+	vv_copyin(recv_buf_in, recv_buf, total_size); 	
+#else
 	v_t *send_buf = (v_t *)send_buf_in;
 	v_t *recv_buf = (v_t *)recv_buf_in;
 
@@ -153,11 +165,12 @@ void global_xor(void *send_buf_in, void *recv_buf_in,
 		MPI_TRY(MPI_Allreduce(send_buf, 
 				recv_buf, VWORDS * total_size,
 				MPI_LONG_LONG, MPI_BXOR, comm))
-		return;
-	} 
-
-	global_xor_async(send_buf, recv_buf, 
-		total_size, num_nodes, my_id, mpi_word, comm);
+	} else {
+		global_xor_async(send_buf, recv_buf, 
+			total_size, num_nodes, my_id, mpi_word, comm);
+	}
+#endif
+	return;
 }
 
 /*------------------------------------------------------------------*/
@@ -187,11 +200,8 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 			uint32 num_nodes, uint32 my_id, 
 			MPI_Datatype mpi_word, MPI_Comm comm) {
 	
-	v_t *send_buf = (v_t *)send_buf_in;
-	v_t *recv_buf = (v_t *)recv_buf_in;
-	v_t *scratch = (v_t *)scratch_in;
-
-	uint32 i;
+	v_t *send_buf, *recv_buf, *scratch;
+	uint32 i, j;
 	uint32 m, size, chunk, remainder;
 	uint32 next_id, prev_id;
 	MPI_Status mpi_status;
@@ -201,6 +211,17 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 		vv_copy(recv_buf, send_buf, total_size);
 		return;
 	}
+
+#ifdef HAVE_CUDA /* v_xor on host vecs below */
+	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
+	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
+	scratch  = (v_t *)((gpuvec_t *)scratch_in)->host_vec;
+	vv_copyout(send_buf, send_buf_in, total_size); 
+#else
+	send_buf = (v_t *)send_buf_in;
+	recv_buf = (v_t *)recv_buf_in;
+	scratch = (v_t *)scratch_in;
+#endif
     
 	/* split data */
     
@@ -246,7 +267,7 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
         
 		/* combine the new chunk with our own */
         
-		vv_xor(send_buf + m * chunk, scratch, size);
+		for (j = 0; j < size; j++) send_buf[m * chunk + j] = v_xor(send_buf[m * chunk + j], scratch[j]);
 		
 		/* now wait for the send to end */
         
@@ -276,11 +297,16 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
     
 	/* combine the new chunk with our own */
     
-   	vv_xor(recv_buf, send_buf + m * chunk, size);
-    
+	for (j = 0; j < size; j++) recv_buf[j] = v_xor(recv_buf[j], send_buf[m * chunk + j]);
+
 	/* now wait for the send to end */
     
 	MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
+
+#ifdef HAVE_CUDA
+	vv_copyin(recv_buf_in, recv_buf, total_size); 	
+#endif
+
 }
 
 /*------------------------------------------------------------------*/
@@ -288,8 +314,14 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
                         uint32 total_size, uint32 num_nodes, 
                         uint32 my_id, MPI_Datatype mpi_word, MPI_Comm comm) {
 	
+#ifdef HAVE_CUDA /* memcpy on host vec below */
+	v_t *send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
+	v_t *recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
+	vv_copyout(send_buf, send_buf_in, total_size);
+#else
 	v_t *send_buf = (v_t *)send_buf_in;
 	v_t *recv_buf = (v_t *)recv_buf_in;
+#endif
 
 	uint32 i;
 	uint32 size, chunk, remainder;
@@ -320,7 +352,7 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 	curr_buf = recv_buf + my_id * chunk;
     
 	/* put own part in place first */
-	vv_copy(curr_buf, send_buf, size);
+	memcpy(curr_buf, send_buf, size * sizeof(v_t)); /* working on host vec */
     
 	for (i = 0; i < num_nodes - 1; i++){
 		
@@ -347,6 +379,9 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
         
 		MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
 	}
+#ifdef HAVE_CUDA
+	vv_copyin(recv_buf_in, recv_buf, total_size); 	
+#endif
 }
 
 #endif /* HAVE_MPI */

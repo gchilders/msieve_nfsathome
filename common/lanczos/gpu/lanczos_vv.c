@@ -44,7 +44,7 @@ void vv_copyin(void *dest_in, v_t *src, uint32 n) {
 
 	gpuvec_t *dest = (gpuvec_t *)dest_in;
 
-	memcpy(dest->host_vec, src, n * sizeof(v_t));
+	if (dest->host_vec != src) memcpy(dest->host_vec, src, n * sizeof(v_t));
 
 	CUDA_TRY(cuMemcpyHtoD(dest->gpu_vec, src, n * sizeof(v_t)))
 }
@@ -63,8 +63,10 @@ void vv_copyout(v_t *dest, void *src_in, uint32 n) {
 
 	gpuvec_t *src = (gpuvec_t *)src_in;
 	
-	/* Just copy synchronized vector on host */
-	memcpy(dest, src->host_vec, n * sizeof(v_t)); 
+	/* Don't assume sync'ed on host */
+	CUDA_TRY(cuMemcpyDtoH(src->host_vec, src->gpu_vec, n * sizeof(v_t)))
+
+	if (dest != src->host_vec) memcpy(dest, src->host_vec, n * sizeof(v_t)); 
 }
 
 void vv_clear(void *v_in, uint32 n) {
@@ -624,14 +626,12 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 #ifdef HAVE_MPI
 	/* combine the results across an entire MPI row */
 
-	global_xor(xy, xytmp, VBITS, matrix->mpi_ncols,
-			matrix->mpi_la_col_rank,
-			matrix->mpi_word, matrix->mpi_la_row_grid);
+	MPI_TRY(MPI_Allreduce(xy, xytmp, VWORDS * VBITS,
+		MPI_LONG_LONG, MPI_BXOR, matrix->mpi_la_row_grid))
 
 	/* combine the results across an entire MPI column */
-    
-	global_xor(xytmp, xy, VBITS, matrix->mpi_nrows,
-			matrix->mpi_la_row_rank,
-			matrix->mpi_word, matrix->mpi_la_col_grid);    
+    MPI_TRY(MPI_Allreduce(xytmp, xy, VWORDS * VBITS,
+		MPI_LONG_LONG, MPI_BXOR, matrix->mpi_la_col_grid))
+		
 #endif
 }
