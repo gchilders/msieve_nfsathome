@@ -385,4 +385,120 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 #endif
 }
 
+/*-----------------------------------------------------------------------*/
+v_t * gather_ncols(msieve_obj *obj,
+			packed_matrix_t *packed_matrix,
+			void *v_in, void *scratch_in, 
+			v_t *out) {
+
+#ifdef HAVE_CUDA 
+	v_t *v = (v_t *)((gpuvec_t *)v_in)->host_vec;
+	v_t *scratch = (v_t *)((gpuvec_t *)scratch_in)->host_vec;
+	vv_copyout(v, v_in, packed_matrix->nsubcols); 
+#else
+	v_t *v = (v_t *)v_in;
+	v_t *scratch = (v_t *)scratch_in;
+#endif
+
+	MPI_NODE_0_START
+	if (out == NULL)
+		out = (v_t *)aligned_malloc(packed_matrix->max_ncols * 
+						sizeof(v_t), 64);
+	MPI_NODE_0_END
+
+	/* gather v into MPI row 0 */
+
+	MPI_TRY(MPI_Gatherv(v,
+			packed_matrix->nsubcols, 
+			obj->mpi_word, scratch,
+			packed_matrix->subcol_counts,
+			packed_matrix->subcol_offsets,
+			obj->mpi_word, 0, 
+			obj->mpi_la_col_grid))
+
+	/* gather row 0 into the root node */
+
+	if (obj->mpi_la_row_rank == 0) {
+		MPI_TRY(MPI_Gatherv(scratch,
+				packed_matrix->ncols, 
+				obj->mpi_word, out,
+				packed_matrix->col_counts,
+				packed_matrix->col_offsets,
+				obj->mpi_word, 0, 
+				obj->mpi_la_row_grid))
+	}
+	
+	return out;
+}
+
+/*-----------------------------------------------------------------------*/
+v_t * gather_nrows(msieve_obj *obj,
+			packed_matrix_t *packed_matrix,
+			void *scratch_in, v_t *out) {
+
+#ifdef HAVE_CUDA 
+	v_t *scratch = (v_t *)((gpuvec_t *)scratch_in)->host_vec;
+	vv_copyout(scratch, scratch_in, packed_matrix->nrows); 
+#else
+	v_t *scratch = (v_t *)scratch_in;
+#endif
+
+	MPI_NODE_0_START
+	if (out == NULL)
+		out = (v_t *)aligned_malloc(packed_matrix->max_ncols * 
+						sizeof(v_t), 64);
+	MPI_NODE_0_END
+
+	/* gather column 0 into the root node */
+
+	if (obj->mpi_la_col_rank == 0) {
+		MPI_TRY(MPI_Gatherv(scratch,
+				packed_matrix->nrows, 
+				obj->mpi_word, out,
+				packed_matrix->row_counts,
+				packed_matrix->row_offsets,
+				obj->mpi_word, 0, 
+				obj->mpi_la_col_grid))
+	}
+	
+	return out;
+}
+
+/*-----------------------------------------------------------------------*/
+void scatter_ncols(msieve_obj *obj,
+			packed_matrix_t *packed_matrix,
+			void *out_in, void *scratch_in, 
+			v_t *in) {
+
+	/* push out to the top MPI row */
+
+#ifdef HAVE_CUDA 
+	v_t *out = (v_t *)((gpuvec_t *)out_in)->host_vec;
+	v_t *scratch = (v_t *)((gpuvec_t *)scratch_in)->host_vec;
+#else
+	v_t *out = (v_t *)out_in;
+	v_t *scratch = (v_t *)scratch_in;
+#endif
+
+	if (obj->mpi_la_row_rank == 0)
+		MPI_TRY(MPI_Scatterv(in, packed_matrix->col_counts,
+				packed_matrix->col_offsets, 
+				obj->mpi_word, scratch,
+				packed_matrix->ncols,
+				obj->mpi_word, 0, 
+				obj->mpi_la_row_grid))
+
+	/* push down each column */
+
+	MPI_TRY(MPI_Scatterv(scratch, packed_matrix->subcol_counts,
+	       			packed_matrix->subcol_offsets, 
+	      			obj->mpi_word, out,
+				packed_matrix->ncols,
+	   			obj->mpi_word, 0, 
+       				obj->mpi_la_col_grid))
+#ifdef HAVE_CUDA
+	vv_copyin(out_in, out, packed_matrix->ncols); 
+#endif
+}
+
 #endif /* HAVE_MPI */

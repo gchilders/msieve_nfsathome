@@ -267,6 +267,20 @@ void global_xor_scatter(void *send_buf, void *recv_buf,
 			void *scratch, uint32 bufsize, 
 			uint32 mpi_nodes, uint32 mpi_rank, 
 			MPI_Datatype, MPI_Comm comm);
+			
+v_t * gather_ncols(msieve_obj *obj,
+			packed_matrix_t *packed_matrix,
+			void *v_in, void *scratch_in, 
+			v_t *out);
+			
+v_t * gather_nrows(msieve_obj *obj,
+			packed_matrix_t *packed_matrix,
+			void *scratch_in, v_t *out);
+			
+void scatter_ncols(msieve_obj *obj,
+			packed_matrix_t *packed_matrix,
+			void *out_in, void *scratch_in, 
+			v_t *in);
 #endif
 
 /* top-level calls for vector-vector operations */
