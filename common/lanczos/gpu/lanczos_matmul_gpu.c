@@ -347,7 +347,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 	d->trans_block_rows = trans_block_rows;
 
 	CUDA_TRY(cuMemAlloc(&d->matmul_scratch,
-				p->ncols * sizeof(v_t)))
+				MAX(p->ncols, p->nrows) * sizeof(v_t)))
 	free(entries);
 }
 
