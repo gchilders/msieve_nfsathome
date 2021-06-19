@@ -38,6 +38,11 @@ $Id$
 #define GLOBAL_BREAKOVER (uint32)(-1) /* turn off the fancy method */
 #endif
 
+#define MPI_NODE_0_START if (obj->mpi_la_row_rank + \
+                                obj->mpi_la_col_rank == 0) {
+
+#define MPI_NODE_0_END }
+
 
 /*------------------------------------------------------------------*/
 static void global_xor_async(v_t *send_buf, v_t *recv_buf, 
