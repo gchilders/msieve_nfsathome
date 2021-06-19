@@ -208,7 +208,7 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 	MPI_Request mpi_req;
     
 	if (num_nodes == 1) {
-		vv_copy(recv_buf, send_buf, total_size);
+		vv_copy(recv_buf_in, send_buf_in, total_size);
 		return;
 	}
 
