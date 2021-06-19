@@ -314,21 +314,22 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
                         uint32 total_size, uint32 num_nodes, 
                         uint32 my_id, MPI_Datatype mpi_word, MPI_Comm comm) {
 	
-#ifdef HAVE_CUDA /* memcpy on host vec below */
-	v_t *send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
-	v_t *recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
-	vv_copyout(send_buf, send_buf_in, total_size);
-#else
-	v_t *send_buf = (v_t *)send_buf_in;
-	v_t *recv_buf = (v_t *)recv_buf_in;
-#endif
 
 	uint32 i;
 	uint32 size, chunk, remainder;
 	uint32 next_id, prev_id;
 	MPI_Status mpi_status;
 	MPI_Request mpi_req;
-	v_t *curr_buf;
+	v_t *curr_buf, *send_buf, *recv_buf;
+
+#ifdef HAVE_CUDA /* memcpy on host vec below */
+	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
+	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
+	vv_copyout(send_buf, send_buf_in, total_size);
+#else
+	send_buf = (v_t *)send_buf_in;
+	recv_buf = (v_t *)recv_buf_in;
+#endif
     
 	/* split data */
     
