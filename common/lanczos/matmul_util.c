@@ -309,7 +309,7 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 	MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
 
 #ifdef HAVE_CUDA
-	vv_copyin(recv_buf_in, recv_buf, total_size); 	
+	vv_copyin(recv_buf_in, recv_buf, size); 	
 #endif
 
 }
@@ -386,7 +386,7 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 		MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
 	}
 #ifdef HAVE_CUDA
-	vv_copyin(recv_buf_in, recv_buf, size); 	
+	vv_copyin(recv_buf_in, recv_buf, total_size); 	
 #endif
 }
 
