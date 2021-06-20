@@ -660,7 +660,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 		v_t tmp[VBITS];
 
 		CUDA_TRY(cuMemcpyDtoH(tmp,
-			(CUdeviceptr)((v_t *)x->gpu_vec + VBITS * i),
+			(v_t *)x->gpu_vec + VBITS * i,
 			sizeof(tmp)))
 
 		mul_NxB_BxB_acc_gpu(p, 
