@@ -79,7 +79,7 @@ typedef struct {
 	CUdeviceptr gpu_vec;
 } gpuvec_t;
 
-#define LANCZOS_GPU_DEBUG
+/* #define LANCZOS_GPU_DEBUG */
 
 /* ordinal list of GPU kernels */
 enum {

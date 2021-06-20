@@ -702,9 +702,6 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 
 		free(tmp);
 	}
-#else
-	CUDA_TRY(cuMemcpyDtoH(b->host_vec, b->gpu_vec, 
-		 		A->ncols * sizeof(v_t)))
 #endif
 }
 
@@ -739,9 +736,6 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 
 		free(tmp);
 	}
-#else
-	CUDA_TRY(cuMemcpyDtoH(b->host_vec, b->gpu_vec, 
-		 		A->ncols * sizeof(v_t)))
 #endif
 }
 

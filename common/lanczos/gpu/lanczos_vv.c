@@ -62,8 +62,7 @@ void vv_copy(void *dest_in, void *src_in, uint32 n) {
 void vv_copyout(v_t *dest, void *src_in, uint32 n) {
 
 	gpuvec_t *src = (gpuvec_t *)src_in;
-	
-	/* Don't assume sync'ed on host */
+
 	CUDA_TRY(cuMemcpyDtoH(src->host_vec, src->gpu_vec, n * sizeof(v_t)))
 
 	if (dest != src->host_vec) memcpy(dest, src->host_vec, n * sizeof(v_t)); 
@@ -95,9 +94,6 @@ void vv_xor(void *dest_in, void *src_in, uint32 n) {
 	gpu_launch_set(launch, gpu_args);
 
 	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
-
-	CUDA_TRY(cuMemcpyDtoH(dest->host_vec, dest->gpu_vec, 
-				n * sizeof(v_t)))
 }
 
 void vv_mask(void *v_in, v_t mask, uint32 n) {
@@ -116,8 +112,6 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 	gpu_launch_set(launch, gpu_args);
 
 	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
-
-	CUDA_TRY(cuMemcpyDtoH(v->host_vec, v->gpu_vec, n * sizeof(v_t)))
 }
 
 /*-------------------------------------------------------------------*/
@@ -373,8 +367,6 @@ void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 		}
 		free(tmp);
 	}
-#else
-	CUDA_TRY(cuMemcpyDtoH(y->host_vec, y->gpu_vec, n * sizeof(v_t)))
 #endif
 }
 
