@@ -241,7 +241,7 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 	b->spmv_preprocess_handle = d->spmv_engine_preprocess(&spmv_data);
 }
 
-static const uint32 preferred_block = 20000;
+static const uint32 preferred_block = 200000;
 
 /*-------------------------------------------------------------------*/
 static void gpu_matrix_init(packed_matrix_t *p) {
