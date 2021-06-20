@@ -326,15 +326,6 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 	MPI_Status mpi_status;
 	MPI_Request mpi_req;
 	v_t *curr_buf, *send_buf, *recv_buf;
-
-#ifdef HAVE_CUDA /* memcpy on host vec below */
-	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
-	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
-	vv_copyout(send_buf, send_buf_in, total_size);
-#else
-	send_buf = (v_t *)send_buf_in;
-	recv_buf = (v_t *)recv_buf_in;
-#endif
     
 	/* split data */
     
@@ -354,6 +345,15 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 	size = chunk;
 	if (my_id == num_nodes - 1)
 		size += remainder;
+
+#ifdef HAVE_CUDA /* memcpy on host vec below */
+	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
+	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
+	vv_copyout(send_buf, send_buf_in, size);
+#else
+	send_buf = (v_t *)send_buf_in;
+	recv_buf = (v_t *)recv_buf_in;
+#endif
 
 	curr_buf = recv_buf + my_id * chunk;
     
@@ -386,7 +386,7 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 		MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
 	}
 #ifdef HAVE_CUDA
-	vv_copyin(recv_buf_in, recv_buf, total_size); 	
+	vv_copyin(recv_buf_in, recv_buf, size); 	
 #endif
 }
 
