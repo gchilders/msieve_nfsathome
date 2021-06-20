@@ -571,7 +571,7 @@ static void dump_lanczos_state(msieve_obj *obj,
 			packed_matrix_t *packed_matrix,
 			void *x, v_t **vt_v0, void **v, void *v0,
 			v_t **vt_a_v, v_t **vt_a2_v, v_t **winv,
-			uint32 n, uint32 max_n, uint32 dim_solved, uint32 iter,
+			uint32 max_n, uint32 dim_solved, uint32 iter,
 			uint32 s[2][VBITS], uint32 dim1, void *scratch) {
 
 	uint32 vbits = VBITS;
@@ -682,7 +682,7 @@ static void read_lanczos_state(msieve_obj *obj,
 			packed_matrix_t *packed_matrix,
 			void *x, v_t **vt_v0, void **v, void *v0,
 			v_t **vt_a_v, v_t **vt_a2_v, v_t **winv,
-			uint32 n, uint32 max_n, uint32 *dim_solved, 
+			uint32 max_n, uint32 *dim_solved, 
 			uint32 *iter, uint32 s[2][VBITS], uint32 *dim1,
 			void *scratch) {
 
@@ -918,7 +918,7 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 	if (obj->flags & MSIEVE_FLAG_NFS_LA_RESTART) {
 		read_lanczos_state(obj, packed_matrix, 
 				x, vt_v0, v, v0, vt_a_v, vt_a2_v,
-				winv, packed_matrix->ncols, max_n, 
+				winv, max_n, 
 				&dim_solved, &iter, s, &dim1, scratch);
 		logprintf(obj, "restarting at iteration %u (dim = %u)\n",
 				iter, dim_solved);
@@ -1279,7 +1279,7 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 				dump_lanczos_state(obj, packed_matrix, 
 						   x, vt_v0, v, v0, 
 						   vt_a_v, vt_a2_v, winv, 
-						   n, max_n, dim_solved, 
+						   max_n, dim_solved, 
 						   iter, s, dim1, scratch);
 				next_dump = ((dim_solved + 6 * VBITS) / dump_interval + 1) * 
 							dump_interval;

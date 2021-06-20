@@ -70,7 +70,6 @@ gpu_init(gpu_config_t *config)
 
 	for (i = 0; i < (int32)config->num_gpu; i++) {
 		CUdevice device;
-		CUdevprop prop;
 		gpu_info_t *info = config->info + i;
 
 		CUDA_TRY(cuDeviceGet(&device, i))
@@ -79,32 +78,55 @@ gpu_init(gpu_config_t *config)
 
 		CUDA_TRY(cuDeviceGetName(info->name,
 				sizeof(info->name), device))
-		CUDA_TRY(cuDeviceComputeCapability(
+		CUDA_TRY(cuDeviceGetAttribute(
 				&info->compute_version_major,
-				&info->compute_version_minor, device))
-		CUDA_TRY(cuDeviceGetProperties(&prop, device))
-
-		info->clock_speed = prop.clockRate;
-		info->constant_mem_size = prop.totalConstantMemory;
-		info->shared_mem_size = prop.sharedMemPerBlock;
-		info->registers_per_block = prop.regsPerBlock;
-		info->max_threads_per_block = prop.maxThreadsPerBlock;
-		info->warp_size = prop.SIMDWidth;
-		for (j = 0; j < 3; j++) {
-			info->max_thread_dim[j] = prop.maxThreadsDim[j];
-			info->max_grid_size[j] = prop.maxGridSize[j];
-		}
-		
+				CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->compute_version_minor,
+				CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->clock_speed,
+				CU_DEVICE_ATTRIBUTE_CLOCK_RATE, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->constant_mem_size,
+				CU_DEVICE_ATTRIBUTE_TOTAL_CONSTANT_MEMORY, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->shared_mem_size,
+				CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->registers_per_block,
+				CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_BLOCK, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->max_threads_per_block,
+				CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->warp_size,
+				CU_DEVICE_ATTRIBUTE_WARP_SIZE, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->max_thread_dim[0],
+				CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_X, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->max_thread_dim[1],
+				CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Y, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->max_thread_dim[2],
+				CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->max_grid_size[0],
+				CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->max_grid_size[1],
+				CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Y, device))
+		CUDA_TRY(cuDeviceGetAttribute(
+				&info->max_grid_size[2],
+				CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Z, device))
 		CUDA_TRY(cuDeviceTotalMem(
 			&info->global_mem_size, device))
-
 		CUDA_TRY(cuDeviceGetAttribute(&info->can_overlap,
 				CU_DEVICE_ATTRIBUTE_GPU_OVERLAP, device))
-
 		CUDA_TRY(cuDeviceGetAttribute(&info->num_compute_units,
 				CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
 				device))
-
 		CUDA_TRY(cuDeviceGetAttribute(&info->has_timeout,
 				CU_DEVICE_ATTRIBUTE_KERNEL_EXEC_TIMEOUT,
 				device))
