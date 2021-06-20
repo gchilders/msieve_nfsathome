@@ -682,15 +682,15 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 #ifdef LANCZOS_GPU_DEBUG
 	{
 		uint32 i, j;
-		v_t *tmp = (v_t *)xmalloc(A->ncols * 
+		v_t *tmp = (v_t *) xmalloc(A->ncols * 
 						sizeof(v_t));
 
 		CUDA_TRY(cuMemcpyDtoH(tmp, b->gpu_vec, 
 					A->ncols * sizeof(v_t)))
 
 		mul_unpacked(A, x->host_vec, b->host_vec);
-#if 1
-		for (i = 0; i < A->ncols; i++) {
+
+		for (i = 0; i < MIN(A->ncols, A->nrows); i++) {
 			for (j = 0; j < VWORDS; j++) {				
 				if (tmp[i].w[j] != b->host_vec[i].w[j]) { 
 					printf("m error %u %" PRIx64 " %" PRIx64 "\n", 
@@ -699,11 +699,8 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 				}
 			}
 		}
-#endif
-		free(tmp);
 
-		CUDA_TRY(cuMemcpyHtoD(b->gpu_vec, b->host_vec, 
-		 		A->ncols * sizeof(v_t)))
+		free(tmp);
 	}
 #else
 	CUDA_TRY(cuMemcpyDtoH(b->host_vec, b->gpu_vec, 
@@ -729,7 +726,7 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 					A->ncols * sizeof(v_t)))
 
 		mul_trans_unpacked(A, x->host_vec, b->host_vec);
-#if 1
+
 		for (i = 0; i < A->ncols; i++) {
 			for (j = 0; j < VWORDS; j++) {				
 				if (tmp[i].w[j] != b->host_vec[i].w[j]) { 
@@ -739,11 +736,8 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 				}
 			}
 		}
-#endif
-		free(tmp);
 
-		CUDA_TRY(cuMemcpyHtoD(b->gpu_vec, b->host_vec, 
-		 		A->ncols * sizeof(v_t)))
+		free(tmp);
 	}
 #else
 	CUDA_TRY(cuMemcpyDtoH(b->host_vec, b->gpu_vec, 
