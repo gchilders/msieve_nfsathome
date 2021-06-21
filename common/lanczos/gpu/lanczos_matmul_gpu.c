@@ -22,45 +22,7 @@ static const char * gpu_kernel_names[] =
 	"lanczos_kernel_inner_prod",
 	"lanczos_kernel_outer_prod",
 };
-
-static const gpu_arg_type_list_t gpu_kernel_args[] = 
-{
-	/* lanczos_kernel_mask */
-	{ 3,
-		{
-		  GPU_ARG_PTR,
-		  GPU_ARG_VT,
-		  GPU_ARG_UINT32,
-		}
-	},
-	/* lanczos_kernel_xor */
-	{ 3,
-		{
-		  GPU_ARG_PTR,
-		  GPU_ARG_PTR,
-		  GPU_ARG_UINT32,
-		}
-	},
-	/* lanczos_kernel_inner_prod */
-	{ 4,
-		{
-		  GPU_ARG_PTR,
-		  GPU_ARG_PTR,
-		  GPU_ARG_PTR,
-		  GPU_ARG_UINT32,
-		}
-	},
-	/* lanczos_kernel_outer_prod */
-	{ 4,
-		{
-		  GPU_ARG_PTR,
-		  GPU_ARG_PTR,
-		  GPU_ARG_PTR,
-		  GPU_ARG_UINT32,
-		}
-	},
-};
-
+ 
 typedef struct {
 	uint32 row_off;
 	uint32 col_off;
@@ -497,13 +459,10 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		gpu_launch_t *launch = d->launch + i;
 
 		gpu_launch_init(d->gpu_module, gpu_kernel_names[i],
-				gpu_kernel_args + i, launch);
+				launch);
 
 		launch->threads_per_block = MIN(256, 
 				launch->threads_per_block);
-
-		/* CUDA_TRY(cuFuncSetBlockShape(launch->kernel_func,
-					launch->threads_per_block, 1, 1)) */
 	}
 
 	/* allocate scratch arrays */
@@ -571,21 +530,11 @@ static void mul_packed_gpu(packed_matrix_t *p,
 			/* combine with previous output */
 
 			gpu_launch_t *launch = d->launch + GPU_K_XOR;
-			gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
 			uint32 n = p->nrows;
 
 			uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 					launch->threads_per_block;
 
-			/* 
-			gpu_args[0].ptr_arg = (void *)(size_t)b->gpu_vec;
-			gpu_args[1].ptr_arg = (void *)(size_t)d->matmul_scratch;
-			gpu_args[2].uint32_arg = n;
-			gpu_launch_set(launch, gpu_args);
-			
-			CUDA_TRY(cuLaunchGrid(launch->kernel_func, 
-						MIN(1000, num_blocks), 1))
-			*/
 			void *args[3] = {&b->gpu_vec, &d->matmul_scratch, &n};
 
 			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
@@ -642,20 +591,11 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 			/* combine with previous output */
 
 			gpu_launch_t *launch = d->launch + GPU_K_XOR;
-			gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
 			uint32 n = p->ncols;
 
 			uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 					launch->threads_per_block;
-			/*
-			gpu_args[0].ptr_arg = (void *)(size_t)b->gpu_vec;
-			gpu_args[1].ptr_arg = (void *)(size_t)d->matmul_scratch;
-			gpu_args[2].uint32_arg = n;
-			gpu_launch_set(launch, gpu_args);
 
-			CUDA_TRY(cuLaunchGrid(launch->kernel_func, 
-						MIN(1000, num_blocks), 1))
-			*/
 			void *args[3] = {&b->gpu_vec, &d->matmul_scratch, &n};
 
 			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 

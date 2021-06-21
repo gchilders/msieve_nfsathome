@@ -15,7 +15,6 @@ $Id$
 #include "lanczos_gpu.h"
 
 /*-------------------------------------------------------------------*/
-/* Vectors are kept synced on host and gpu. How long do these copies take? */
 
 void *vv_alloc(uint32 n, void *extra) {
 
@@ -83,18 +82,10 @@ void vv_xor(void *dest_in, void *src_in, uint32 n) {
 	gpuvec_t *dest = (gpuvec_t *)dest_in;
 	gpudata_t *d = src->gpudata;
 	gpu_launch_t *launch = d->launch + GPU_K_XOR;
-	gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
 
 	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 				launch->threads_per_block;
-	/*
-	gpu_args[0].ptr_arg = (void *)(size_t)dest->gpu_vec;
-	gpu_args[1].ptr_arg = (void *)(size_t)src->gpu_vec;
-	gpu_args[2].uint32_arg = n;
-	gpu_launch_set(launch, gpu_args);
 
-	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
-	*/
 	void *args[3] = {&dest->gpu_vec, &src->gpu_vec, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
@@ -107,18 +98,10 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 	gpuvec_t *v = (gpuvec_t *)v_in;
 	gpudata_t *d = v->gpudata;
 	gpu_launch_t *launch = d->launch + GPU_K_MASK;
-	gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
 
 	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 				launch->threads_per_block;
-	/*
-	gpu_args[0].ptr_arg = (void *)(size_t)v->gpu_vec;
-	gpu_args[1].vt_arg = mask;
-	gpu_args[2].uint32_arg = n;
-	gpu_launch_set(launch, gpu_args);
 
-	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
-	*/
 	void *args[3] = {&v->gpu_vec, &mask, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
@@ -332,7 +315,6 @@ void mul_NxB_BxB_acc_gpu(packed_matrix_t *matrix,
 	v_t c[8 * VWORDS * 256];
 	gpudata_t *d = (gpudata_t *)matrix->extra;
 	gpu_launch_t *launch = d->launch + GPU_K_INNER_PROD;
-	gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
 	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 				launch->threads_per_block;
 
@@ -341,22 +323,11 @@ void mul_NxB_BxB_acc_gpu(packed_matrix_t *matrix,
 	CUDA_TRY(cuMemcpyHtoD(d->inner_scratch, c, 
 				256 * 8 * VWORDS * sizeof(v_t)))
 
-	/*
-	gpu_args[0].ptr_arg = (void *)(size_t)y;
-	gpu_args[1].ptr_arg = (void *)(size_t)v;
-	gpu_args[2].ptr_arg = (void *)(size_t)d->inner_scratch;
-	gpu_args[3].uint32_arg = n;
-	gpu_launch_set(launch, gpu_args);
-
-	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
-	*/
 	void *args[4] = {&y, &v, &d->inner_scratch, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
 				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
 				0, NULL, args, NULL))
-
-	
 }
 
 /*-------------------------------------------------------------------*/
@@ -579,27 +550,17 @@ void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 
 	gpudata_t *d = (gpudata_t *)matrix->extra;
 	gpu_launch_t *launch = d->launch + GPU_K_OUTER_PROD;
-	gpu_arg_t gpu_args[GPU_MAX_KERNEL_ARGS];
 	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 				launch->threads_per_block;
 
 	num_blocks = MIN(num_blocks, 
 			(uint32)(10 * d->gpu_info->num_compute_units));
-	/*
-	gpu_args[0].ptr_arg = (void *)(size_t)x;
-	gpu_args[1].ptr_arg = (void *)(size_t)y;
-	gpu_args[2].ptr_arg = (void *)(size_t)xy;
-	gpu_args[3].uint32_arg = n;
-	gpu_launch_set(launch, gpu_args);
 
-	CUDA_TRY(cuLaunchGrid(launch->kernel_func, num_blocks, 1))
-	*/
 	void *args[4] = {&x, &y, &xy, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
 				num_blocks, 1, 1, launch->threads_per_block, 1, 1,
 				0, NULL, args, NULL))
-
 }
 
 /*-------------------------------------------------------------------*/
