@@ -691,12 +691,14 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 				blocks_x, blocks_y, t->stream))
 		*/
 		{
+			CUdeviceptr p_blk = t->gpu_p_array + j * sizeof(uint32);
+			CUdeviceptr root_blk = t->gpu_root_array + j * root_bytes;
+ 
 			void *args[12] = {&soa->dev_p, &num_p, &soa->dev_start_roots,
-				&soa->num_roots, &(t->gpu_p_array + j * sizeof(uint32)), 
-				&(t->gpu_root_array + j * root_bytes), &q_array->dev_q, 
-				&num_specialq, &size_y, &t->num_entries, &shift, &num_aprog_vals);
+				&soa->num_roots, &p_blk, &root_blk, &q_array->dev_q,
+				&num_specialq, &size_y, &t->num_entries, &shift, &num_aprog_vals};
 
-			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
+			CUDA_TRY(cuLaunchKernel(launch->kernel_func,
 				blocks_x, blocks_y, 1, size_x, 1, 1,
 				0, t->stream, args, NULL))
 		}
@@ -746,7 +748,7 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 			uint32 ne = num_specialq * t->num_entries * num_aprog_vals;
 			void *args[6] = {&t->gpu_p_array, &t->gpu_root_array, 
 				&ne, &q_array->dev_q, &t->gpu_found_array, 
-				&shift);
+				&shift};
 
 			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
 				num_blocks, 1, 1, launch->threads_per_block, 1, 1,

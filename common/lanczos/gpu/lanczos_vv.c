@@ -95,7 +95,7 @@ void vv_xor(void *dest_in, void *src_in, uint32 n) {
 
 	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
 	*/
-	void *args[3] = {&dest->gpu_vec, &src->gpu_vec, &n);
+	void *args[3] = {&dest->gpu_vec, &src->gpu_vec, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
 				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
@@ -119,7 +119,7 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 
 	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
 	*/
-	void *args[3] = {&v->gpu_vec, &mask, &n);
+	void *args[3] = {&v->gpu_vec, &mask, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
 				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
@@ -350,7 +350,7 @@ void mul_NxB_BxB_acc_gpu(packed_matrix_t *matrix,
 
 	CUDA_TRY(cuLaunchGrid(launch->kernel_func, MIN(1000, num_blocks), 1))
 	*/
-	void *args[4] = {&y, &v, &d->inner_scratch, &n);
+	void *args[4] = {&y, &v, &d->inner_scratch, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
 				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
@@ -594,7 +594,7 @@ void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 
 	CUDA_TRY(cuLaunchGrid(launch->kernel_func, num_blocks, 1))
 	*/
-	void *args[4] = {&x, &y, &xy, &n);
+	void *args[4] = {&x, &y, &xy, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
 				num_blocks, 1, 1, launch->threads_per_block, 1, 1,

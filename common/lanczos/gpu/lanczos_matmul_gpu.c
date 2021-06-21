@@ -586,7 +586,7 @@ static void mul_packed_gpu(packed_matrix_t *p,
 			CUDA_TRY(cuLaunchGrid(launch->kernel_func, 
 						MIN(1000, num_blocks), 1))
 			*/
-			void *args[3] = {&b->gpu_vec, &d->matmul_scratch, &n);
+			void *args[3] = {&b->gpu_vec, &d->matmul_scratch, &n};
 
 			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
 				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
@@ -656,7 +656,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 			CUDA_TRY(cuLaunchGrid(launch->kernel_func, 
 						MIN(1000, num_blocks), 1))
 			*/
-			void *args[3] = {&b->gpu_vec, &d->matmul_scratch, &n);
+			void *args[3] = {&b->gpu_vec, &d->matmul_scratch, &n};
 
 			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
 				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
