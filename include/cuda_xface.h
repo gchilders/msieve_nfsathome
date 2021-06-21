@@ -107,7 +107,7 @@ void gpu_launch_init(CUmodule gpu_module, const char *func_name,
 			const gpu_arg_type_list_t *arg_desc,
 			gpu_launch_t *launch);
 
-void gpu_launch_set(gpu_launch_t *launch, gpu_arg_t *args);
+/* void gpu_launch_set(gpu_launch_t *launch, gpu_arg_t *args); */
 
 #ifdef __cplusplus
 }

@@ -151,7 +151,7 @@ void gpu_launch_init(CUmodule gpu_module, const char *func_name,
 			launch->kernel_func))
 
 	launch->arg_desc = *arg_desc;
-
+	/*
 	for (i = 0, j = 0; i < arg_desc->num_args; i++) {
 
 		switch(arg_desc->arg_type[i]) {
@@ -188,9 +188,11 @@ void gpu_launch_init(CUmodule gpu_module, const char *func_name,
 	}
 
 	CUDA_TRY(cuParamSetSize(launch->kernel_func, j))
+	*/
 }
 
 /*------------------------------------------------------------------------*/
+/*
 void gpu_launch_set(gpu_launch_t *launch, gpu_arg_t *args)
 {
 	uint32 i;
@@ -247,5 +249,5 @@ void gpu_launch_set(gpu_launch_t *launch, gpu_arg_t *args)
 		}
 	}
 }
-
+*/
 #endif

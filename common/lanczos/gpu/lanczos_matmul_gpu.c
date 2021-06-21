@@ -483,7 +483,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	/* initialize context */
 
 	CUDA_TRY(cuCtxCreate(&d->gpu_context, 
-			CU_CTX_BLOCKING_SYNC,
+			CU_CTX_SCHED_BLOCKING_SYNC,
 			d->gpu_info->device_handle))
 
 	/* load kernels */
@@ -502,8 +502,8 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		launch->threads_per_block = MIN(256, 
 				launch->threads_per_block);
 
-		CUDA_TRY(cuFuncSetBlockShape(launch->kernel_func,
-					launch->threads_per_block, 1, 1))
+		/* CUDA_TRY(cuFuncSetBlockShape(launch->kernel_func,
+					launch->threads_per_block, 1, 1)) */
 	}
 
 	/* allocate scratch arrays */
@@ -577,13 +577,20 @@ static void mul_packed_gpu(packed_matrix_t *p,
 			uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 					launch->threads_per_block;
 
+			/* 
 			gpu_args[0].ptr_arg = (void *)(size_t)b->gpu_vec;
 			gpu_args[1].ptr_arg = (void *)(size_t)d->matmul_scratch;
 			gpu_args[2].uint32_arg = n;
 			gpu_launch_set(launch, gpu_args);
-
+			
 			CUDA_TRY(cuLaunchGrid(launch->kernel_func, 
 						MIN(1000, num_blocks), 1))
+			*/
+			void *args[3] = {&b->gpu_vec, &d->matmul_scratch, &n);
+
+			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
+				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
+				0, NULL, args, NULL))
 
 		}
 
@@ -640,7 +647,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 
 			uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 					launch->threads_per_block;
-
+			/*
 			gpu_args[0].ptr_arg = (void *)(size_t)b->gpu_vec;
 			gpu_args[1].ptr_arg = (void *)(size_t)d->matmul_scratch;
 			gpu_args[2].uint32_arg = n;
@@ -648,6 +655,12 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 
 			CUDA_TRY(cuLaunchGrid(launch->kernel_func, 
 						MIN(1000, num_blocks), 1))
+			*/
+			void *args[3] = {&b->gpu_vec, &d->matmul_scratch, &n);
+
+			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
+				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
+				0, NULL, args, NULL))
 
 		}
 

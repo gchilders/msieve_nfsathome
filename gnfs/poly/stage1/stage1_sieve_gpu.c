@@ -667,7 +667,7 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 
 			size_x -= d->gpu_info->warp_size;
 		}
-
+		/*
 		gpu_args[0].ptr_arg = (void *)(size_t)soa->dev_p;
 		gpu_args[1].uint32_arg = num_p;
 		gpu_args[2].ptr_arg = (void *)(size_t)soa->dev_start_roots;
@@ -689,6 +689,17 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 
 		CUDA_TRY(cuLaunchGridAsync(launch->kernel_func,
 				blocks_x, blocks_y, t->stream))
+		*/
+		{
+			void *args[12] = {&soa->dev_p, &num_p, &soa->dev_start_roots,
+				&soa->num_roots, &(t->gpu_p_array + j * sizeof(uint32)), 
+				&(t->gpu_root_array + j * root_bytes), &q_array->dev_q, 
+				&num_specialq, &size_y, &t->num_entries, &shift, &num_aprog_vals);
+
+			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
+				blocks_x, blocks_y, 1, size_x, 1, 1,
+				0, t->stream, args, NULL))
+		}
 
 		j += num_p * soa->num_roots;
 	}
@@ -714,6 +725,11 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 	else
 		launch = t->launch + GPU_FINAL_32;
 
+	num_blocks = 1 + (num_specialq * t->num_entries * 
+			num_aprog_vals - 1) /
+			launch->threads_per_block;
+	num_blocks = MIN(num_blocks, 1000);
+	/*
 	gpu_args[0].ptr_arg = (void *)(size_t)(t->gpu_p_array);
 	gpu_args[1].ptr_arg = (void *)(size_t)(t->gpu_root_array);
 	gpu_args[2].uint32_arg = num_specialq * t->num_entries * num_aprog_vals;
@@ -722,13 +738,20 @@ handle_special_q_batch(msieve_obj *obj, device_data_t *d,
 	gpu_args[5].uint32_arg = shift;
 	gpu_launch_set(launch, gpu_args);
 
-	num_blocks = 1 + (num_specialq * t->num_entries * 
-			num_aprog_vals - 1) /
-			launch->threads_per_block;
-	num_blocks = MIN(num_blocks, 1000);
 
 	CUDA_TRY(cuLaunchGridAsync(launch->kernel_func, 
 				num_blocks, 1, t->stream))
+	*/			
+	{
+			uint32 ne = num_specialq * t->num_entries * num_aprog_vals;
+			void *args[6] = {&t->gpu_p_array, &t->gpu_root_array, 
+				&ne, &q_array->dev_q, &t->gpu_found_array, 
+				&shift);
+
+			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
+				num_blocks, 1, 1, launch->threads_per_block, 1, 1,
+				0, t->stream, args, NULL))
+	}
 
 	CUDA_TRY(cuEventRecord(t->end_event, t->stream))
 	CUDA_TRY(cuEventSynchronize(t->end_event))
