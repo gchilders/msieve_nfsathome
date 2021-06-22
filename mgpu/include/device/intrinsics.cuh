@@ -149,10 +149,10 @@ __device__ __forceinline__ double shfl_up(double var,
 // ballot
 
 __device__ static __forceinline__
-	unsigned ballot(int predicate) {
+	unsigned ballot(int predicate, unsigned mask=MEMBERMASK) {
 
-#ifdef XXUSE_SHFL_SYNC
-	return __ballot_sync(MEMBERMASK, predicate); // This breaks the code on V100!
+#ifdef USE_SHFL_SYNC
+	return __ballot_sync(mask, predicate);
 #else
 #if ( __CUDA_ARCH__ >= 300)
 	return __ballot(predicate);
