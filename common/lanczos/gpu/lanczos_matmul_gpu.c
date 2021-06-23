@@ -608,19 +608,21 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 	}
 
 	/* handle dense rows */
+	{
+		v_t *tmp;
+		uint32 n_needed = (p->num_dense_rows + VBITS - 1) / VBITS;
+		tmp = (v_t *)aligned_malloc(n_needed * VBITS * sizeof(v_t), 64);
 
-	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++) {
-		v_t tmp[VBITS];
+		CUDA_TRY(cuMemcpyDtoH(tmp, x->gpu_vec, n_needed * VBITS * sizeof(v_t)))
 
-		CUDA_TRY(cuMemcpyDtoH(tmp,
-			(v_t *)x->gpu_vec + VBITS * i,
-			sizeof(tmp)))
-
-		mul_NxB_BxB_acc_gpu(p, 
-			d->dense_blocks[i], 
-			tmp,
-			(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i), 
-			p->ncols);
+		for (i = 0; i < n_needed; i++) {
+			mul_NxB_BxB_acc_gpu(p, 
+				d->dense_blocks[i], 
+				tmp + VBITS * i,
+				(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i), 
+				p->ncols);
+		}
+		aligned_free(tmp);
 	}
 }
 

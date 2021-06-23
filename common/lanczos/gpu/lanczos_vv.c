@@ -52,7 +52,7 @@ void vv_copy(void *dest_in, void *src_in, uint32 n) {
 	gpuvec_t *src = (gpuvec_t *)src_in;
 	gpuvec_t *dest = (gpuvec_t *)dest_in;
 
-	memcpy(dest->host_vec, src->host_vec, n * sizeof(v_t));
+	/* memcpy(dest->host_vec, src->host_vec, n * sizeof(v_t)); */
 
 	CUDA_TRY(cuMemcpyDtoD(dest->gpu_vec, src->gpu_vec, n * sizeof(v_t)))
 }
