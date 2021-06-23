@@ -22,8 +22,7 @@ void *vv_alloc(uint32 n, void *extra) {
 
 	v->gpudata = (gpudata_t *)extra;
 
-	v->host_vec = aligned_malloc(n * sizeof(v_t), 64);
-
+	CUDA_TRY(cuMemHostAlloc((void **)&v->host_vec, n * sizeof(v_t), 0))
 	CUDA_TRY(cuMemAlloc(&v->gpu_vec, n * sizeof(v_t)))
 
 	return v;
@@ -33,9 +32,9 @@ void vv_free(void *v_in) {
 
 	gpuvec_t *v = (gpuvec_t *)v_in;
 
+	CUDA_TRY(cuMemFreeHost((void *)v->host_vec))
 	CUDA_TRY(cuMemFree(v->gpu_vec))
-
-	aligned_free(v->host_vec);
+		
 	free(v);
 }
 
