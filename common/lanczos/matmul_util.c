@@ -106,7 +106,7 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 
 #ifdef HAVE_CUDAAWARE_MPI
 		vv_xor_gpu(curr_buf + m * chunk, send_buf + m * chunk, size,
-			(gpuvec_t *)send_buf_in->gpudata);
+			((gpuvec_t *)send_buf_in)->gpudata);
 #else
 		for (j = 0; j < size; j++) 
 			curr_buf[m * chunk + j] = v_xor(curr_buf[m * chunk + j], send_buf[m * chunk + j]);
@@ -290,7 +290,7 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
         
 #ifdef HAVE_CUDAAWARE_MPI
 		vv_xor_gpu(send_buf + m * chunk, scratch, size,
-			(gpuvec_t *)send_buf_in->gpudata);
+			((gpuvec_t *)send_buf_in)->gpudata);
 #else
 		for (j = 0; j < size; j++) 
 			send_buf[m * chunk + j] = v_xor(send_buf[m * chunk + j], scratch[j]);
@@ -326,7 +326,7 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
     
 #ifdef HAVE_CUDAAWARE_MPI
 		vv_xor_gpu(recv_buf, send_buf + m * chunk, size,
-			(gpuvec_t *)send_buf_in->gpudata);
+			((gpuvec_t *)send_buf_in)->gpudata);
 #else
 		for (j = 0; j < size; j++) 
 			recv_buf[j] = v_xor(recv_buf[j], send_buf[m * chunk + j]);
