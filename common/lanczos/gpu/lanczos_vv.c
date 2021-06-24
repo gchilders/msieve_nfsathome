@@ -353,6 +353,11 @@ void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 	gpuvec_t *v = (gpuvec_t *)v_in;
 	gpuvec_t *y = (gpuvec_t *)y_in;
 
+#ifdef LANCZOS_GPU_DEBUG
+	CUDA_TRY(cuMemcpyDtoH(v->host_vec, v->gpu_vec, n * sizeof(v_t)))
+	CUDA_TRY(cuMemcpyDtoH(y->host_vec, y->gpu_vec, n * sizeof(v_t)))
+#endif
+
 	mul_NxB_BxB_acc_gpu(matrix, v->gpu_vec, x,
 				y->gpu_vec, n);
 
@@ -361,7 +366,6 @@ void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 		v_t *tmp = (v_t *)xmalloc(n * sizeof(v_t));
 		uint32 i, j;
 
-		CUDA_TRY(cuMemcpyDtoH(v->host_vec, v->gpu_vec, n * sizeof(v_t)))
 		mul_NxB_BxB_acc_cpu(v->host_vec, x, y->host_vec, n);
 
 		CUDA_TRY(cuMemcpyDtoH(tmp, y->gpu_vec, n * sizeof(v_t)))
@@ -369,7 +373,7 @@ void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 		for (i = 0; i < n; i++) {
 			for (j = 0; j < VWORDS; j++) {
 				if (y->host_vec[i].w[j] != tmp[i].w[j]) {
-					printf("error offset %u\n", i);
+					printf("NxB_BxB error offset %u\n", i);
 					exit(-1);
 				}
 			}
@@ -609,7 +613,7 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 		for (i = 0; i < VBITS; i++) {
 			for (j = 0; j < VWORDS; j++ ) {
 				if (xy[i].w[j] != tmp[i].w[j]) {
-					printf("error offset %u\n", i);
+					printf("BxN_NXB error offset %u\n", i);
 					exit(-1);
 				}
 			}
