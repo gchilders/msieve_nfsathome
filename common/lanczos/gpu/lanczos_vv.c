@@ -92,7 +92,7 @@ void vv_xor(void *dest_in, void *src_in, uint32 n) {
 				0, NULL, args, NULL))
 }
 
-void vv_xor_gpu(void *dest_in, void *src_in, uint32 n, gpu_data_t *d) {
+void vv_xor_gpu(void *dest_in, void *src_in, uint32 n, gpudata_t *d) {
 
 	CUdeviceptr dest = (CUdeviceptr) dest_in;
 	CUdeviceptr src = (CUdeviceptr) src_in;
