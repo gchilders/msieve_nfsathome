@@ -361,6 +361,7 @@ void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 		v_t *tmp = (v_t *)xmalloc(n * sizeof(v_t));
 		uint32 i, j;
 
+		CUDA_TRY(cuMemcpyDtoH(v->host_vec, v->gpu_vec, n * sizeof(v_t)))
 		mul_NxB_BxB_acc_cpu(v->host_vec, x, y->host_vec, n);
 
 		CUDA_TRY(cuMemcpyDtoH(tmp, y->gpu_vec, n * sizeof(v_t)))
@@ -598,6 +599,8 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 		v_t tmp[VBITS];
 		uint32 i, j;
 
+		CUDA_TRY(cuMemcpyDtoH(x->host_vec, x->gpu_vec, n * sizeof(v_t)))
+		CUDA_TRY(cuMemcpyDtoH(y->host_vec, y->gpu_vec, n * sizeof(v_t)))
 		mul_BxN_NxB_cpu(x->host_vec, y->host_vec, xy, n);
 
 		CUDA_TRY(cuMemcpyDtoH(tmp, d->outer_scratch, 
