@@ -113,6 +113,7 @@ void packed_matrix_init(msieve_obj *obj,
 	p->mpi_ncols = obj->mpi_ncols;
 	p->mpi_la_row_rank = obj->mpi_la_row_rank;
 	p->mpi_la_col_rank = obj->mpi_la_col_rank;
+	p->mpi_la_grid = obj->mpi_la_grid;
 	p->mpi_la_row_grid = obj->mpi_la_row_grid;
 	p->mpi_la_col_grid = obj->mpi_la_col_grid;
 	p->mpi_word = obj->mpi_word;

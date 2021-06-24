@@ -90,6 +90,8 @@ enum {
 	NUM_GPU_FUNCTIONS /* must be last */
 };
 
+void vv_xor_gpu(void *dest, void *src, uint32 n, gpu_data_t *d);
+
 void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 		   CUdeviceptr x, CUdeviceptr y,
 		   CUdeviceptr xy, uint32 n);

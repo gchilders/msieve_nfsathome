@@ -15,10 +15,6 @@ $Id$
 #include <msieve.h>
 #include <signal.h>
 
-#ifdef HAVE_MPI
-#include <mpi.h>
-#endif
-
 msieve_obj *g_curr_factorization = NULL;
 
 /*--------------------------------------------------------------------*/
@@ -351,6 +347,9 @@ int main(int argc, char **argv) {
 			printf("error %d initializing MPI, aborting\n", i);
 			MPI_Abort(MPI_COMM_WORLD, i);
 		}
+#ifdef HAVE_CUDAAWARE_MPI
+		printf("Using CUDA-Aware MPI\n");
+#endif		
 	}
 #endif
 

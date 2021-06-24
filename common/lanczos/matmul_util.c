@@ -43,13 +43,12 @@ $Id$
 
 #define MPI_NODE_0_END }
 
-
 /*------------------------------------------------------------------*/
 static void global_xor_async(v_t *send_buf, v_t *recv_buf, 
 			uint32 total_size, uint32 num_nodes, 
-			uint32 my_id, MPI_Datatype mpi_word, MPI_Comm comm) {
+			uint32 my_id, MPI_Datatype mpi_word, MPI_Comm comm, void *send_buf_in) {
 	
-	uint32 i;
+	uint32 i, j;
 	uint32 m, size, chunk, remainder;
 	uint32 next_id, prev_id;
 	MPI_Status mpi_status;
@@ -105,7 +104,13 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 
 		/* combine the new chunk with our own */
 
-		vv_xor(curr_buf + m * chunk, send_buf + m * chunk, size);
+#ifdef HAVE_CUDAAWARE_MPI
+		vv_xor_gpu(curr_buf + m * chunk, send_buf + m * chunk, size,
+			(gpuvec_t *)send_buf_in->gpudata);
+#else
+		for (j = 0; j < size; j++) 
+			curr_buf[m * chunk + j] = v_xor(curr_buf[m * chunk + j], send_buf[m * chunk + j]);
+#endif
 		
 		/* now wait for the send to end */
 
@@ -119,7 +124,7 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 	   puts it to (m-1)-th own chunk */
 
 	curr_buf = recv_buf + m * chunk;
-	for (i = 0; i < num_nodes - 1; i++){
+	for (i = 0; i < num_nodes - 1; i++) {
 		
 		/* async send to chunk the next proc in circle */
 
@@ -152,15 +157,18 @@ void global_xor(void *send_buf_in, void *recv_buf_in,
 		uint32 my_id, MPI_Datatype mpi_word, MPI_Comm comm) {
 	
 #ifdef HAVE_CUDA
+#ifdef HAVE_CUDAAWARE_MPI
+	v_t *send_buf = (v_t *)((gpuvec_t *)send_buf_in)->gpu_vec;
+	v_t *recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->gpu_vec;
+#else
 	v_t *send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
 	v_t *recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
 	vv_copyout(send_buf, send_buf_in, total_size);
-	MPI_TRY(MPI_Allreduce(send_buf, recv_buf, VWORDS * total_size,
-		MPI_LONG_LONG, MPI_BXOR, comm))
-	vv_copyin(recv_buf_in, recv_buf, total_size); 	
+#endif
 #else
 	v_t *send_buf = (v_t *)send_buf_in;
 	v_t *recv_buf = (v_t *)recv_buf_in;
+#endif
 
 	/* only get fancy for large buffers; even the
 	   fancy method is only faster when many nodes 
@@ -172,10 +180,12 @@ void global_xor(void *send_buf_in, void *recv_buf_in,
 				MPI_LONG_LONG, MPI_BXOR, comm))
 	} else {
 		global_xor_async(send_buf, recv_buf, 
-			total_size, num_nodes, my_id, mpi_word, comm);
+			total_size, num_nodes, my_id, mpi_word, comm, send_buf_in);
 	}
+	
+#if defined(HAVE_CUDA) && !defined(HAVE_CUDAAWARE_MPI)
+	vv_copyin(recv_buf_in, recv_buf, total_size); 	
 #endif
-	return;
 }
 
 /*------------------------------------------------------------------*/
@@ -217,11 +227,17 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 		return;
 	}
 
-#ifdef HAVE_CUDA /* v_xor on host vecs below */
+#ifdef HAVE_CUDA
+#ifdef HAVE_CUDAAWARE_MPI
+	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->gpu_vec;
+	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->gpu_vec;
+	scratch  = (v_t *)((gpuvec_t *)scratch_in)->gpu_vec;
+#else
 	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
 	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
 	scratch  = (v_t *)((gpuvec_t *)scratch_in)->host_vec;
-	vv_copyout(send_buf, send_buf_in, total_size); 
+	vv_copyout(send_buf, send_buf_in, total_size);
+#endif
 #else
 	send_buf = (v_t *)send_buf_in;
 	recv_buf = (v_t *)recv_buf_in;
@@ -272,7 +288,13 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
         
 		/* combine the new chunk with our own */
         
-		for (j = 0; j < size; j++) send_buf[m * chunk + j] = v_xor(send_buf[m * chunk + j], scratch[j]);
+#ifdef HAVE_CUDAAWARE_MPI
+		vv_xor_gpu(send_buf + m * chunk, scratch, size,
+			(gpuvec_t *)send_buf_in->gpudata);
+#else
+		for (j = 0; j < size; j++) 
+			send_buf[m * chunk + j] = v_xor(send_buf[m * chunk + j], scratch[j]);
+#endif
 		
 		/* now wait for the send to end */
         
@@ -302,16 +324,21 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
     
 	/* combine the new chunk with our own */
     
-	for (j = 0; j < size; j++) recv_buf[j] = v_xor(recv_buf[j], send_buf[m * chunk + j]);
+#ifdef HAVE_CUDAAWARE_MPI
+		vv_xor_gpu(recv_buf, send_buf + m * chunk, size,
+			(gpuvec_t *)send_buf_in->gpudata);
+#else
+		for (j = 0; j < size; j++) 
+			recv_buf[j] = v_xor(recv_buf[j], send_buf[m * chunk + j]);
+#endif
 
 	/* now wait for the send to end */
     
 	MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
 
-#ifdef HAVE_CUDA
+#if defined(HAVE_CUDA) && !defined(HAVE_CUDAAWARE_MPI)
 	vv_copyin(recv_buf_in, recv_buf, size); 	
 #endif
-
 }
 
 /*------------------------------------------------------------------*/
@@ -346,10 +373,15 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 	if (my_id == num_nodes - 1)
 		size += remainder;
 
-#ifdef HAVE_CUDA /* memcpy on host vec below */
+#ifdef HAVE_CUDA 
+#ifdef HAVE_CUDAAWARE_MPI
+	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->gpu_vec;
+	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->gpu_vec;
+#else
 	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
 	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
 	vv_copyout(send_buf, send_buf_in, size);
+#endif
 #else
 	send_buf = (v_t *)send_buf_in;
 	recv_buf = (v_t *)recv_buf_in;
@@ -358,7 +390,11 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 	curr_buf = recv_buf + my_id * chunk;
     
 	/* put own part in place first */
+#if !defined(HAVE_CUDA) || defined(HAVE_CUDAAWARE_MPI)
+	vv_copy(curr_buf, send_buf, size);
+#else
 	memcpy(curr_buf, send_buf, size * sizeof(v_t)); /* working on host vec */
+#endif
     
 	for (i = 0; i < num_nodes - 1; i++){
 		
@@ -385,7 +421,7 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
         
 		MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
 	}
-#ifdef HAVE_CUDA
+#if defined(HAVE_CUDA) && !defined(HAVE_CUDAAWARE_MPI)
 	vv_copyin(recv_buf_in, recv_buf, total_size); 	
 #endif
 }

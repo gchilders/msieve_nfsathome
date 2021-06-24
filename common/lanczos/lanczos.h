@@ -198,6 +198,7 @@ typedef struct packed_matrix_t {
 	uint32 mpi_la_row_rank;
 	uint32 mpi_la_col_rank;
 	MPI_Datatype mpi_word;
+	MPI_Comm mpi_la_grid;
 	MPI_Comm mpi_la_row_grid;
 	MPI_Comm mpi_la_col_grid;
 

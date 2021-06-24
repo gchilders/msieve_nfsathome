@@ -42,9 +42,9 @@ void vv_copyin(void *dest_in, v_t *src, uint32 n) {
 
 	gpuvec_t *dest = (gpuvec_t *)dest_in;
 
-	if (dest->host_vec != src) memcpy(dest->host_vec, src, n * sizeof(v_t));
-
 	CUDA_TRY(cuMemcpyHtoD(dest->gpu_vec, src, n * sizeof(v_t)))
+
+	if (dest->host_vec != src) memcpy(dest->host_vec, src, n * sizeof(v_t));
 }
 
 void vv_copy(void *dest_in, void *src_in, uint32 n) {
@@ -86,6 +86,22 @@ void vv_xor(void *dest_in, void *src_in, uint32 n) {
 				launch->threads_per_block;
 
 	void *args[3] = {&dest->gpu_vec, &src->gpu_vec, &n};
+
+	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
+				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
+				0, NULL, args, NULL))
+}
+
+void vv_xor_gpu(void *dest_in, void *src_in, uint32 n, gpu_data_t *d) {
+
+	CUdeviceptr dest = (CUdeviceptr) dest_in;
+	CUdeviceptr src = (CUdeviceptr) src_in;
+	gpu_launch_t *launch = d->launch + GPU_K_XOR;
+
+	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
+				launch->threads_per_block;
+
+	void *args[3] = {&dest, &src, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
 				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
@@ -572,10 +588,6 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 	gpuvec_t *y = (gpuvec_t *)y_in;
 	gpudata_t *d = (gpudata_t *)matrix->extra;
 
-#ifdef HAVE_MPI
-	v_t xytmp[VBITS];
-#endif
-
 	CUDA_TRY(cuMemsetD8(d->outer_scratch, 0, VBITS * sizeof(v_t)));
 
 	mul_BxN_NxB_gpu(matrix, x->gpu_vec, y->gpu_vec, 
@@ -605,14 +617,9 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 #endif
 
 #ifdef HAVE_MPI
-	/* combine the results across an entire MPI row */
+	/* combine the results across the entire MPI grid */
 
-	MPI_TRY(MPI_Allreduce(xy, xytmp, VWORDS * VBITS,
-		MPI_LONG_LONG, MPI_BXOR, matrix->mpi_la_row_grid))
-
-	/* combine the results across an entire MPI column */
-    MPI_TRY(MPI_Allreduce(xytmp, xy, VWORDS * VBITS,
-		MPI_LONG_LONG, MPI_BXOR, matrix->mpi_la_col_grid))
-		
+	MPI_TRY(MPI_Allreduce(MPI_IN_PLACE, xy, VWORDS * VBITS,
+		MPI_LONG_LONG, MPI_BXOR, matrix->mpi_la_grid))		
 #endif
 }
