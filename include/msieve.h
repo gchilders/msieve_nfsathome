@@ -25,12 +25,6 @@ extern "C" {
 
 #ifdef HAVE_MPI
 #include <mpi.h>
-#ifdef HAVE_CUDA
-#include <mpi-ext.h>
-#if defined(MPIX_CUDA_AWARE_SUPPORT) && MPIX_CUDA_AWARE_SUPPORT
-#define HAVE_CUDAAWARE_MPI
-#endif	
-#endif
 #endif
 
 /* version info */

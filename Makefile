@@ -64,6 +64,10 @@ else
 endif
 	CFLAGS += -I"$(CUDA_ROOT)/include" -Icub -Imgpu -DHAVE_CUDA
 	LIBS += $(CUDA_LIBS)
+
+ifeq ($(CUDAAWARE),1)
+	CFLAGS += -DHAVE_CUDAAWARE_MPI
+endif
 endif
 ifeq ($(MPI),1)
 	CC = mpicc
@@ -294,6 +298,7 @@ help:
 	@echo "add 'ECM=1' if GMP-ECM is available (enables ECM)"
 	@echo "add 'CUDA=1' for Nvidia graphics card support"
 	@echo "add 'MPI=1' for parallel processing using MPI"
+	@echo "     add 'CUDAAWARE=1' if using CUDA-Aware MPI"
 	@echo "add 'BOINC=1' to add BOINC wrapper"
 	@echo "add 'NO_ZLIB=1' if you don't have zlib"
 	@echo "add 'VBITS=X' for linear algebra with X-bit vectors (64, 128, 256, 512)"
