@@ -67,86 +67,76 @@ lanczos_kernel_inner_prod(v_t *y, v_t *v,
 }	
 
 /*------------------------------------------------------------------------*/
-/* thanks to Patrick Stach for ideas on this */
 
-#define MAX_OUTER_THREADS 256
+/* thanks to Patrick Stach for ideas on this */
 
 __global__ void
 lanczos_kernel_outer_prod(v_t *x, v_t *y,
-			uint32 *xy, uint32 n) /* fixme */
+			v_t *xy, uint32 n)
 {
-	uint32 i;
+	uint32 i, j, k;
 	uint32 num_threads = gridDim.x * blockDim.x;
 	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
 	uint32 block_id = threadIdx.x;
-	__shared__ uint64 scratch[3 * MAX_OUTER_THREADS];
-	uint64 *s = scratch + (block_id & ~0x1f);
+	v_t xi, yi;
+	__shared__ v_t c[3][32 * VWORDS];
+	// Don't actually need third table. 
+	// Can v_atomicxor c[2] into both c[0] and c[1]
+	// Saves shared memory at the expense of additional atomicXor's
 
-	scratch[block_id + 0*MAX_OUTER_THREADS] = 0;
-	scratch[block_id + 1*MAX_OUTER_THREADS] = 0;
-	scratch[block_id + 2*MAX_OUTER_THREADS] = 0;
+	// Zero c[][] in this block
+	for (i = block_id; i < 32 * VWORDS; i += blockDim.x) {
+		for (j = 0; j < VWORDS; j++) {
+			c[0][i].w[j] = 0;
+			c[1][i].w[j] = 0;
+			c[2][i].w[j] = 0;
+		}
+	}
+	__syncthreads();
 
 	for (i = grid_id; i < n; i += num_threads) {
 
-		uint32 j; 
-		uint32 k = block_id & 0x1f;
-		uint64 xi = *((uint64 *) x + i); /* fixme */
-		uint64 yi = *((uint64 *) y + i); 
-
-		if (k != 0)
-			xi = (xi >> (2 * k)) | (xi << (64 - (2 * k)));
+		xi = x[i];
+		yi = y[i]; 
 
 #pragma unroll
-		for (j = 0; j < 32; j++) {
-
-			uint32 off = bfe(xi, 2 * j, 2);
-			uint64 tmp = yi;
-
-			if (off == 0) {
-				tmp = 0;
-				off = 1;
+		for (j = 0; j < 32 * VWORDS; j++) {
+			// offset accesses by thread to reduce conflicts
+			uint32 my_j = (j + block_id) & (32 * VWORDS - 1); 
+			// k = (xi.w[my_j >> 5] >> (2*(my_j & 31))) & 3;
+			uint64 x = xi.w[my_j >> 5];
+			uint32 hi = (uint32)(x >> 32);
+			uint32 lo = (uint32)x;
+			uint32 pos = 2 * (my_j & 31);
+			// We never stride the hi and lo uint32 words
+			if (pos < 32) {
+				asm("bfe.u32 %0, %1, %2, %3; \n\t"
+					: "=r"(k) : "r"(lo), "r"(pos), "r"(2));
+			} else {
+				asm("bfe.u32 %0, %1, %2, %3; \n\t"
+					: "=r"(k) : "r"(hi), "r"(pos - 32), "r"(2));
 			}
 
-			s[((k + j) & 0x1f) + 
-				MAX_OUTER_THREADS * (off - 1)] ^= tmp;
+			// Each array element is hit by 
+			// blockDim.x/(32 * VWORDS)/4 threads on average
+			if (k != 0) {
+				v_atomicxor(&(c[k-1][my_j]), yi);
+			}
+			__syncthreads();
 		}
 	}
 
-	s = scratch + block_id;
-	__syncthreads();
-	s[0*MAX_OUTER_THREADS] ^= s[2*MAX_OUTER_THREADS];
-	s[1*MAX_OUTER_THREADS] ^= s[2*MAX_OUTER_THREADS];
-	__syncthreads();
+	// The heavy lifting is done. Just combine the table entries
+	// in this block
 
-	for (i = MAX_OUTER_THREADS / 2; i >= 32; i >>= 1) {
-		if (block_id < i) {
-			s[0*MAX_OUTER_THREADS] ^= s[0*MAX_OUTER_THREADS + i];
-			s[1*MAX_OUTER_THREADS] ^= s[1*MAX_OUTER_THREADS + i];
-		}
-		__syncthreads();
-	}
+	for (j = block_id; j < 32 * VWORDS; j += blockDim.x) {
+		// Repurpose xi and yi
+		xi = v_xor(c[0][j], c[2][j]);
+		v_atomicxor(&xy[2 * j], xi);
 
-
-	if (block_id < 64) {
-		uint32 *t = (uint32 *)scratch;
-
-		i = 4 * (block_id / 2);
-
-		if (block_id % 2 == 0)
-			atomicXor(&xy[i], t[block_id]);
-		else
-			atomicXor(&xy[i + 1], t[block_id]);
-	}
-	else if (block_id < 128) {
-		uint32 *t = (uint32 *)(scratch + MAX_OUTER_THREADS);
-
-		i = 4 * ((block_id - 64) / 2) + 2;
-
-		if (block_id % 2 == 0)
-			atomicXor(&xy[i], t[block_id - 64]);
-		else
-			atomicXor(&xy[i + 1], t[block_id - 64]);
-	}
+		yi = v_xor(c[1][j], c[2][j]);
+		v_atomicxor(&xy[2 * j + 1], yi);
+	}	
 }
 
 #ifdef __cplusplus

@@ -80,6 +80,26 @@ __device__ v_t v_xor(v_t a, v_t b) {
 	return res;
 }
 
+__device__ void v_atomicxor(v_t * a, v_t b) {
+	atomicXor(&(a->w[0]), b.w[0]);
+	#if VWORDS > 1
+	atomicXor(&(a->w[1]), b.w[1]);
+	#if VWORDS > 2
+	atomicXor(&(a->w[2]), b.w[2]);
+	#if VWORDS > 3
+	atomicXor(&(a->w[3]), b.w[3]);
+	#if VWORDS > 4
+	atomicXor(&(a->w[4]), b.w[4]);
+	atomicXor(&(a->w[5]), b.w[5]);
+	atomicXor(&(a->w[6]), b.w[6]);
+	atomicXor(&(a->w[7]), b.w[7]);
+	#endif
+	#endif
+	#endif
+	#endif
+	return;
+}
+
 static const v_t v_zero = {{0}};
 
 __device__ uint32
