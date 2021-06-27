@@ -570,16 +570,25 @@ void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 
 	gpudata_t *d = (gpudata_t *)matrix->extra;
 	gpu_launch_t *launch = d->launch + GPU_K_OUTER_PROD;
-	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
-				launch->threads_per_block;
+	uint32 num_threads, num_blocks;
+	
+	#if VWORDS == 1
+	num_threads = launch->threads_per_block;
+	#elif VWORDS == 2
+	num_threads = MIN(128, launch->threads_per_block);
+	#else
+	num_threads = MIN(64, launch->threads_per_block);
+	#endif
+	
+	num_blocks = (n + num_threads - 1) / num_threads;
 
 	num_blocks = MIN(num_blocks, 
-			(uint32)(10 * d->gpu_info->num_compute_units));
+			(uint32)(100 * d->gpu_info->num_compute_units));
 
 	void *args[4] = {&x, &y, &xy, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
-				num_blocks, 1, 1, launch->threads_per_block, 1, 1,
+				num_blocks, 1, 1, num_threads, 1, 1,
 				0, NULL, args, NULL))
 }
 
