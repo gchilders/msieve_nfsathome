@@ -183,14 +183,18 @@ lanczos_kernel_outer_prod(v_t *x, v_t *y,
 		for (j = 0; j < 32 * VWORDS; j++) {
 			// offset accesses by thread to reduce conflicts
 			uint32 my_j = (j + block_id) & (32 * VWORDS - 1);
+			v_t tmp = yi;
 			// slightly faster than using bfe assembly instruction 
 			k = (xi.w[my_j >> 5] >> (2*(my_j & 31))) & 3;
 
 			// Each array element is hit by 
 			// blockDim.x/(32 * VWORDS)/4 threads on average
-			if (k != 0) {
-				v_atomicxor(&(c[k-1][my_j]), yi);
+			if (k == 0) {
+				int m;
+				for (m = 0; m < VWORDS; m++) tmp.w[m] = 0;
+				k = 1;
 			}
+			v_atomicxor(&(c[k-1][my_j]), tmp);
 			__syncthreads();
 		}
 	}
