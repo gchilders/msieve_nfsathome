@@ -151,66 +151,150 @@ lanczos_kernel_outer_prod(v_t *x, v_t *y,
 	}
 }
 
+#elif VWORDS == 2 || VWORDS == 4
+
+__global__ void
+lanczos_kernel_outer_prod(v_t *x, v_t *y,
+			v_t *xy, uint32 n)
+{
+	// Use 16 * VWORDS threads
+	uint32 i, j, k;
+	uint32 block_id = threadIdx.x;
+	v_t xi, yi, a;
+	__shared__ v_t c[16][16 * VWORDS];
+
+	for (j = block_id; j < 16 * VWORDS; j += blockDim.x) { 
+		for (i = 1; i < 16; i++) {
+			for (k = 0; k < VWORDS; k++) c[i][j].w[k] = 0;
+		}
+		for (i = blockIdx.x; i < n; i += gridDim.x) {
+			xi = x[i];
+			yi = y[i];
+
+			// slightly faster than using bfe assembly instruction 
+			k = (xi.w[j >> 4] >> (4*(j & 15))) & 15;
+
+			c[k][j] = v_xor(c[k][j], yi);
+		}
+		a = v_xor(c[1][j], c[3][j]);
+		a = v_xor(a, c[5][j]);
+		a = v_xor(a, c[7][j]);
+		a = v_xor(a, c[9][j]);
+		a = v_xor(a, c[11][j]);
+		a = v_xor(a, c[13][j]);
+		a = v_xor(a, c[15][j]);
+		v_atomicxor(&xy[4*j], a);
+
+		a = v_xor(c[2][j], c[3][j]);
+		a = v_xor(a, c[6][j]);
+		a = v_xor(a, c[7][j]);
+		a = v_xor(a, c[10][j]);
+		a = v_xor(a, c[11][j]);
+		a = v_xor(a, c[14][j]);
+		a = v_xor(a, c[15][j]);
+		v_atomicxor(&xy[4*j + 1], a);
+
+		a = v_xor(c[4][j], c[5][j]);
+		a = v_xor(a, c[6][j]);
+		a = v_xor(a, c[7][j]);
+		a = v_xor(a, c[12][j]);
+		a = v_xor(a, c[13][j]);
+		a = v_xor(a, c[14][j]);
+		a = v_xor(a, c[15][j]);
+		v_atomicxor(&xy[4*j + 2], a);
+
+		a = v_xor(c[8][j], c[9][j]);
+		a = v_xor(a, c[10][j]);
+		a = v_xor(a, c[11][j]);
+		a = v_xor(a, c[12][j]);
+		a = v_xor(a, c[13][j]);
+		a = v_xor(a, c[14][j]);
+		a = v_xor(a, c[15][j]);
+		v_atomicxor(&xy[4*j + 3], a);
+	}
+}
+
 #else
 
 __global__ void
 lanczos_kernel_outer_prod(v_t *x, v_t *y,
 			v_t *xy, uint32 n)
 {
+	// Use 16 * VWORDS threads
 	uint32 i, j, k;
-	uint32 num_threads = gridDim.x * blockDim.x;
-	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
 	uint32 block_id = threadIdx.x;
 	v_t xi, yi;
-	__shared__ v_t c[3][32 * VWORDS];
+	// Table is too large for shared memory. Use registers.
+	v_t c[16]; // 128 registers for VWORDS=8
 
-	// Zero c[][] in this block
-	for (i = block_id; i < 32 * VWORDS; i += blockDim.x) {
-		for (j = 0; j < VWORDS; j++) {
-			c[0][i].w[j] = 0;
-			c[1][i].w[j] = 0;
-			c[2][i].w[j] = 0;
+	for (j = block_id; j < 16 * VWORDS; j += blockDim.x) {
+		for (i = 1; i < 16; i++) {
+			for (k = 0; k < VWORDS; k++) c[i].w[k] = 0;
 		}
-	}
-	__syncthreads();
+		for (i = blockIdx.x; i < n; i += gridDim.x) {
+			xi = x[i];
+			yi = y[i];
 
-	for (i = grid_id; i < n; i += num_threads) {
-
-		xi = x[i];
-		yi = y[i]; 
-
-#pragma unroll
-		for (j = 0; j < 32 * VWORDS; j++) {
-			// offset accesses by thread to reduce conflicts
-			uint32 my_j = (j + block_id) & (32 * VWORDS - 1);
-			v_t tmp = yi;
 			// slightly faster than using bfe assembly instruction 
-			k = (xi.w[my_j >> 5] >> (2*(my_j & 31))) & 3;
+			k = (xi.w[j >> 4] >> (4*(j & 15))) & 15;
 
-			// Each array element is hit by 
-			// blockDim.x/(32 * VWORDS)/4 threads on average
-			if (k == 0) {
-				int m;
-				for (m = 0; m < VWORDS; m++) tmp.w[m] = 0;
-				k = 1;
-			}
-			v_atomicxor(&(c[k-1][my_j]), tmp);
-			__syncthreads();
+			// c[k] = v_xor(c[k], yi);
+			// Can't reference an array element in registers at runtime.
+			// Doing so forces it into slow local memory.
+			if (k == 1) c[1] = v_xor(c[1], yi);
+			else if (k == 2) c[2] = v_xor(c[2], yi);
+			else if (k == 3) c[3] = v_xor(c[3], yi);
+			else if (k == 4) c[4] = v_xor(c[4], yi);
+			else if (k == 5) c[5] = v_xor(c[5], yi);
+			else if (k == 6) c[6] = v_xor(c[6], yi);
+			else if (k == 7) c[7] = v_xor(c[7], yi);
+			else if (k == 8) c[8] = v_xor(c[8], yi);
+			else if (k == 9) c[9] = v_xor(c[9], yi);
+			else if (k == 10) c[10] = v_xor(c[10], yi);
+			else if (k == 11) c[11] = v_xor(c[11], yi);
+			else if (k == 12) c[12] = v_xor(c[12], yi);
+			else if (k == 13) c[13] = v_xor(c[13], yi);
+			else if (k == 14) c[14] = v_xor(c[14], yi);
+			else if (k == 15) c[15] = v_xor(c[15], yi);
 		}
+		c[0] = v_xor(c[1], c[3]);
+		c[0] = v_xor(c[0], c[5]);
+		c[0] = v_xor(c[0], c[7]);
+		c[0] = v_xor(c[0], c[9]);
+		c[0] = v_xor(c[0], c[11]);
+		c[0] = v_xor(c[0], c[13]);
+		c[0] = v_xor(c[0], c[15]);
+		v_atomicxor(&xy[4*j], c[0]);
+
+		c[0] = v_xor(c[2], c[3]);
+		c[0] = v_xor(c[0], c[6]);
+		c[0] = v_xor(c[0], c[7]);
+		c[0] = v_xor(c[0], c[10]);
+		c[0] = v_xor(c[0], c[11]);
+		c[0] = v_xor(c[0], c[14]);
+		c[0] = v_xor(c[0], c[15]);
+		v_atomicxor(&xy[4*j + 1], c[0]);
+
+		c[0] = v_xor(c[4], c[5]);
+		c[0] = v_xor(c[0], c[6]);
+		c[0] = v_xor(c[0], c[7]);
+		c[0] = v_xor(c[0], c[12]);
+		c[0] = v_xor(c[0], c[13]);
+		c[0] = v_xor(c[0], c[14]);
+		c[0] = v_xor(c[0], c[15]);
+		v_atomicxor(&xy[4*j + 2], c[0]);
+
+		c[0] = v_xor(c[8], c[9]);
+		c[0] = v_xor(c[0], c[10]);
+		c[0] = v_xor(c[0], c[11]);
+		c[0] = v_xor(c[0], c[12]);
+		c[0] = v_xor(c[0], c[13]);
+		c[0] = v_xor(c[0], c[14]);
+		c[0] = v_xor(c[0], c[15]);
+		v_atomicxor(&xy[4*j + 3], c[0]);
 	}
-
-	// The heavy lifting is done. Just combine the table entries
-	// in this block
-
-	for (j = block_id; j < 32 * VWORDS; j += blockDim.x) {
-		// Repurpose xi and yi
-		xi = v_xor(c[0][j], c[2][j]);
-		v_atomicxor(&xy[2 * j], xi);
-
-		yi = v_xor(c[1][j], c[2][j]);
-		v_atomicxor(&xy[2 * j + 1], yi);
-	}	
 }
+
 #endif
 
 #ifdef __cplusplus

@@ -573,11 +573,9 @@ void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 	uint32 num_threads, num_blocks;
 	
 	#if VWORDS == 1
-	num_threads = launch->threads_per_block;
-	#elif VWORDS == 2
-	num_threads = MIN(128, launch->threads_per_block);
+	num_threads = MIN(256, launch->threads_per_block);
 	#else
-	num_threads = MIN(64, launch->threads_per_block);
+	num_threads = MIN(16 * VWORDS, launch->threads_per_block);
 	#endif
 	
 	num_blocks = (n + num_threads - 1) / num_threads;
