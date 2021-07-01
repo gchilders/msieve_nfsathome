@@ -327,6 +327,7 @@ void mul_NxB_BxB_acc_gpu(packed_matrix_t *matrix,
 			CUdeviceptr v, CUdeviceptr x,
 			CUdeviceptr y, uint32 n) {
 
+	gpudata_t *d = (gpudata_t *)matrix->extra;
 	gpu_launch_t *launch = d->launch + GPU_K_INNER_PROD;
 	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
 				launch->threads_per_block;
