@@ -42,13 +42,9 @@ typedef struct {
 
 	gpu_launch_t *launch;
 
-	/* inner product data */
+	/* gpu product data */
 
-	CUdeviceptr inner_scratch;
-
-	/* outer product data */
-
-	CUdeviceptr outer_scratch;
+	CUdeviceptr gpu_scratch;
 
 	/* matrix data */
 

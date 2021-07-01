@@ -353,9 +353,9 @@ void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 	CUDA_TRY(cuMemcpyDtoH(y->host_vec, y->gpu_vec, n * sizeof(v_t)))
 #endif
 
-	CUDA_TRY(cuMemcpyHtoD(d->inner_scratch, x, 
+	CUDA_TRY(cuMemcpyHtoD(d->gpu_scratch, x, 
 				VBITS * sizeof(v_t)))
-	mul_NxB_BxB_acc_gpu(matrix, v->gpu_vec, d->inner_scratch,
+	mul_NxB_BxB_acc_gpu(matrix, v->gpu_vec, d->gpu_scratch,
 				y->gpu_vec, n);
 
 #ifdef LANCZOS_GPU_DEBUG
@@ -592,10 +592,10 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 	gpuvec_t *y = (gpuvec_t *)y_in;
 	gpudata_t *d = (gpudata_t *)matrix->extra;
 
-	CUDA_TRY(cuMemsetD8(d->outer_scratch, 0, VBITS * sizeof(v_t)));
+	CUDA_TRY(cuMemsetD8(d->gpu_scratch, 0, VBITS * sizeof(v_t)));
 
 	mul_BxN_NxB_gpu(matrix, x->gpu_vec, y->gpu_vec, 
-			d->outer_scratch, n);
+			d->gpu_scratch, n);
 
 #ifdef LANCZOS_GPU_DEBUG
 	{
@@ -606,7 +606,7 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 		CUDA_TRY(cuMemcpyDtoH(y->host_vec, y->gpu_vec, n * sizeof(v_t)))
 		mul_BxN_NxB_cpu(x->host_vec, y->host_vec, xy, n);
 
-		CUDA_TRY(cuMemcpyDtoH(tmp, d->outer_scratch, 
+		CUDA_TRY(cuMemcpyDtoH(tmp, d->gpu_scratch, 
 					VBITS * sizeof(v_t)))
 
 		for (i = 0; i < VBITS; i++) {
@@ -619,7 +619,7 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 		}
 	}
 #else
-	CUDA_TRY(cuMemcpyDtoH(xy, d->outer_scratch, VBITS * sizeof(v_t)))
+	CUDA_TRY(cuMemcpyDtoH(xy, d->gpu_scratch, VBITS * sizeof(v_t)))
 #endif
 
 #ifdef HAVE_MPI

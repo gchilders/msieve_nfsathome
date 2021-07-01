@@ -467,8 +467,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 
 	/* allocate scratch arrays */
 
-	CUDA_TRY(cuMemAlloc(&d->inner_scratch, VBITS * sizeof(v_t)))
-	CUDA_TRY(cuMemAlloc(&d->outer_scratch, VBITS * sizeof(v_t)))
+	CUDA_TRY(cuMemAlloc(&d->gpu_scratch, VBITS * sizeof(v_t)))
 
 	/* set up the matrix on the card */
 
@@ -482,8 +481,7 @@ void matrix_extra_free(packed_matrix_t *p) {
 
 	gpu_matrix_free(p);
 
-	CUDA_TRY(cuMemFree(d->inner_scratch))
-	CUDA_TRY(cuMemFree(d->outer_scratch))
+	CUDA_TRY(cuMemFree(d->gpu_scratch))
 
 	free(d->launch);
 
