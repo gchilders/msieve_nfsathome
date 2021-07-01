@@ -97,7 +97,7 @@ void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 		   CUdeviceptr xy, uint32 n);
 
 void mul_NxB_BxB_acc_gpu(packed_matrix_t *matrix, 
-			CUdeviceptr v, v_t *x,
+			CUdeviceptr v, CUdeviceptr x,
 			CUdeviceptr y, uint32 n);
 
 #ifdef __cplusplus

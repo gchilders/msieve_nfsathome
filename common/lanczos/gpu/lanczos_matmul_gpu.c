@@ -467,7 +467,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 
 	/* allocate scratch arrays */
 
-	CUDA_TRY(cuMemAlloc(&d->inner_scratch, 256 * 8 * VWORDS * sizeof(v_t)))
+	CUDA_TRY(cuMemAlloc(&d->inner_scratch, VBITS * sizeof(v_t)))
 	CUDA_TRY(cuMemAlloc(&d->outer_scratch, VBITS * sizeof(v_t)))
 
 	/* set up the matrix on the card */
@@ -608,21 +608,13 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 	}
 
 	/* handle dense rows */
-	{
-		v_t *tmp;
-		uint32 n_needed = (p->num_dense_rows + VBITS - 1) / VBITS;
-		tmp = (v_t *)aligned_malloc(n_needed * VBITS * sizeof(v_t), 64);
 
-		CUDA_TRY(cuMemcpyDtoH(tmp, x->gpu_vec, n_needed * VBITS * sizeof(v_t)))
-
-		for (i = 0; i < n_needed; i++) {
-			mul_NxB_BxB_acc_gpu(p, 
-				d->dense_blocks[i], 
-				tmp + VBITS * i,
-				(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i), 
-				p->ncols);
-		}
-		aligned_free(tmp);
+	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++) {
+		mul_NxB_BxB_acc_gpu(p, 
+			d->dense_blocks[i], 
+			(CUdeviceptr)((v_t *)x->gpu_vec + VBITS * i),
+			(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i), 
+			p->ncols);
 	}
 }
 

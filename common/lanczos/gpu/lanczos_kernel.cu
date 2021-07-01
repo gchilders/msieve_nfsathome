@@ -44,27 +44,39 @@ lanczos_kernel_xor(v_t *dest, v_t *src, uint32 n)
 
 /*------------------------------------------------------------------------*/
 __global__ void
-lanczos_kernel_inner_prod(v_t *y, v_t *v, 
-			v_t *lookup, uint32 n)
+lanczos_kernel_inner_prod(v_t *y, v_t *v,
+			v_t *x, uint32 n)
 {
 	uint32 i, j;
 	uint32 num_threads = gridDim.x * blockDim.x;
 	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
+	v_t acc;
+	__shared__ v_t c[32*VWORDS][3];
+
+	for (i = threadIdx.x; i < 32 * VWORDS; i += blockDim.x) {
+		acc = x[2 * i];
+		c[i][0] = acc;
+
+		acc = v_xor(acc, x[2 * i + 1]);
+		c[i][2] = acc;
+
+		acc = v_xor(acc, x[2 * i]);
+		c[i][1] = acc;
+	}
+
+	__syncthreads();
 
 	for (i = grid_id; i < n; i += num_threads) {
-
 		v_t vi = v[i];
-		v_t accum;
-		for (j = 0; j < VWORDS; j++) accum.w[j] = 0;
-		
-		for (j = 0; j < 8 * VWORDS; j++) {
-			uint32 k = j*256 + ((vi.w[(j >> 3)] >> (8*(j % 8))) & 255);
-			// uint32 k = j*256 + bfe(vi.w[(j >> 3)], 8*(j % 8), 8); // faster?			
-			accum = v_xor(accum, lookup[k]);
+		for (j = 0; j < VWORDS; j++) acc.w[j] = 0;
+
+		for (j = 0; j < 32 * VWORDS; j++) {
+			uint32 k = (vi.w[j >> 5] >> (2*(j & 31))) & 3;
+			if (k != 0) acc = v_xor(acc, c[j][k-1]);
 		}
-		y[i] = v_xor(y[i], accum);
+		y[i] = v_xor(y[i], acc);
 	}
-}	
+}
 
 /*------------------------------------------------------------------------*/
 
