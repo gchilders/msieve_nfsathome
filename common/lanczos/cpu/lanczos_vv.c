@@ -152,21 +152,10 @@ static void core_NxB_BxB_acc(const v_t *v, const v_t *c, v_t * __restrict__ y, u
 		v_t accum;
 		for (j = 0; j < VWORDS; j++) accum.w[j] = 0;
 
-		#if VWORDS == 1
-		accum = v_xor(accum, c[ 0*256 + ((uint8)(vi.w[0] >>  0))]);
-		accum = v_xor(accum, c[ 1*256 + ((uint8)(vi.w[0] >>  8))]);
-		accum = v_xor(accum, c[ 2*256 + ((uint8)(vi.w[0] >> 16))]);
-		accum = v_xor(accum, c[ 3*256 + ((uint8)(vi.w[0] >> 24))]);
-		accum = v_xor(accum, c[ 4*256 + ((uint8)(vi.w[0] >> 32))]);
-		accum = v_xor(accum, c[ 5*256 + ((uint8)(vi.w[0] >> 40))]);
-		accum = v_xor(accum, c[ 6*256 + ((uint8)(vi.w[0] >> 48))]);
-		accum = v_xor(accum, c[ 7*256 + ((uint8)(vi.w[0] >> 56))]);
-		#else
 		for (j = 0; j < 8 * VWORDS; j++) {
-			uint32 k = j*256 + ((vi.w[(j >> 3)] >> (8*(j % 8))) & 255);
+			uint32 k = j*256 + ((vi.w[(j >> 3)] >> (8*(j & 7))) & 255);
 			accum = v_xor(accum, c[k]);
 		}
-		#endif
 		y[i] = v_xor(y[i], accum);
 	}
 #endif
@@ -236,12 +225,7 @@ static void mul_NxB_BxB_precomp(v_t *c, v_t *x) {
 		uint32 word = graycode[2 * i];
 		uint32 bit = graycode[2 * i + 1];
 
-		#if VWORDS == 1
-		BXB_ACC(0); BXB_ACC(1); BXB_ACC(2); BXB_ACC(3);
-		BXB_ACC(4); BXB_ACC(5); BXB_ACC(6); BXB_ACC(7);
-		#else
 		for (j = 0; j < 8 * VWORDS; j++) { BXB_ACC(j); }
-		#endif
 	}
 }
 
@@ -424,24 +408,16 @@ static void core_BxN_NxB(const v_t *x, v_t * __restrict__ c, const v_t *y, const
 #else
 
 	#define NXB_ACC(i) \
-		k = i*256 + ((xi.w[(i >> 3)] >> (8*(i % 8))) & 255); c[k] = v_xor(c[k], yi)
+		k = i*256 + ((xi.w[(i >> 3)] >> (8*(i & 7))) & 255); c[k] = v_xor(c[k], yi)
 
 	for (i = 0; i < n; i++) {
 		v_t xi = x[i];
 		v_t yi = y[i];
 
-		#if VWORDS == 1
-		{
-			uint32 k;
-			NXB_ACC(0); NXB_ACC(1); NXB_ACC(2); NXB_ACC(3);
-			NXB_ACC(4); NXB_ACC(5); NXB_ACC(6); NXB_ACC(7);
-		}
-		#else
 		for (j = 0; j < 8 * VWORDS; j++) { 
 			uint32 k;
 			NXB_ACC(j); 
 		}
-		#endif
 	}
 #endif
 }
@@ -463,12 +439,7 @@ static void mul_BxN_NxB_postproc(v_t *c, v_t *xy) {
 
 		for (j = 0; j < 256; j++) {
 			if ((j >> i) & 1) {
-				#if VWORDS == 1
-				NXB_POST(0); NXB_POST(1); NXB_POST(2); NXB_POST(3);
-				NXB_POST(4); NXB_POST(5); NXB_POST(6); NXB_POST(7);
-				#else
 				for (k = 0; k < 8 * VWORDS; k++) { NXB_POST(k); }
-				#endif
 			}
 		}
 

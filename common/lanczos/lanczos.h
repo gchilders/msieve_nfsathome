@@ -61,7 +61,7 @@ static INLINE v_t v_xor(v_t a, v_t b) {
 }
 
 static INLINE uint32 v_bitset(v_t a, uint32 bit) {
-	if (a.w[bit / 64] & ((uint64)1 << (bit % 64)))
+	if (a.w[bit >> 6] & ((uint64)1 << (bit & 63)))
 		return 1;
 	return 0;
 }

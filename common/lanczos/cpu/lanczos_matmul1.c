@@ -88,7 +88,10 @@ static void mul_one_med_block(packed_block_t *curr_block,
 		:"%eax", "%ecx", "%edx", "%mm0", "memory", "cc");
 
 	#undef _txor
-
+	
+		for (; i < count; i++)
+			accum = v_xor(accum, curr_col[entries[i+2]]);
+		
 #elif defined(GCC_ASM64X) && VWORDS == 1
 
 	#define _txor(k)				\
@@ -127,7 +130,9 @@ static void mul_one_med_block(packed_block_t *curr_block,
 		:"%rax", "%rcx", "%rdx", "%rsi", "memory", "cc");
 
 	#undef _txor
-
+	
+		for (; i < count; i++)
+			accum = v_xor(accum, curr_col[entries[i+2]]);
 #elif defined(MSC_ASM32A) && defined(HAS_MMX) && defined(NDEBUG) && VWORDS == 1
 
 	#define _txor(k)				\
@@ -169,31 +174,15 @@ static void mul_one_med_block(packed_block_t *curr_block,
 	}
 
 	#undef _txor
-
-#else
-	accum = v_zero;
-	for (i = 0; i < (count & (uint32)(~15)); i += 16) {
-		accum = v_xor(accum, curr_col[entries[i+2+0]]);
-		accum = v_xor(accum, curr_col[entries[i+2+1]]);
-		accum = v_xor(accum, curr_col[entries[i+2+2]]);
-		accum = v_xor(accum, curr_col[entries[i+2+3]]);
-		accum = v_xor(accum, curr_col[entries[i+2+4]]);
-		accum = v_xor(accum, curr_col[entries[i+2+5]]);
-		accum = v_xor(accum, curr_col[entries[i+2+6]]);
-		accum = v_xor(accum, curr_col[entries[i+2+7]]);
-		accum = v_xor(accum, curr_col[entries[i+2+8]]);
-		accum = v_xor(accum, curr_col[entries[i+2+9]]);
-		accum = v_xor(accum, curr_col[entries[i+2+10]]);
-		accum = v_xor(accum, curr_col[entries[i+2+11]]);
-		accum = v_xor(accum, curr_col[entries[i+2+12]]);
-		accum = v_xor(accum, curr_col[entries[i+2+13]]);
-		accum = v_xor(accum, curr_col[entries[i+2+14]]);
-		accum = v_xor(accum, curr_col[entries[i+2+15]]);
-	}
-
-#endif
+	
 		for (; i < count; i++)
 			accum = v_xor(accum, curr_col[entries[i+2]]);
+#else
+		accum = v_zero;
+		for (i = 0; i < count; i++)
+			accum = v_xor(accum, curr_col[entries[i+2]]);
+
+#endif
 		curr_b[row] = v_xor(curr_b[row], accum);
 		entries += count + 2;
 	}
@@ -301,7 +290,7 @@ static void mul_one_block(const packed_block_t *curr_block,
 		PREFETCH(entries + i + 48 / VWORDS);
 		#endif
 		uint64* b = (uint64*)(curr_b  + entries[i].row_off);
-		const uint64* c = (const uint64*)(curr_col +entries[i].col_off);
+		const uint64* c = (const uint64*)(curr_col + entries[i].col_off);
 		svstnt1_u64(everything,
 			b,
 			sveor_u64_x(everything,

@@ -91,6 +91,9 @@ static void mul_trans_one_med_block(packed_block_t *curr_block,
 		:"%eax", "%ecx", "%edx", "%mm0", "%mm1", "memory", "cc");
 
 	#undef _txor
+	
+		for (; i < count; i++)
+			curr_b[entries[i+2]] = v_xor(t, curr_b[entries[i+2]]);
 
 #elif defined(GCC_ASM64X) && VWORDS == 1
 
@@ -139,6 +142,9 @@ static void mul_trans_one_med_block(packed_block_t *curr_block,
 		 "%r12", "%r13", "%r14", "%r15", "memory", "cc");
 
 	#undef _txor
+	
+		for (; i < count; i++)
+			curr_b[entries[i+2]] = v_xor(t, curr_b[entries[i+2]]);
 
 #elif defined(MSC_ASM32A) && defined(HAS_MMX) && VWORDS == 1
 
@@ -185,45 +191,13 @@ static void mul_trans_one_med_block(packed_block_t *curr_block,
 	}
 
 	#undef _txor
-
-#else
-		for (i = 0; i < (count & (uint32)(~15)); i += 16) {
-			curr_b[entries[i+2+ 0]] = v_xor(t, 
-					curr_b[entries[i+2+ 0]]);
-			curr_b[entries[i+2+ 1]] = v_xor(t, 
-					curr_b[entries[i+2+ 1]]);
-			curr_b[entries[i+2+ 2]] = v_xor(t, 
-					curr_b[entries[i+2+ 2]]);
-			curr_b[entries[i+2+ 3]] = v_xor(t, 
-					curr_b[entries[i+2+ 3]]);
-			curr_b[entries[i+2+ 4]] = v_xor(t, 
-					curr_b[entries[i+2+ 4]]);
-			curr_b[entries[i+2+ 5]] = v_xor(t, 
-					curr_b[entries[i+2+ 5]]);
-			curr_b[entries[i+2+ 6]] = v_xor(t, 
-					curr_b[entries[i+2+ 6]]);
-			curr_b[entries[i+2+ 7]] = v_xor(t, 
-					curr_b[entries[i+2+ 7]]);
-			curr_b[entries[i+2+ 8]] = v_xor(t, 
-					curr_b[entries[i+2+ 8]]);
-			curr_b[entries[i+2+ 9]] = v_xor(t, 
-					curr_b[entries[i+2+ 9]]);
-			curr_b[entries[i+2+10]] = v_xor(t, 
-					curr_b[entries[i+2+10]]);
-			curr_b[entries[i+2+11]] = v_xor(t, 
-					curr_b[entries[i+2+11]]);
-			curr_b[entries[i+2+12]] = v_xor(t, 
-					curr_b[entries[i+2+12]]);
-			curr_b[entries[i+2+13]] = v_xor(t, 
-					curr_b[entries[i+2+13]]);
-			curr_b[entries[i+2+14]] = v_xor(t, 
-					curr_b[entries[i+2+14]]);
-			curr_b[entries[i+2+15]] = v_xor(t, 
-					curr_b[entries[i+2+15]]);
-		}
-#endif
+	
 		for (; i < count; i++)
 			curr_b[entries[i+2]] = v_xor(t, curr_b[entries[i+2]]);
+#else
+		for (i = 0; i < count; i++)
+			curr_b[entries[i+2]] = v_xor(t, curr_b[entries[i+2]]);
+#endif
 		entries += count + 2;
 	}
 }
