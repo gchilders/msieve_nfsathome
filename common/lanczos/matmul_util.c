@@ -390,8 +390,8 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 	curr_buf = recv_buf + my_id * chunk;
     
 	/* put own part in place first */
-#if !defined(HAVE_CUDA) || defined(HAVE_CUDAAWARE_MPI)
-	vv_copy(curr_buf, send_buf, size);
+#if defined(HAVE_CUDAAWARE_MPI)
+	CUDA_TRY(cuMemcpyDtoD(curr_buf, send_buf, size * sizeof(v_t)))
 #else
 	memcpy(curr_buf, send_buf, size * sizeof(v_t)); /* working on host vec */
 #endif
