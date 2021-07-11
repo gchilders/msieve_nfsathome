@@ -63,7 +63,10 @@ gpu_init(gpu_config_t *config)
 
 	memset(config, 0, sizeof(gpu_config_t));
 
+#ifndef HAVE_CUDAAWARE_MPI
+	/* A CUDA-Aware MPI will have already created a context */
 	CUDA_TRY(cuInit(0))
+#endif
 	CUDA_TRY(cuDeviceGetCount(&config->num_gpu))
 	if (config->num_gpu == 0)
 		return;
