@@ -693,7 +693,43 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 /*-------------------------------------------------------------------*/
 size_t packed_matrix_sizeof(packed_matrix_t *p) {
 
-	/* FIXME */
-	return 0;
+	uint32 i;
+	size_t mem_use;
+	gpudata_t *d = (gpudata_t*) p->extra;
+
+	/* account for the vectors used in the lanczos iteration */
+
+#ifdef HAVE_MPI
+	mem_use = (6 * p->nsubcols + 2 * 
+			MAX(p->nrows, p->ncols)) * sizeof(v_t);
+#else
+	mem_use = 7 * p->max_ncols * sizeof(v_t);
+#endif
+
+	/* and for the vv kernel scratch array */
+	
+	mem_use += VBITS * sizeof(v_t);
+
+	/* and for the matrix */
+	
+	/* dense rows */
+	mem_use += ((p->num_dense_rows + VBITS - 1) / VBITS) * p->ncols * sizeof(v_t);
+	
+	/* spmv scratch array */
+	mem_use += MAX(p->ncols, p->nrows) * sizeof(v_t);
+		
+	/* matrix in CSR format */
+	for (i = 0; i < d->num_block_rows; i++) {
+		block_row_t *b = d->block_rows + i;
+		mem_use += (b->num_rows + b->num_col_entries) * sizeof(uint32);
+	}
+	
+	/* transpose matrix in CSR format */
+	for (i = 0; i < d->num_trans_block_rows; i++) {
+		block_row_t *b = d->trans_block_rows + i;
+		mem_use += (b->num_rows + b->num_col_entries) * sizeof(uint32);
+	}
+	
+	return mem_use;
 }
 
