@@ -719,17 +719,17 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 	mem_use += MAX(p->ncols, p->nrows) * sizeof(v_t);
 		
 	/* matrix in CSR format */
+	/* second copy of row array is for stripping empty rows in MGPU spmv library */
 	for (i = 0; i < d->num_block_rows; i++) {
 		block_row_t *b = d->block_rows + i;
-		mem_use += (b->num_rows + b->num_col_entries) * sizeof(uint32);
+		mem_use += (2 * b->num_rows + b->num_col_entries) * sizeof(uint32);
 	}
 	
 	/* transpose matrix in CSR format */
 	for (i = 0; i < d->num_trans_block_rows; i++) {
 		block_row_t *b = d->trans_block_rows + i;
-		mem_use += (b->num_rows + b->num_col_entries) * sizeof(uint32);
+		mem_use += (2 * b->num_rows + b->num_col_entries) * sizeof(uint32);
 	}
 	
 	return mem_use;
 }
-
