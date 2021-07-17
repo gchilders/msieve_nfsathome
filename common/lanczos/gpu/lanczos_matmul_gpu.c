@@ -693,8 +693,8 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 /*-------------------------------------------------------------------*/
 size_t packed_matrix_sizeof(packed_matrix_t *p) {
 
-	uint32 i;
-	size_t mem_use;
+	uint32 i, max_block_rows;
+	size_t mem_use, tot_mem_use;
 	gpudata_t *d = (gpudata_t*) p->extra;
 
 	/* account for the vectors used in the lanczos iteration */
@@ -707,29 +707,44 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 #endif
 
 	/* and for the vv kernel scratch array */
-	
+
 	mem_use += VBITS * sizeof(v_t);
 
+	tot_mem_use = mem_use;
+	printf("vector memory use: %.1f MB\n", (double)mem_use/1048576);
+
 	/* and for the matrix */
-	
+
 	/* dense rows */
-	mem_use += ((p->num_dense_rows + VBITS - 1) / VBITS) * p->ncols * sizeof(v_t);
-	
+	mem_use = ((p->num_dense_rows + VBITS - 1) / VBITS) * p->ncols * sizeof(v_t);
+
+	tot_mem_use += mem_use;
+	printf("dense rows memory use: %.1f MB\n", (double)mem_use/1048576);
+
 	/* spmv scratch array */
-	mem_use += MAX(p->ncols, p->nrows) * sizeof(v_t);
-		
+	mem_use = MAX(p->ncols, p->nrows) * sizeof(v_t);
+
 	/* matrix in CSR format */
-	/* second copy of row array is for stripping empty rows in MGPU spmv library */
+	max_block_rows = 0;
 	for (i = 0; i < d->num_block_rows; i++) {
 		block_row_t *b = d->block_rows + i;
-		mem_use += (2 * b->num_rows + b->num_col_entries) * sizeof(uint32);
+		mem_use += (b->num_rows + b->num_col_entries) * sizeof(uint32);
+		if (b->num_rows > max_block_rows) max_block_rows = b->num_rows;
 	}
-	
+
 	/* transpose matrix in CSR format */
 	for (i = 0; i < d->num_trans_block_rows; i++) {
 		block_row_t *b = d->trans_block_rows + i;
-		mem_use += (2 * b->num_rows + b->num_col_entries) * sizeof(uint32);
+		mem_use += (b->num_rows + b->num_col_entries) * sizeof(uint32);
+		if (b->num_rows > max_block_rows) max_block_rows = b->num_rows;
 	}
-	
-	return mem_use;
+
+	/* second copy of block row array for stripping empty rows in MGPU spmv library */
+	mem_use += (max_block_rows + 1) * sizeof(uint32);
+
+	tot_mem_use += mem_use;
+	printf("sparse matrix memory use: %.1f MB\n", (double)mem_use/1048576);
+	printf("  empty rows memory use: %.1f MB\n", (double)(max_block_rows + 1) * sizeof(uint32) / 1048576);
+
+	return tot_mem_use;
 }
