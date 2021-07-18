@@ -203,8 +203,6 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 	b->spmv_preprocess_handle = d->spmv_engine_preprocess(&spmv_data);
 }
 
-static const uint32 preferred_block = 200000;
-
 /*-------------------------------------------------------------------*/
 static void gpu_matrix_init(packed_matrix_t *p) {
 
@@ -234,10 +232,15 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 
 	/* deal with the sparse rows */
 
+#ifdef HAVE_MPI
+	p->preferred_block = MAX(p->max_nrows, p->max_ncols) / MIN(p->mpi_nrows, p->mpi_ncols) / 2 + 1;
+#else
+	p->preferred_block = MAX(p->nrows, p->ncols) / 2 + 1;
+#endif
 	while (start_col < p->ncols) {
 
 		block_row_t *b;
-		uint32 block_size = MIN(preferred_block, 
+		uint32 block_size = MIN(p->preferred_block, 
 					p->ncols - start_col);
 		uint32 num_entries;
 
@@ -275,7 +278,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 	while (start_row < p->nrows) {
 
 		block_row_t *b;
-		uint32 block_size = MIN(preferred_block, 
+		uint32 block_size = MIN(p->preferred_block, 
 					p->nrows - start_row);
 		uint32 num_entries;
 
@@ -543,7 +546,7 @@ static void mul_packed_gpu(packed_matrix_t *p,
 
 		}
 
-		start_col += preferred_block;
+		start_col += p->preferred_block;
 	}
 
 	/* handle dense rows */
@@ -604,7 +607,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 
 		}
 
-		start_row += preferred_block;
+		start_row += p->preferred_block;
 	}
 
 	/* handle dense rows */
