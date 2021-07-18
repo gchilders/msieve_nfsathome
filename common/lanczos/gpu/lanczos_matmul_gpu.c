@@ -232,10 +232,12 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 
 	/* deal with the sparse rows */
 
+	printf("converting matrix to CSR and copying it onto the GPU\n");
+
 #ifdef HAVE_MPI
-	p->preferred_block = MAX(p->max_nrows, p->max_ncols) / MIN(p->mpi_nrows, p->mpi_ncols) / 2 + 1;
+	p->preferred_block = MAX(p->max_nrows, p->max_ncols) / MIN(p->mpi_nrows, p->mpi_ncols) / 4 + 1;
 #else
-	p->preferred_block = MAX(p->nrows, p->ncols) / 2 + 1;
+	p->preferred_block = MAX(p->nrows, p->ncols) / 4 + 1;
 #endif
 	while (start_col < p->ncols) {
 
@@ -250,6 +252,12 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 					start_col + block_size,
 					&entries,
 					&num_entries_alloc);
+
+		if (num_entries > 2147483647) {
+			printf("max column entries is 2147483647\n");
+			printf("adjust preferred block to compensate\n");
+			exit(42);
+		}
 
 		if (num_block_rows == num_block_rows_alloc) {
 			num_block_rows_alloc *= 2;
@@ -288,6 +296,12 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 					0, p->ncols,
 					&entries,
 					&num_entries_alloc);
+
+		if (num_entries > 2147483647) {
+			printf("max column entries is 2147483647\n");
+			printf("adjust preferred block to compensate\n");
+			exit(42);
+		}
 
 		if (num_trans_block_rows == num_trans_block_rows_alloc) {
 			num_trans_block_rows_alloc *= 2;
