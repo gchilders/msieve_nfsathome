@@ -756,12 +756,12 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 		if (b->num_rows > max_block_rows) max_block_rows = b->num_rows;
 	}
 
-	/* second copy of block row array for stripping empty rows in MGPU spmv library */
+	/* large arrays used by MGPU spmv library */
 	mem_use += (max_block_rows + 1) * sizeof(uint32);
+	mem_use += max_block_rows * sizeof(v_t);
 
 	tot_mem_use += mem_use;
 	printf("sparse matrix memory use: %.1f MB\n", (double)mem_use/1048576);
-	printf("  empty rows memory use: %.1f MB\n", (double)(max_block_rows + 1) * sizeof(uint32) / 1048576);
 
 	return tot_mem_use;
 }
