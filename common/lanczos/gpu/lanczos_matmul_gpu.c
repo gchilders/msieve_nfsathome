@@ -235,9 +235,11 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 	printf("converting matrix to CSR and copying it onto the GPU\n");
 
 #ifdef HAVE_MPI
-	p->preferred_block = MAX(p->max_nrows, p->max_ncols) / MIN(p->mpi_nrows, p->mpi_ncols) / 4 + 1;
+	p->preferred_block = MAX(p->max_nrows, p->max_ncols) / MIN(p->mpi_nrows, p->mpi_ncols) / 2 + 1;
+	p->preferred_trans_block = MAX(p->max_nrows, p->max_ncols) / MIN(p->mpi_nrows, p->mpi_ncols) / 4 + 1;
 #else
-	p->preferred_block = MAX(p->nrows, p->ncols) / 4 + 1;
+	p->preferred_block = MAX(p->nrows, p->ncols) / 2 + 1;
+	p->preferred_trans_block = MAX(p->nrows, p->ncols) / 4 + 1;
 #endif
 	while (start_col < p->ncols) {
 
@@ -286,7 +288,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 	while (start_row < p->nrows) {
 
 		block_row_t *b;
-		uint32 block_size = MIN(p->preferred_block, 
+		uint32 block_size = MIN(p->preferred_trans_block, 
 					p->nrows - start_row);
 		uint32 num_entries;
 
@@ -299,7 +301,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 
 		if (num_entries > 2147483647) {
 			printf("max column entries is 2147483647\n");
-			printf("adjust preferred block to compensate\n");
+			printf("adjust preferred transpose block to compensate\n");
 			exit(42);
 		}
 
@@ -621,7 +623,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 
 		}
 
-		start_row += p->preferred_block;
+		start_row += p->preferred_trans_block;
 	}
 
 	/* handle dense rows */

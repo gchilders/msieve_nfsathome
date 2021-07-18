@@ -143,6 +143,7 @@ typedef struct packed_matrix_t {
 	uint32 num_threads;
 
 	uint32 preferred_block; /* used by the CUDA code */
+	uint32 preferred_trans_block; /* used by the CUDA code */
 
 	la_col_t *unpacked_cols;  /* used if no packing takes place */
 
