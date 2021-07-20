@@ -221,6 +221,7 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 	uint32 next_id, prev_id;
 	MPI_Status mpi_status;
 	MPI_Request mpi_req;
+	int *counts, *offsets;
     
 	if (num_nodes == 1) {
 		vv_copy(recv_buf_in, send_buf_in, total_size);
@@ -247,8 +248,33 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 	/* split data */
     
 	chunk = total_size / num_nodes;
-	remainder = total_size % num_nodes;	
-	
+	remainder = total_size % num_nodes;
+
+#if 0 /* Use standard MPI collectives */
+
+	counts = (int *)malloc(num_nodes * sizeof(int));
+	offsets = (int *)malloc(num_nodes * sizeof(int));
+	size = chunk;
+	if (my_id == num_nodes - 1) size += remainder;
+
+	for (i = 0; i < num_nodes; i++) {
+		counts[i] = VWORDS * chunk;
+		offsets[i] = i * VWORDS * chunk;
+	}
+	counts[num_nodes - 1] += VWORDS * remainder;
+
+	MPI_TRY(MPI_Reduce_scatter(send_buf, recv_buf, counts,
+		MPI_LONG_LONG, MPI_BXOR, comm))
+	/* MPI_TRY(MPI_Reduce(send_buf, scratch, VWORDS * total_size, MPI_LONG_LONG,
+               MPI_BXOR, 0, comm))
+	MPI_TRY(MPI_Scatterv(scratch, counts, offsets,
+                 MPI_LONG_LONG, recv_buf, VWORDS * size,
+                 MPI_LONG_LONG, 0, comm)) */
+
+	free(counts);
+	free(offsets);
+#else
+
 	/* we expect a circular topology here */
     
 	next_id = mp_modadd_1(my_id, 1, num_nodes);
@@ -335,9 +361,10 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 	/* now wait for the send to end */
     
 	MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
+#endif
 
 #if defined(HAVE_CUDA) && !defined(HAVE_CUDAAWARE_MPI)
-	vv_copyin(recv_buf_in, recv_buf, size); 	
+	vv_copyin(recv_buf_in, recv_buf, size);
 #endif
 }
 
@@ -353,6 +380,12 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 	MPI_Status mpi_status;
 	MPI_Request mpi_req;
 	v_t *curr_buf, *send_buf, *recv_buf;
+	int *counts, *offsets;
+
+	if (num_nodes == 1) {
+                vv_copy(recv_buf_in, send_buf_in, total_size);
+                return;
+        }
     
 	/* split data */
     
@@ -373,7 +406,7 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 	if (my_id == num_nodes - 1)
 		size += remainder;
 
-#ifdef HAVE_CUDA 
+#ifdef HAVE_CUDA
 #ifdef HAVE_CUDAAWARE_MPI
 	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->gpu_vec;
 	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->gpu_vec;
@@ -387,6 +420,22 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 	recv_buf = (v_t *)recv_buf_in;
 #endif
 
+#if 0 /* Use standard MPI collectives */
+
+	counts = (int *)malloc(num_nodes * sizeof(int));
+	offsets = (int *)malloc(num_nodes * sizeof(int));
+	for (i = 0; i < num_nodes; i++) {
+		counts[i] = VWORDS * chunk;
+		offsets[i] = i * VWORDS * chunk;
+	}
+	counts[num_nodes - 1] += VWORDS * remainder;
+
+	MPI_TRY(MPI_Allgatherv(send_buf, VWORDS * size, MPI_LONG_LONG,
+                   recv_buf, counts, offsets, MPI_LONG_LONG, comm))
+
+	free(counts);
+	free(offsets);
+#else
 	curr_buf = recv_buf + my_id * chunk;
     
 	/* put own part in place first */
@@ -421,6 +470,8 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
         
 		MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
 	}
+#endif
+
 #if defined(HAVE_CUDA) && !defined(HAVE_CUDAAWARE_MPI)
 	vv_copyin(recv_buf_in, recv_buf, total_size); 	
 #endif
