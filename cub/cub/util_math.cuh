@@ -1,6 +1,5 @@
 /******************************************************************************
- * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -13,9 +12,9 @@
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ *AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
  * DISCLAIMED. IN NO EVENT SHALL NVIDIA CORPORATION BE LIABLE FOR ANY
  * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
  * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
@@ -28,35 +27,49 @@
 
 /**
  * \file
- * Place-holder for prefixing the cub namespace
+ * Define helper math functions.
  */
 
 #pragma once
 
-#include "version.cuh"
+#include <type_traits>
 
-// For example:
-//#define CUB_NS_PREFIX namespace thrust{ namespace detail {
-//#define CUB_NS_POSTFIX } }
+#include "util_namespace.cuh"
 
-#ifndef CUB_NS_PREFIX
-#define CUB_NS_PREFIX
-#endif
-
-#ifndef CUB_NS_POSTFIX
-#define CUB_NS_POSTFIX
-#endif
-
-// Declare these namespaces here for the purpose of Doxygenating them
+// Optional outer namespace(s)
 CUB_NS_PREFIX
 
-/*! \namespace cub
- *  \brief \p cub is the top-level namespace which contains all CUB
- *         functions and types.
- */
+// CUB namespace
 namespace cub
 {
 
+namespace detail
+{
+
+template <typename T>
+using is_integral_or_enum =
+  std::integral_constant<bool,
+                         std::is_integral<T>::value || std::is_enum<T>::value>;
+
 }
 
-CUB_NS_POSTFIX
+/**
+ * Divide n by d, round up if any remainder, and return the result.
+ *
+ * Effectively performs `(n + d - 1) / d`, but is robust against the case where
+ * `(n + d - 1)` would overflow.
+ */
+template <typename NumeratorT, typename DenominatorT>
+__host__ __device__ __forceinline__ constexpr NumeratorT
+DivideAndRoundUp(NumeratorT n, DenominatorT d)
+{
+  static_assert(cub::detail::is_integral_or_enum<NumeratorT>::value &&
+                cub::detail::is_integral_or_enum<DenominatorT>::value,
+                "DivideAndRoundUp is only intended for integral types.");
+
+  // Static cast to undo integral promotion.
+  return static_cast<NumeratorT>(n / d + (n % d != 0 ? 1 : 0));
+}
+
+} // namespace cub
+CUB_NS_POSTFIX // Optional outer namespace(s)

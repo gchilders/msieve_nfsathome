@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -33,11 +33,9 @@
 
 #pragma once
 
-#include "../util_arch.cuh"
+#include "../config.cuh"
 #include "../util_ptx.cuh"
-#include "../util_macro.cuh"
 #include "../util_type.cuh"
-#include "../util_namespace.cuh"
 
 /// Optional outer namespace(s)
 CUB_NS_PREFIX
@@ -177,8 +175,11 @@ public:
 
         CTA_SYNC();
 
-        if ((linear_tid + distance >= 0) && (linear_tid + distance < BLOCK_THREADS))
-            output = temp_storage[linear_tid + distance].prev;
+        const int offset_tid = static_cast<int>(linear_tid) + distance;
+        if ((offset_tid >= 0) && (offset_tid < BLOCK_THREADS))
+        {
+            output = temp_storage[static_cast<size_t>(offset_tid)].prev;
+        }
     }
 
 

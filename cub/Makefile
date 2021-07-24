@@ -11,12 +11,12 @@ ifeq ($(WIN64),1)
 else
 	NVCCFLAGS += -m32
 endif
-	NVCCFLAGS += -Xptxas -v -Xcudafe -\# -shared
+	NVCCFLAGS += -Xptxas -v -Xcudafe -\# -shared -Xcompiler /fp:strict
 else
 	NVCC = "$(shell which nvcc)"
 	CUDA_ROOT = $(shell dirname $(NVCC))/../
 	EXT = so
-	NVCCFLAGS += -Xptxas -v -Xcudafe -\# -shared \
+	NVCCFLAGS += -Xptxas -v -Xcudafe -\# -shared -Xcompiler -ffloat-store \
 			-Xcompiler -fPIC -Xcompiler -fvisibility=hidden
 endif
 
@@ -24,19 +24,35 @@ COMMA = ,
 ifdef sm
 	SM_ARCH = $(subst $(COMMA),-,$(sm))
 else 
-    SM_ARCH = 200
+    SM_ARCH = 600
 endif
 
+ifeq (700, $(findstring 700, $(SM_ARCH)))
+    SM_TARGETS  += -gencode=arch=compute_70,code=\"sm_70,compute_70\"
+    SM_DEF              += -DSM700
+endif
+ifeq (620, $(findstring 620, $(SM_ARCH)))
+    SM_TARGETS  += -gencode=arch=compute_62,code=\"sm_62,compute_62\"
+    SM_DEF              += -DSM620
+endif
+ifeq (610, $(findstring 610, $(SM_ARCH)))
+    SM_TARGETS  += -gencode=arch=compute_61,code=\"sm_61,compute_61\"
+    SM_DEF              += -DSM610
+endif
+ifeq (600, $(findstring 600, $(SM_ARCH)))
+    SM_TARGETS  += -gencode=arch=compute_60,code=\"sm_60,compute_60\"
+    SM_DEF              += -DSM600
+endif
 ifeq (520, $(findstring 520, $(SM_ARCH)))
-    SM_TARGETS 	+= -gencode=arch=compute_52,code=\"sm_52,compute_52\" 
+    SM_TARGETS 	+= -gencode=arch=compute_52,code=\"sm_52,compute_52\"
     SM_DEF 		+= -DSM520
 endif
 ifeq (370, $(findstring 370, $(SM_ARCH)))
-    SM_TARGETS 	+= -gencode=arch=compute_37,code=\"sm_37,compute_37\" 
+    SM_TARGETS 	+= -gencode=arch=compute_37,code=\"sm_37,compute_37\"
     SM_DEF 		+= -DSM370
 endif
 ifeq (350, $(findstring 350, $(SM_ARCH)))
-    SM_TARGETS 	+= -gencode=arch=compute_35,code=\"sm_35,compute_35\" 
+    SM_TARGETS 	+= -gencode=arch=compute_35,code=\"sm_35,compute_35\"
     SM_DEF 		+= -DSM350
 endif
 ifeq (300, $(findstring 300, $(SM_ARCH)))

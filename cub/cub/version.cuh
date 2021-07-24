@@ -1,7 +1,6 @@
 /******************************************************************************
- * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
- * 
+ * Copyright (c) 2011-2020, NVIDIA CORPORATION.  All rights reserved.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *     * Redistributions of source code must retain the above copyright
@@ -12,7 +11,7 @@
  *     * Neither the name of the NVIDIA CORPORATION nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
  * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -26,57 +25,46 @@
  *
  ******************************************************************************/
 
-/**
- * \file
- * The cub::BlockHistogramAtomic class provides atomic-based methods for constructing block-wide histograms from data samples partitioned across a CUDA thread block.
+/*! \file version.h
+ *  \brief Compile-time macros encoding CUB release version
+ *
+ *         <cub/version.h> is the only CUB header that is guaranteed to
+ *         change with every CUB release.
+ *
  */
 
 #pragma once
 
-#include "../../config.cuh"
-
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
-namespace cub {
-
-
-/**
- * \brief The BlockHistogramAtomic class provides atomic-based methods for constructing block-wide histograms from data samples partitioned across a CUDA thread block.
+/*! \def CUB_VERSION
+ *  \brief The preprocessor macro \p CUB_VERSION encodes the version
+ *         number of the CUB library.
+ *
+ *         <tt>CUB_VERSION % 100</tt> is the sub-minor version.
+ *         <tt>CUB_VERSION / 100 % 1000</tt> is the minor version.
+ *         <tt>CUB_VERSION / 100000</tt> is the major version.
  */
-template <int BINS>
-struct BlockHistogramAtomic
-{
-    /// Shared memory storage layout type
-    struct TempStorage {};
+#define CUB_VERSION 101201
 
+/*! \def CUB_MAJOR_VERSION
+ *  \brief The preprocessor macro \p CUB_MAJOR_VERSION encodes the
+ *         major version number of the CUB library.
+ */
+#define CUB_MAJOR_VERSION     (CUB_VERSION / 100000)
 
-    /// Constructor
-    __device__ __forceinline__ BlockHistogramAtomic(
-        TempStorage &temp_storage)
-    {}
+/*! \def CUB_MINOR_VERSION
+ *  \brief The preprocessor macro \p CUB_MINOR_VERSION encodes the
+ *         minor version number of the CUB library.
+ */
+#define CUB_MINOR_VERSION     (CUB_VERSION / 100 % 1000)
 
+/*! \def CUB_SUBMINOR_VERSION
+ *  \brief The preprocessor macro \p CUB_SUBMINOR_VERSION encodes the
+ *         sub-minor version number of the CUB library.
+ */
+#define CUB_SUBMINOR_VERSION  (CUB_VERSION % 100)
 
-    /// Composite data onto an existing histogram
-    template <
-        typename            T,
-        typename            CounterT,     
-        int                 ITEMS_PER_THREAD>
-    __device__ __forceinline__ void Composite(
-        T                   (&items)[ITEMS_PER_THREAD],     ///< [in] Calling thread's input values to histogram
-        CounterT             histogram[BINS])                 ///< [out] Reference to shared/device-accessible memory histogram
-    {
-        // Update histogram
-        #pragma unroll
-        for (int i = 0; i < ITEMS_PER_THREAD; ++i)
-        {
-              atomicAdd(histogram + items[i], 1);
-        }
-    }
-
-};
-
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
-
+/*! \def CUB_PATCH_NUMBER
+ *  \brief The preprocessor macro \p CUB_PATCH_NUMBER encodes the
+ *         patch number of the CUB library.
+ */
+#define CUB_PATCH_NUMBER 0
