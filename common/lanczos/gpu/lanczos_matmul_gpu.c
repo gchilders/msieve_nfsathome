@@ -174,6 +174,7 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 	}
 
 	b->num_rows = num_rows;
+	b->num_cols = col_max - col_min;
 	b->num_col_entries = num_entries;
 	printf("%u %u\n", num_entries, num_rows);
 
@@ -195,6 +196,7 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 	/* configure the engine for this block of rows */
 
 	spmv_data.num_rows = b->num_rows;
+	spmv_data.num_cols = b->num_cols;
 	spmv_data.num_col_entries = b->num_col_entries;
 	spmv_data.col_entries = b->col_entries;
 	spmv_data.row_entries = b->row_entries;
@@ -377,7 +379,7 @@ load_spmv_engine(msieve_obj *obj, gpudata_t *d)
 		exit(-1);
 	}
 
-	sprintf(libname, "mgpu/spmv_engine%s", suffix);
+	sprintf(libname, "cub/spmv_engine%s", suffix);
 
 	/* override from input args */
 
@@ -537,6 +539,7 @@ static void mul_packed_gpu(packed_matrix_t *p,
 		spmv_data_t spmv_data;
 
 		spmv_data.num_rows = blk->num_rows;
+		spmv_data.num_cols = blk->num_cols;
 		spmv_data.num_col_entries = blk->num_col_entries;
 		spmv_data.col_entries = blk->col_entries;
 		spmv_data.row_entries = blk->row_entries;
@@ -598,6 +601,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 		spmv_data_t spmv_data;
 
 		spmv_data.num_rows = blk->num_rows;
+		spmv_data.num_cols = blk->num_cols;
 		spmv_data.num_col_entries = blk->num_col_entries;
 		spmv_data.col_entries = blk->col_entries;
 		spmv_data.row_entries = blk->row_entries;
