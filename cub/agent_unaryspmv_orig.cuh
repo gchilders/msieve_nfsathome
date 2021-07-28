@@ -317,7 +317,7 @@ struct AgentUnarySpmv
         CoordinateT     thread_current_coord = thread_start_coord;
         KeyValuePairT   scan_segment[ITEMS_PER_THREAD];
 
-        ValueT          running_total = 0.0;
+        ValueT          running_total = spmv_params.zero;
 
         #pragma unroll
         for (int ITEM = 0; ITEM < ITEMS_PER_THREAD; ++ITEM)
@@ -346,7 +346,7 @@ struct AgentUnarySpmv
                 // Move right (reset)
                 scan_segment[ITEM].value    = running_total;
                 scan_segment[ITEM].key      = thread_current_coord.x;
-                running_total               = 0.0;
+                running_total               = spmv_params.zero;
                 ++thread_current_coord.x;
             }
         }

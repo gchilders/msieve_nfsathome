@@ -728,7 +728,7 @@ struct DispatchUnarySpmv
                 d_temp_storage, temp_storage_bytes, spmv_params, stream, debug_synchronous,
                 DeviceUnarySpmv1ColKernel<PtxUnarySpmvPolicyT, ValueT, OffsetT>,
                 DeviceUnarySpmvSearchKernel<PtxUnarySpmvPolicyT, OffsetT, CoordinateT, UnarySpmvParamsT>,
-                DeviceUnarySpmvKernel<PtxUnarySpmvPolicyT, ScanTileStateT, ValueT, OffsetT, CoordinateT, false, false>,
+                DeviceUnarySpmvKernel<PtxUnarySpmvPolicyT, ScanTileStateT, ValueT, OffsetT, CoordinateT>,
                 DeviceSegmentFixupKernel<PtxSegmentFixupPolicy, KeyValuePairT*, ValueT*, OffsetT, ScanTileStateT>,
                 spmv_config, segment_fixup_config))) break;
 

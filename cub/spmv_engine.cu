@@ -19,7 +19,7 @@ struct v_bit_xor : public std::binary_function<T, T, T> {
         __host__ __device__ T operator()(T a, T b) { return v_xor(a, b); }
 };
 
-v_t operator+(const v_t& left, const v_t& right) {
+__device__ v_t operator+(const v_t& left, const v_t& right) {
 	return v_xor(left, right);
 	// return v_bit_xor<v_t>(left, right);
 };
