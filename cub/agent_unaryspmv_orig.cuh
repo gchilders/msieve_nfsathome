@@ -480,7 +480,7 @@ struct AgentUnarySpmv
         // Compute the thread's merge path segment
         CoordinateT     thread_current_coord = thread_start_coord;
         KeyValuePairT   scan_segment[ITEMS_PER_THREAD];
-        ValueT          running_total = 0.0;
+        ValueT          running_total = spmv_params.zero;
 
         OffsetT row_end_offset  = s_tile_row_end_offsets[thread_current_coord.x];
         ValueT  nonzero         = s_tile_nonzeros[thread_current_coord.y];
@@ -492,15 +492,15 @@ struct AgentUnarySpmv
             {
                 // Move down (accumulate)
                 scan_segment[ITEM].value    = nonzero;
-                running_total               += nonzero;
+                running_total               = running_total + nonzero;
                 ++thread_current_coord.y;
                 nonzero                     = s_tile_nonzeros[thread_current_coord.y];
             }
             else
             {
                 // Move right (reset)
-                scan_segment[ITEM].value    = 0.0;
-                running_total               = 0.0;
+                scan_segment[ITEM].value    = spmv_params.zero;
+                running_total               = spmv_params.zero;
                 ++thread_current_coord.x;
                 row_end_offset              = s_tile_row_end_offsets[thread_current_coord.x];
             }
@@ -523,7 +523,7 @@ struct AgentUnarySpmv
         if (threadIdx.x == 0)
         {
             scan_item.key = thread_start_coord.x;
-            scan_item.value = 0.0;
+            scan_item.value = spmv_params.zero;
         }
 
         if (tile_num_rows > 0)
@@ -540,7 +540,7 @@ struct AgentUnarySpmv
             }
             else
             {
-                scan_segment[0].value += scan_item.value;
+                scan_segment[0].value = scan_segment[0].value + scan_item.value;
             }
 
             #pragma unroll
@@ -552,7 +552,7 @@ struct AgentUnarySpmv
                 }
                 else
                 {
-                    scan_segment[ITEM].value += scan_segment[ITEM - 1].value;
+                    scan_segment[ITEM].value = scan_segment[ITEM].value + scan_segment[ITEM - 1].value;
                 }
             }
 
