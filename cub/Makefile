@@ -77,11 +77,14 @@ INC = -I"$(CUDA_ROOT)/include" -I.
 DEPS = ./Makefile \
 	sort_engine.cu \
 	sort_engine.h \
+	spmv_engine.cu \
+	spmv_engine.h \
 	$(CUB_DEPS)
 
 LIBNAME = sort_engine
+LIBNAME2 = spmv_engine
 
-all: $(LIBNAME).$(EXT)
+all: $(LIBNAME).$(EXT) $(LIBNAME2).$(EXT)
 	touch built
 
 clean :
@@ -89,4 +92,7 @@ clean :
 
 $(LIBNAME).$(EXT) : $(DEPS)
 	$(NVCC) $(SM_TARGETS) $(SM_DEF) -o $@ sort_engine.cu $(NVCCFLAGS) $(INC) -O3  
+
+$(LIBNAME2).$(EXT) : $(DEPS)
+	$(NVCC) $(SM_TARGETS) $(SM_DEF) -o $@ spmv_engine.cu $(NVCCFLAGS) -DVBITS=$(VBITS) $(INC) -O3  
 

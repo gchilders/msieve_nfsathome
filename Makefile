@@ -352,6 +352,6 @@ lanczos_kernel.ptx: $(COMMON_GPU_HDR)
 	$(NVCC) -arch sm_35 -ptx -DVBITS=$(VBITS) -o $@ $<
 
 cub/built:
-	cd cub && make WIN=$(WIN) WIN64=$(WIN64) sm=350 && cd ..
+	cd cub && make WIN=$(WIN) WIN64=$(WIN64) VBITS=$(VBITS) sm=350 && cd ..
 mgpu/built:
 	cd mgpu && make WIN=$(WIN) VBITS=$(VBITS) && cd ..

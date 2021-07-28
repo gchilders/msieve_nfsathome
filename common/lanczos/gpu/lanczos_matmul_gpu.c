@@ -463,13 +463,17 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
  	/* CUDA_TRY(cuDevicePrimaryCtxSetFlags(d->gpu_info->device_handle,
 			CU_CTX_SCHED_BLOCKING_SYNC)) */
 
-	load_spmv_engine(obj, d);
-	d->spmv_engine_init(obj->which_gpu);
-
 	/* initialize context */
 
-	CUDA_TRY(cuDevicePrimaryCtxRetain(&d->gpu_context,
+	CUDA_TRY(cuCtxCreate(&d->gpu_context,
+			CU_CTX_SCHED_BLOCKING_SYNC,
 			d->gpu_info->device_handle))
+
+	/* CUDA_TRY(cuDevicePrimaryCtxRetain(&d->gpu_context,
+			d->gpu_info->device_handle)) */
+
+	load_spmv_engine(obj, d);
+	d->spmv_engine_init(obj->which_gpu);
 
 	/* load kernels */
 
@@ -511,7 +515,8 @@ void matrix_extra_free(packed_matrix_t *p) {
 	d->spmv_engine_free();
 	unload_dynamic_lib(d->spmv_engine_handle);
 
-	CUDA_TRY(cuDevicePrimaryCtxRelease(d->gpu_info->device_handle)) 
+	CUDA_TRY(cuCtxDestroy(d->gpu_context))
+	/* CUDA_TRY(cuDevicePrimaryCtxRelease(d->gpu_info->device_handle)) */
 
 	free(d->gpu_info);
 	free(d);
