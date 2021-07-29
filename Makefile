@@ -209,8 +209,7 @@ QS_OBJS = \
 
 GPU_OBJS += \
 	stage1_core.ptx \
-	cub/built \
-	mgpu/built
+	cub/built
 
 #---------------------------------- NFS file lists -------------------------
 
@@ -314,7 +313,6 @@ clean:
 	cd cub && make clean WIN=$(WIN) WIN64=$(WIN64) && cd ..
 	rm -f msieve msieve.exe libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
 		$(COMMON_GPU_OBJS) $(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) *.ptx
-	cd mgpu && make clean && cd ..
 
 #----------------------------------------- build rules ----------------------
 
@@ -353,5 +351,3 @@ lanczos_kernel.ptx: $(COMMON_GPU_HDR)
 
 cub/built:
 	cd cub && make WIN=$(WIN) WIN64=$(WIN64) VBITS=$(VBITS) sm=350 && cd ..
-mgpu/built:
-	cd mgpu && make WIN=$(WIN) VBITS=$(VBITS) && cd ..
