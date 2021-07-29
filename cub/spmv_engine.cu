@@ -10,61 +10,78 @@
 	#define SPMV_ENGINE_DECL __attribute__((visibility("default")))
 #endif
 
+#define CUDA_TRY(func) \
+        {                                                               \
+                cudaError_t status = func;                              \
+                if (status != CUDA_SUCCESS) {                           \
+                        const char * str = cudaGetErrorString(status);  \
+                        if (!str)                                       \
+                                str = "Unknown";                        \
+                        printf("error (%s:%d): %s\n", __FILE__, __LINE__, str);\
+                        exit(-1);                                       \
+                }                                                       \
+        }
+
 using namespace cub;
 
 typedef unsigned int uint32;
 
-template<typename T>
-struct v_bit_xor : public std::binary_function<T, T, T> {
-        __host__ __device__ T operator()(T a, T b) { return v_xor(a, b); }
+struct spmv_engine
+{
+        spmv_engine()
+          : temp_data(0), temp_size(0)
+        {
+        }
+
+        ~spmv_engine()
+        {
+                if (temp_size)
+                        CUDA_TRY(cudaFree(temp_data))
+        }
+
+        void * temp_data;
+        size_t temp_size;
 };
 
 __device__ v_t operator+(const v_t& left, const v_t& right) {
 	return v_xor(left, right);
-	// return v_bit_xor<v_t>(left, right);
 };
 
 extern "C"
 {
 
-SPMV_ENGINE_DECL void 
+SPMV_ENGINE_DECL void * 
 spmv_engine_init(int which_gpu)
 {
-	
+	return new spmv_engine;	
 }
 
 SPMV_ENGINE_DECL void 
-spmv_engine_free(void)
+spmv_engine_free(void *e)
 {
-	
-}
-
-SPMV_ENGINE_DECL void
-spmv_engine_preprocess(spmv_data_t * data)
-{
-	
+	delete (spmv_engine *)e;
 }
 
 SPMV_ENGINE_DECL void 
-spmv_engine_run(int preprocess_handle, spmv_data_t * data)
+spmv_engine_run(void * e, spmv_data_t * data)
 {
-	void*    d_temp_storage = NULL;
-	size_t   temp_storage_bytes = 0;
+	spmv_engine *engine = (spmv_engine *)e;
+	size_t temp_size;
 
-	cub::DeviceUnarySpmv::CsrMV(d_temp_storage, temp_storage_bytes, 
+	cub::DeviceUnarySpmv::CsrMV(NULL, temp_size, 
 		(int *)data->row_entries, (int *)data->col_entries, (v_t *)data->vector_in, (v_t *)data->vector_out,
 		data->num_rows, data->num_cols, data->num_col_entries, v_zero);
 
-	// Allocate temporary storage
-	cudaMalloc(&d_temp_storage, temp_storage_bytes);
+	if (temp_size > engine->temp_size) {
+		if (engine->temp_size) CUDA_TRY(cudaFree(engine->temp_data))
+		CUDA_TRY(cudaMalloc(&engine->temp_data, temp_size))
+		engine->temp_size = temp_size;
+	}
 
 	// Run SpMV
-	cub::DeviceUnarySpmv::CsrMV(d_temp_storage, temp_storage_bytes,
+	cub::DeviceUnarySpmv::CsrMV(engine->temp_data, temp_size,
 		(int *)data->row_entries, (int *)data->col_entries, (v_t *)data->vector_in, (v_t *)data->vector_out,
 		data->num_rows, data->num_cols, data->num_col_entries, v_zero);
-		
-	// Free temp storage
-	cudaFree(d_temp_storage);
 }
 
 } // extern "C"

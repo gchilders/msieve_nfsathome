@@ -203,7 +203,6 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 	spmv_data.row_entries = b->row_entries;
 	spmv_data.vector_in = (CUdeviceptr)0;
 	spmv_data.vector_out = (CUdeviceptr)0;
-	b->spmv_preprocess_handle = d->spmv_engine_preprocess(&spmv_data);
 }
 
 /*-------------------------------------------------------------------*/
@@ -413,15 +412,11 @@ load_spmv_engine(msieve_obj *obj, gpudata_t *d)
 	d->spmv_engine_free = get_lib_symbol(
 					d->spmv_engine_handle,
 					"spmv_engine_free");
-	d->spmv_engine_preprocess = get_lib_symbol(
-					d->spmv_engine_handle,
-					"spmv_engine_preprocess");
 	d->spmv_engine_run = get_lib_symbol(
 					d->spmv_engine_handle,
 					"spmv_engine_run");
 	if (d->spmv_engine_init == NULL ||
 	    d->spmv_engine_free == NULL ||
-	    d->spmv_engine_preprocess == NULL ||
 	    d->spmv_engine_run == NULL) {
 		printf("error: cannot find GPU matrix multiply function\n");
 		exit(-1);
@@ -474,7 +469,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 			d->gpu_info->device_handle)) */
 
 	load_spmv_engine(obj, d);
-	d->spmv_engine_init(obj->which_gpu);
+	d->spmv_engine = d->spmv_engine_init(obj->which_gpu);
 
 	/* load kernels */
 
@@ -513,7 +508,7 @@ void matrix_extra_free(packed_matrix_t *p) {
 
 	free(d->launch);
 
-	d->spmv_engine_free();
+	d->spmv_engine_free(d->spmv_engine);
 	unload_dynamic_lib(d->spmv_engine_handle);
 
 	CUDA_TRY(cuCtxDestroy(d->gpu_context))
@@ -552,7 +547,7 @@ static void mul_packed_gpu(packed_matrix_t *p,
 		spmv_data.vector_in = (CUdeviceptr)((v_t *)x->gpu_vec + start_col);
 		spmv_data.vector_out = d->matmul_scratch;
 
-		d->spmv_engine_run(blk->spmv_preprocess_handle, &spmv_data);
+		d->spmv_engine_run(d->spmv_engine, &spmv_data);
 
 		{
 			/* combine with previous output */
@@ -614,7 +609,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 		spmv_data.vector_in = (CUdeviceptr)((v_t *)x->gpu_vec + start_row);
 		spmv_data.vector_out = d->matmul_scratch;
 
-		d->spmv_engine_run(blk->spmv_preprocess_handle, &spmv_data);
+		d->spmv_engine_run(d->spmv_engine, &spmv_data);
 
 		{
 			/* combine with previous output */

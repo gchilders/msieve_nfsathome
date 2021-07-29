@@ -29,7 +29,6 @@ typedef struct {
 	uint32 num_col_entries;         /* but int32 in cub */
 	CUdeviceptr col_entries;        /* uint32 */
 	CUdeviceptr row_entries;        /* uint32 */
-	int32 spmv_preprocess_handle;
 } block_row_t;
 
 /* implementation-specific structure */
@@ -62,8 +61,8 @@ typedef struct {
 	libhandle_t spmv_engine_handle;
 	spmv_engine_init_func spmv_engine_init;
 	spmv_engine_free_func spmv_engine_free;
-	spmv_engine_preprocess_func spmv_engine_preprocess;
 	spmv_engine_run_func spmv_engine_run;
+	void * spmv_engine;
 
 	CUdeviceptr matmul_scratch;
 

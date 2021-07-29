@@ -62,7 +62,7 @@ else
 	CUDA_ROOT = $(shell dirname $(NVCC))/../
 	CUDA_LIBS = -lcuda
 endif
-	CFLAGS += -I"$(CUDA_ROOT)/include" -Icub -Imgpu -DHAVE_CUDA
+	CFLAGS += -I"$(CUDA_ROOT)/include" -Icub -DHAVE_CUDA
 	LIBS += $(CUDA_LIBS)
 
 ifeq ($(CUDAAWARE),1)
