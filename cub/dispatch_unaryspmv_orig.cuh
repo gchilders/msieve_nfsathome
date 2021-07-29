@@ -298,7 +298,7 @@ struct DispatchUnarySpmv
                 LOAD_LDG,
                 LOAD_LDG,
                 LOAD_LDG,
-                false,
+                (sizeof(ValueT) > 8) ? true : false,
                 BLOCK_SCAN_WARP_SCANS>
             UnarySpmvPolicyT;
 
@@ -348,7 +348,7 @@ struct DispatchUnarySpmv
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
-                false,
+                (sizeof(ValueT) > 8) ? true : false,
                 BLOCK_SCAN_WARP_SCANS>
             UnarySpmvPolicyT;
 

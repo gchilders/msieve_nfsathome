@@ -749,23 +749,16 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 	mem_use = MAX(p->ncols, p->nrows) * sizeof(v_t);
 
 	/* matrix in CSR format */
-	max_block_rows = 0;
 	for (i = 0; i < d->num_block_rows; i++) {
 		block_row_t *b = d->block_rows + i;
-		mem_use += (b->num_rows + b->num_col_entries) * sizeof(uint32);
-		if (b->num_rows > max_block_rows) max_block_rows = b->num_rows;
+		mem_use += (b->num_rows + 1 + b->num_col_entries) * sizeof(uint32);
 	}
 
 	/* transpose matrix in CSR format */
 	for (i = 0; i < d->num_trans_block_rows; i++) {
 		block_row_t *b = d->trans_block_rows + i;
-		mem_use += (b->num_rows + b->num_col_entries) * sizeof(uint32);
-		if (b->num_rows > max_block_rows) max_block_rows = b->num_rows;
+		mem_use += (b->num_rows + 1 + b->num_col_entries) * sizeof(uint32);
 	}
-
-	/* large arrays used by MGPU spmv library */
-	mem_use += (max_block_rows + 1) * sizeof(uint32);
-	mem_use += max_block_rows * sizeof(v_t);
 
 	tot_mem_use += mem_use;
 	printf("sparse matrix memory use: %.1f MB\n", (double)mem_use/1048576);

@@ -76,6 +76,7 @@ spmv_engine_run(void * e, spmv_data_t * data)
 		if (engine->temp_size) CUDA_TRY(cudaFree(engine->temp_data))
 		CUDA_TRY(cudaMalloc(&engine->temp_data, temp_size))
 		engine->temp_size = temp_size;
+		printf("Allocated %0.1f MB for SpMV library\n", (double)temp_size / 1048576);
 	}
 
 	// Run SpMV
