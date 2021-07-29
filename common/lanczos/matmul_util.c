@@ -156,18 +156,25 @@ void global_xor(void *send_buf_in, void *recv_buf_in,
 		uint32 total_size, uint32 num_nodes, 
 		uint32 my_id, MPI_Datatype mpi_word, MPI_Comm comm) {
 	
+	v_t *send_buf, *recv_buf;
+
+	if (num_nodes == 1) {
+		vv_copy(recv_buf_in, send_buf_in, total_size);
+		return;
+	}
+
 #ifdef HAVE_CUDA
 #ifdef HAVE_CUDAAWARE_MPI
-	v_t *send_buf = (v_t *)((gpuvec_t *)send_buf_in)->gpu_vec;
-	v_t *recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->gpu_vec;
+	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->gpu_vec;
+	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->gpu_vec;
 #else
-	v_t *send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
-	v_t *recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
+	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
+	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
 	vv_copyout(send_buf, send_buf_in, total_size);
 #endif
 #else
-	v_t *send_buf = (v_t *)send_buf_in;
-	v_t *recv_buf = (v_t *)recv_buf_in;
+	send_buf = (v_t *)send_buf_in;
+	recv_buf = (v_t *)recv_buf_in;
 #endif
 
 	/* only get fancy for large buffers; even the
