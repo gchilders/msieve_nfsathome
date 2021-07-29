@@ -172,6 +172,7 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 		row_entries[i] = j;
 		j += t;
 	}
+	row_entries[num_rows] = num_entries;
 
 	b->num_rows = num_rows;
 	b->num_cols = col_max - col_min;
@@ -185,10 +186,10 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 				num_entries * sizeof(uint32)))
 
 	CUDA_TRY(cuMemAlloc(&b->row_entries,
-				num_rows * sizeof(uint32)))
+				(num_rows + 1) * sizeof(uint32)))
 	CUDA_TRY(cuMemcpyHtoD(b->row_entries,
 				row_entries,
-				num_rows * sizeof(uint32)))
+				(num_rows + 1) * sizeof(uint32)))
 
 	free(col_entries);
 	free(row_entries);
