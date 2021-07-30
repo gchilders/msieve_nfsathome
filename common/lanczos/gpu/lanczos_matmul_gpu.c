@@ -123,6 +123,46 @@ static int compare_row_off(const void *x, const void *y) {
 }
 
 /*-------------------------------------------------------------------*/
+void radix_sort(entry_idx_t *arr, uint32 n) {
+
+	/* simple radix sort, much faster than qsort() */
+
+	uint32 i, pass;
+	uint64 *a, *b, *from, *to, *temp;
+
+	a = (uint64 *) malloc(n * sizeof(uint64));
+	b = (uint64 *) malloc(n * sizeof(uint64));
+
+	for (i = 0; i < n; i++) {
+		entry_idx_t *e = arr + i;
+		a[i] = ((uint64)(e->row_off) << 32) | (uint64)(e->col_off);
+	}
+
+	from = a;
+	to = b;
+	for (pass = 0; pass < 8; pass++)  {
+		uint32 box[256] = { 0 };
+
+		for (i = 0; i < n; i++) box[ (from[i] >> (8*pass)) & 255]++;
+		for (i = 1; i < 256; i++) box[i] += box[i-1];
+		for (i = n - 1; i != (uint32)(-1); i--) to[--box[(from[i] >> (8*pass)) & 255]] = from[i];
+
+		temp = from;
+		from = to;
+		to = temp;
+	}
+
+	for (i = 0; i < n; i++) {
+		entry_idx_t *e = arr + i;
+		e->row_off = (uint32)(a[i] >> 32);
+		e->col_off = (uint32)(a[i]);
+	}
+
+	free(a);
+	free(b);
+}
+
+/*-------------------------------------------------------------------*/
 static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 			entry_idx_t *entries, uint32 num_entries,
 			uint32 row_min, uint32 row_max, 
@@ -150,8 +190,9 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 		}
 	}
 	else {
-		qsort(entries, num_entries, sizeof(entry_idx_t), 
-				compare_row_off);
+		/* qsort(entries, num_entries, sizeof(entry_idx_t),
+				compare_row_off); */
+		radix_sort(entries, num_entries);
 	}
 
 	for (i = j = 0; i < num_entries; i++, j++) {
