@@ -378,7 +378,7 @@ struct AgentUnarySpmv
                         scan_segment[ITEM].value = scan_item.value + scan_segment[ITEM].value;
 
                     // optionally accumulate the current y value
-                    // scan_segment[ITEM].value = scan_segment[ITEM].value + wd_vector_y[tile_start_coord.x + scan_segment[ITEM].key];
+                    scan_segment[ITEM].value = scan_segment[ITEM].value + wd_vector_y[tile_start_coord.x + scan_segment[ITEM].key];
 
                     // Set the output vector element
                     spmv_params.d_vector_y[tile_start_coord.x + scan_segment[ITEM].key] = scan_segment[ITEM].value;

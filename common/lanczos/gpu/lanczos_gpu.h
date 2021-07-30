@@ -64,8 +64,6 @@ typedef struct {
 	spmv_engine_run_func spmv_engine_run;
 	void * spmv_engine;
 
-	CUdeviceptr matmul_scratch;
-
 } gpudata_t;
 
 

@@ -329,8 +329,6 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 	d->num_trans_block_rows = num_trans_block_rows;
 	d->trans_block_rows = trans_block_rows;
 
-	CUDA_TRY(cuMemAlloc(&d->matmul_scratch,
-				MAX(p->ncols, p->nrows) * sizeof(v_t)))
 	free(entries);
 }
 
@@ -339,8 +337,6 @@ static void gpu_matrix_free(packed_matrix_t *p) {
 
 	uint32 i;
 	gpudata_t *d = (gpudata_t *)p->extra;
-
-	CUDA_TRY(cuMemFree(d->matmul_scratch))
 
 	for (i = 0; i < d->num_block_rows; i++) {
 		block_row_t *b = d->block_rows + i;
@@ -533,9 +529,6 @@ static void mul_packed_gpu(packed_matrix_t *p,
 
 	for (i = 0; i < d->num_block_rows; i++) {
 
-		CUDA_TRY(cuMemsetD8(d->matmul_scratch, 0, 
-				p->nrows * sizeof(v_t)))
-
 		block_row_t *blk = d->block_rows + i;
 		spmv_data_t spmv_data;
 
@@ -545,26 +538,9 @@ static void mul_packed_gpu(packed_matrix_t *p,
 		spmv_data.col_entries = blk->col_entries;
 		spmv_data.row_entries = blk->row_entries;
 		spmv_data.vector_in = (CUdeviceptr)((v_t *)x->gpu_vec + start_col);
-		spmv_data.vector_out = d->matmul_scratch;
+		spmv_data.vector_out = (CUdeviceptr)((v_t *)b->gpu_vec);
 
 		d->spmv_engine_run(d->spmv_engine, &spmv_data);
-
-		{
-			/* combine with previous output */
-
-			gpu_launch_t *launch = d->launch + GPU_K_XOR;
-			uint32 n = p->nrows;
-
-			uint32 num_blocks = (n + launch->threads_per_block - 1) / 
-					launch->threads_per_block;
-
-			void *args[3] = {&b->gpu_vec, &d->matmul_scratch, &n};
-
-			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
-				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
-				0, NULL, args, NULL))
-
-		}
 
 		start_col += p->preferred_block;
 	}
@@ -595,9 +571,6 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 
 	for (i = 0; i < d->num_trans_block_rows; i++) {
 
-		CUDA_TRY(cuMemsetD8(d->matmul_scratch, 0, 
-				p->ncols * sizeof(v_t)))
-
 		block_row_t *blk = d->trans_block_rows + i;
 		spmv_data_t spmv_data;
 
@@ -607,26 +580,9 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 		spmv_data.col_entries = blk->col_entries;
 		spmv_data.row_entries = blk->row_entries;
 		spmv_data.vector_in = (CUdeviceptr)((v_t *)x->gpu_vec + start_row);
-		spmv_data.vector_out = d->matmul_scratch;
+		spmv_data.vector_out = (CUdeviceptr)((v_t *)b->gpu_vec);
 
 		d->spmv_engine_run(d->spmv_engine, &spmv_data);
-
-		{
-			/* combine with previous output */
-
-			gpu_launch_t *launch = d->launch + GPU_K_XOR;
-			uint32 n = p->ncols;
-
-			uint32 num_blocks = (n + launch->threads_per_block - 1) / 
-					launch->threads_per_block;
-
-			void *args[3] = {&b->gpu_vec, &d->matmul_scratch, &n};
-
-			CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
-				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
-				0, NULL, args, NULL))
-
-		}
 
 		start_row += p->preferred_trans_block;
 	}
@@ -745,8 +701,7 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 	tot_mem_use += mem_use;
 	printf("dense rows memory use: %.1f MB\n", (double)mem_use/1048576);
 
-	/* spmv scratch array */
-	mem_use = MAX(p->ncols, p->nrows) * sizeof(v_t);
+	mem_use = 0;
 
 	/* matrix in CSR format */
 	for (i = 0; i < d->num_block_rows; i++) {
