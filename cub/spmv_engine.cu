@@ -79,7 +79,7 @@ spmv_engine_run(void * e, spmv_data_t * data)
 		printf("Allocated %0.1f MB for SpMV library\n", (double)temp_size / 1048576);
 	}
 
-	// Run SpMV
+	// Run SpMV: y = A x + y
 	cub::DeviceUnarySpmv::CsrMV(engine->temp_data, temp_size,
 		(int *)data->row_entries, (int *)data->col_entries, (v_t *)data->vector_in, (v_t *)data->vector_out,
 		data->num_rows, data->num_cols, data->num_col_entries, v_zero);

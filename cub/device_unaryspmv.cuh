@@ -55,7 +55,7 @@ namespace cub {
  * \par Overview
  * The [<em>SpMV computation</em>](http://en.wikipedia.org/wiki/Sparse_matrix-vector_multiplication)
  * performs the matrix-vector operation
- * <em>y</em> = <b>A</b>*<em>x</em>,
+ * <em>y</em> = <b>A</b>*<em>x</em> or <em>y</em> = <b>A</b>*<em>x</em> + <em>y</em>,
  * where:
  *  - <b>A</b> is an <em>m</em>x<em>n</em> sparse matrix whose non-zero structure is specified in modified
  *    [<em>compressed-storage-row (CSR) format</em>](http://en.wikipedia.org/wiki/Sparse_matrix#Compressed_row_Storage_.28CRS_or_CSR.29)
@@ -74,7 +74,8 @@ struct DeviceUnarySpmv
     //@{
 
     /**
-     * \brief This function performs the matrix-vector operation <em>y</em> = <b>A</b>*<em>x</em>.
+     * \brief This function performs the matrix-vector operation <em>y</em> = <b>A</b>*<em>x</em> + <em>y</em>.
+     * Commenting out a single line in ConsumeTile() will make it <em>y</em> = <b>A</b>*<em>x</em>.
      *
      * \par Snippet
      * The code snippet below illustrates SpMV upon a 9x9 CSR matrix <b>A</b>
