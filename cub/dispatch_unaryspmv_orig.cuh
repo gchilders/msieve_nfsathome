@@ -298,7 +298,7 @@ struct DispatchUnarySpmv
                 LOAD_LDG,
                 LOAD_LDG,
                 LOAD_LDG,
-                (sizeof(ValueT) > 8) ? true : false,
+                (sizeof(ValueT) > 4) ? true : false,
                 BLOCK_SCAN_WARP_SCANS>
             UnarySpmvPolicyT;
 
@@ -341,14 +341,14 @@ struct DispatchUnarySpmv
     struct Policy600
     {
         typedef AgentUnarySpmvPolicy<
-                (sizeof(ValueT) > 4) ? 64 : 128,
-                (sizeof(ValueT) > 4) ? 5 : 7,
+                (sizeof(ValueT) > 4) ? 96 : 128,
+                (sizeof(ValueT) > 4) ? 4 : 7,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
-                (sizeof(ValueT) > 8) ? true : false,
+                (sizeof(ValueT) > 4) ? true : false,
                 BLOCK_SCAN_WARP_SCANS>
             UnarySpmvPolicyT;
 
@@ -356,7 +356,7 @@ struct DispatchUnarySpmv
         typedef AgentSegmentFixupPolicy<
                 128,
                 3,
-                BLOCK_LOAD_DIRECT,
+                BLOCK_LOAD_VECTORIZE, // BLOCK_LOAD_DIRECT,
                 LOAD_LDG,
                 BLOCK_SCAN_WARP_SCANS>
             SegmentFixupPolicyT;
