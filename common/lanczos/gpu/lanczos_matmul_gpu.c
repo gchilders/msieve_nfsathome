@@ -273,16 +273,14 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 
 	printf("converting matrix to CSR and copying it onto the GPU\n");
 
-/* Cub likes smaller blocks, but increases memory use
+/* Cub likes smaller blocks, but increases memory use */
 #ifdef HAVE_MPI
-	p->preferred_block = MAX(p->max_nrows, p->max_ncols) / MIN(p->mpi_nrows, p->mpi_ncols) / 2 + 1;
-	p->preferred_trans_block = MAX(p->max_nrows, p->max_ncols) / MIN(p->mpi_nrows, p->mpi_ncols) / 4 + 1;
+	p->preferred_block = 250000 * p->mpi_nrows;
+	p->preferred_trans_block = 250000 * p->mpi_ncols;
 #else
-	p->preferred_block = MAX(p->nrows, p->ncols) / 2 + 1;
-	p->preferred_trans_block = MAX(p->nrows, p->ncols) / 4 + 1;
-#endif */
 	p->preferred_block = 250000;
 	p->preferred_trans_block = 250000;
+#endif 
 
 	while (start_col < p->ncols) {
 
