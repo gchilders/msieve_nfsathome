@@ -123,7 +123,7 @@ static int compare_row_off(const void *x, const void *y) {
 }
 
 /*-------------------------------------------------------------------*/
-void radix_sort(entry_idx_t *arr, uint32 n) {
+static void radix_sort(entry_idx_t *arr, uint32 n) {
 
 	/* simple radix sort, much faster than qsort() */
 
@@ -172,7 +172,6 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 
 	uint32 i, j;
 	uint32 num_rows = row_max - row_min;
-	spmv_data_t spmv_data;
 
 	/* convert a block of matrix rows from COO to CSR format */
 
@@ -234,16 +233,6 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 
 	free(col_entries);
 	free(row_entries);
-
-	/* configure the engine for this block of rows */
-
-	spmv_data.num_rows = b->num_rows;
-	spmv_data.num_cols = b->num_cols;
-	spmv_data.num_col_entries = b->num_col_entries;
-	spmv_data.col_entries = b->col_entries;
-	spmv_data.row_entries = b->row_entries;
-	spmv_data.vector_in = (CUdeviceptr)0;
-	spmv_data.vector_out = (CUdeviceptr)0;
 }
 
 /*-------------------------------------------------------------------*/
@@ -583,7 +572,7 @@ static void mul_packed_gpu(packed_matrix_t *p,
 		spmv_data.col_entries = blk->col_entries;
 		spmv_data.row_entries = blk->row_entries;
 		spmv_data.vector_in = (CUdeviceptr)((v_t *)x->gpu_vec + start_col);
-		spmv_data.vector_out = (CUdeviceptr)((v_t *)b->gpu_vec);
+		spmv_data.vector_out = b->gpu_vec;
 
 		d->spmv_engine_run(d->spmv_engine, &spmv_data);
 
@@ -625,7 +614,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 		spmv_data.col_entries = blk->col_entries;
 		spmv_data.row_entries = blk->row_entries;
 		spmv_data.vector_in = (CUdeviceptr)((v_t *)x->gpu_vec + start_row);
-		spmv_data.vector_out = (CUdeviceptr)((v_t *)b->gpu_vec);
+		spmv_data.vector_out = b->gpu_vec;
 
 		d->spmv_engine_run(d->spmv_engine, &spmv_data);
 
@@ -718,7 +707,7 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 /*-------------------------------------------------------------------*/
 size_t packed_matrix_sizeof(packed_matrix_t *p) {
 
-	uint32 i, max_block_rows;
+	uint32 i;
 	size_t mem_use, tot_mem_use;
 	gpudata_t *d = (gpudata_t*) p->extra;
 
