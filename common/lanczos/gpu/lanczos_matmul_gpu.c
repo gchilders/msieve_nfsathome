@@ -127,7 +127,7 @@ static void radix_sort(entry_idx_t *arr, uint32 n) {
 
 	/* simple radix sort, much faster than qsort() */
 
-	uint32 i, pass;
+	uint32 i, pass, skip;
 	uint64 *a, *b, *from, *to, *temp;
 
 	a = (uint64 *) malloc(n * sizeof(uint64));
@@ -140,10 +140,15 @@ static void radix_sort(entry_idx_t *arr, uint32 n) {
 
 	from = a;
 	to = b;
+	skip = 0;
 	for (pass = 0; pass < 8; pass++)  {
 		uint32 box[256] = { 0 };
 
 		for (i = 0; i < n; i++) box[ (from[i] >> (8*pass)) & 255]++;
+		if (box[0] == n) { /* this word is all 0's, don't need to sort */
+			skip++;
+			continue;
+		}
 		for (i = 1; i < 256; i++) box[i] += box[i-1];
 		for (i = n - 1; i != (uint32)(-1); i--) to[--box[(from[i] >> (8*pass)) & 255]] = from[i];
 
@@ -152,10 +157,12 @@ static void radix_sort(entry_idx_t *arr, uint32 n) {
 		to = temp;
 	}
 
+	if (skip & 1) to = b;
+	else to = a;
 	for (i = 0; i < n; i++) {
 		entry_idx_t *e = arr + i;
-		e->row_off = (uint32)(a[i] >> 32);
-		e->col_off = (uint32)(a[i]);
+		e->row_off = (uint32)(to[i] >> 32);
+		e->col_off = (uint32)(to[i]);
 	}
 
 	free(a);
@@ -266,16 +273,14 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 
 	printf("converting matrix to CSR and copying it onto the GPU\n");
 
-/* Cub likes smaller blocks, but increases memory use
+/* Cub likes smaller blocks, but increases memory use */
 #ifdef HAVE_MPI
-	p->preferred_block = MAX(p->max_nrows, p->max_ncols) / MIN(p->mpi_nrows, p->mpi_ncols) / 2 + 1;
-	p->preferred_trans_block = MAX(p->max_nrows, p->max_ncols) / MIN(p->mpi_nrows, p->mpi_ncols) / 4 + 1;
+	p->preferred_block = 250000 * p->mpi_nrows;
+	p->preferred_trans_block = 250000 * p->mpi_ncols;
 #else
-	p->preferred_block = MAX(p->nrows, p->ncols) / 2 + 1;
-	p->preferred_trans_block = MAX(p->nrows, p->ncols) / 4 + 1;
-#endif */
 	p->preferred_block = 250000;
 	p->preferred_trans_block = 250000;
+#endif 
 
 	while (start_col < p->ncols) {
 
