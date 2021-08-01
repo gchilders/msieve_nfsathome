@@ -45,7 +45,7 @@ void vv_clear(void *v, uint32 n) {
 	memset(v, 0, n * sizeof(v_t));
 }
 
-void vv_xor(void *dest_in, void *src_in, uint32 n) {
+void vv_xor(void * __restrict__ dest_in, void * __restrict__ src_in, uint32 n) {
 
 	v_t *src = (v_t *)src_in;
 	v_t *dest = (v_t *)dest_in;
