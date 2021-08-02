@@ -594,7 +594,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	if (check_vbits != VBITS) {
                 printf("error: SpMV library compiled for VBITS=%d\n", check_vbits);
                 exit(-1);
-        }
+	}
 
 	/* load kernels */
 
@@ -619,7 +619,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 
 	/* Set preferred nonzeros per matrix block */
 
-	p->block_nnz = 100000000;
+	p->block_nnz = 25000000;
 	if (obj->nfs_args != NULL) {
 		const char *tmp;
 		tmp = strstr(obj->nfs_args, "block_nnz=");
