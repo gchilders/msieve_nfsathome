@@ -22,7 +22,7 @@ typedef struct {
 	CUdeviceptr row_entries;    /* uint32 */
 } spmv_data_t;
 
-typedef void * (*spmv_engine_init_func)(int which_gpu);
+typedef void * (*spmv_engine_init_func)(int * vbits);
 
 typedef void (*spmv_engine_free_func)(void * e);
 

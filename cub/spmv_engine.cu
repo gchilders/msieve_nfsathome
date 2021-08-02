@@ -51,8 +51,9 @@ extern "C"
 {
 
 SPMV_ENGINE_DECL void * 
-spmv_engine_init(int which_gpu)
+spmv_engine_init(int * vbits)
 {
+	*vbits = VBITS;
 	return new spmv_engine;	
 }
 

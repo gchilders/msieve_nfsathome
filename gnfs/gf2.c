@@ -601,6 +601,7 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 
 	logprintf(obj, "\n");
 	logprintf(obj, "commencing linear algebra\n");
+	logprintf(obj, "using VBITS=%d\n", VBITS);
 
 	/* parse input arguments */
 

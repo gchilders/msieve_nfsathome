@@ -548,6 +548,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 			uint32 first_block_size) {
 
 	uint32 i;
+	int check_vbits;
 	gpudata_t *d;
 	gpu_config_t gpu_config;
 	gpu_info_t *gpu_info;
@@ -589,7 +590,11 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 			d->gpu_info->device_handle)) */
 
 	load_spmv_engine(obj, d);
-	d->spmv_engine = d->spmv_engine_init(obj->which_gpu);
+	d->spmv_engine = d->spmv_engine_init(&check_vbits);
+	if (check_vbits != VBITS) {
+                printf("error: SpMV library compiled for VBITS=%d\n", check_vbits);
+                exit(-1);
+        }
 
 	/* load kernels */
 
