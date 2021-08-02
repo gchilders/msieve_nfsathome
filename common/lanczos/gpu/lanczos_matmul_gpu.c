@@ -124,12 +124,12 @@ static uint32 extract_block_trans(la_col_t *cols,
 	uint32 my_row_max, my_blocksize;
 	entry_idx_t *entries = *entries_in;
 	uint32 max_entries = *max_entries_in;
-	uint32 min_nnz = 4 * (nnz / 5);
-	uint32 max_nnz = 6 * (nnz / 5);
+	uint32 min_nnz = 9 * (nnz / 10);
+	uint32 max_nnz = 11 * (nnz / 10);
 
 	/* Need to figure out what my_row_max to use to get about nnz nonzeros */
 
-	my_blocksize = nnz/100;
+	my_blocksize = *blocksize;
 	my_row_max = row_min + my_blocksize;
 	if (my_row_max > row_max) {
 		my_row_max = row_max;
@@ -147,14 +147,14 @@ static uint32 extract_block_trans(la_col_t *cols,
 			}
 		}
 		if (num_entries > max_nnz) {
-			my_blocksize = 2 * (my_blocksize / 3);
+			my_blocksize = 4 * (my_blocksize / 5);
 			my_row_max = row_min + my_blocksize;
 			if (my_blocksize == 2) break;
 			min_nnz = 0;
 			continue;
 		}
 		if (num_entries < min_nnz) {
-			my_blocksize = 3 * (my_blocksize / 2);
+			my_blocksize = 5 * (my_blocksize / 4);
 			my_row_max = row_min + my_blocksize;
 			if (my_row_max >= row_max) {
 				my_row_max = row_max;
@@ -340,6 +340,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 
 	uint32 start_row = 0;
 	uint32 start_col = 0;
+	uint32 blocksize;
 	gpudata_t *d = (gpudata_t *)p->extra;
 
 	uint32 num_block_rows = 0;
@@ -369,7 +370,6 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 	while (start_col < p->ncols) {
 
 		block_row_t *b;
-		uint32 blocksize;
 		uint32 num_entries;
 
 		num_entries = extract_block(p->unpacked_cols,
@@ -410,10 +410,11 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 
 	/* handle the transpose of the matrix */
 
+	/* First rows are heavy so suggest a small initial blocksize */
+	blocksize = p->block_nnz / 10000;
 	while (start_row < p->nrows) {
 
 		block_row_t *b;
-		uint32 blocksize;
 		uint32 num_entries;
 
 		num_entries = extract_block_trans(p->unpacked_cols,
@@ -624,6 +625,8 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		const char *tmp;
 		tmp = strstr(obj->nfs_args, "block_nnz=");
 		if (tmp != NULL) p->block_nnz = (uint32)atoi(tmp + 10);
+		if (p->block_nnz < 100000) p->block_nnz = 100000;
+		if (p->block_nnz > 1750000000) p->block_nnz = 1750000000; 
 	}
 	printf("Nonzeros per block: %u\n", p->block_nnz);
 
