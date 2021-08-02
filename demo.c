@@ -170,6 +170,9 @@ void print_usage(char *progname) {
 		 "   la_block=X       use a block size of X (512<=X<=65536)\n"
 		 "   la_superblock=X  use a superblock size of X\n"
 		 "   cado_filter=1    assume filtering used the CADO-NFS suite\n"
+#ifdef HAVE_CUDA
+		 "   block_nnz=X      use approx. X nonzeros per CUB SpMV block\n"
+#endif
 #ifdef HAVE_MPI
 		 "   mpi_nrows=X      use a grid with X rows\n"
 		 "   mpi_ncols=X      use a grid with X columns\n"

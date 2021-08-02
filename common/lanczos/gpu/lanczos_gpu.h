@@ -27,6 +27,7 @@ typedef struct {
 	uint32 num_rows;
 	uint32 num_cols;
 	uint32 num_col_entries;         /* but int32 in cub */
+	uint32 blocksize;
 	CUdeviceptr col_entries;        /* uint32 */
 	CUdeviceptr row_entries;        /* uint32 */
 } block_row_t;

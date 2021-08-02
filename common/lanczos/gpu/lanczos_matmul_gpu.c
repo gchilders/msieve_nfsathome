@@ -67,6 +67,7 @@ static void copy_dense(packed_matrix_t *p)
 static uint32 extract_block(la_col_t *cols,
 			uint32 row_min, uint32 row_max,
 			uint32 col_min, uint32 col_max,
+			uint32 nnz, uint32 *blocksize,
 			entry_idx_t **entries_in, 
 			uint32 *max_entries_in)
 {
@@ -75,7 +76,7 @@ static uint32 extract_block(la_col_t *cols,
 	entry_idx_t *entries = *entries_in;
 	uint32 max_entries = *max_entries_in;
 
-	for (i = col_min; i < col_max; i++) {
+	for (i = col_min; (i < col_max) && (num_entries < nnz); i++) {
 
 		la_col_t *col = cols + i;
 
@@ -104,6 +105,98 @@ static uint32 extract_block(la_col_t *cols,
 		}
 	}
 
+	*blocksize = i - col_min;
+	*entries_in = entries;
+	*max_entries_in = max_entries;
+	return num_entries;
+}
+
+/*-------------------------------------------------------------------*/
+static uint32 extract_block_trans(la_col_t *cols,
+			uint32 row_min, uint32 row_max,
+			uint32 col_min, uint32 col_max,
+			uint32 nnz, uint32 *blocksize,
+			entry_idx_t **entries_in, 
+			uint32 *max_entries_in)
+{
+	uint32 i, j;
+	uint32 num_entries = 0;
+	uint32 my_row_max, my_blocksize;
+	entry_idx_t *entries = *entries_in;
+	uint32 max_entries = *max_entries_in;
+	uint32 min_nnz = 4 * (nnz / 5);
+	uint32 max_nnz = 6 * (nnz / 5);
+
+	/* Need to figure out what my_row_max to use to get about nnz nonzeros */
+
+	my_blocksize = nnz/100;
+	my_row_max = row_min + my_blocksize;
+	if (my_row_max > row_max) {
+		my_row_max = row_max;
+		my_blocksize = row_max - row_min;
+	}
+
+	while (1) {
+		num_entries = 0;
+		for (i = col_min; i < col_max; i++) {
+			la_col_t *col = cols + i;
+			for (j = 0; j < col->weight; j++) {
+				uint32 idx = col->data[j];
+				if (idx >= my_row_max) break;
+				if (idx >= row_min) num_entries++;
+			}
+		}
+		if (num_entries > max_nnz) {
+			my_blocksize = 2 * (my_blocksize / 3);
+			my_row_max = row_min + my_blocksize;
+			if (my_blocksize == 2) break;
+			min_nnz = 0;
+			continue;
+		}
+		if (num_entries < min_nnz) {
+			my_blocksize = 3 * (my_blocksize / 2);
+			my_row_max = row_min + my_blocksize;
+			if (my_row_max >= row_max) {
+				my_row_max = row_max;
+				break;
+			}
+			max_nnz = (uint32)(-1);
+			continue;
+		}
+		break;
+	}
+
+	num_entries = 0;
+	for (i = col_min; i < col_max; i++) {
+
+		la_col_t *col = cols + i;
+
+		for (j = 0; j < col->weight; j++) {
+			uint32 idx = col->data[j];
+
+			if (idx >= my_row_max)
+				break;
+
+			if (idx >= row_min) {
+
+				entry_idx_t *e;
+
+				if (num_entries == max_entries) {
+					max_entries *= 2;
+					entries = (entry_idx_t *)xrealloc(
+							entries, 
+							max_entries *
+							sizeof(entry_idx_t));
+				}
+
+				e = entries + num_entries++;
+				e->row_off = idx;
+				e->col_off = i;
+			}
+		}
+	}
+
+	*blocksize = my_row_max - row_min;
 	*entries_in = entries;
 	*max_entries_in = max_entries;
 	return num_entries;
@@ -224,7 +317,7 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 	b->num_rows = num_rows;
 	b->num_cols = col_max - col_min;
 	b->num_col_entries = num_entries;
-	printf("%u %u\n", num_entries, num_rows);
+	printf("%u %u %u\n", num_entries, num_rows, b->blocksize);
 
 	CUDA_TRY(cuMemAlloc(&b->col_entries,
 				num_entries * sizeof(uint32)))
@@ -273,26 +366,17 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 
 	printf("converting matrix to CSR and copying it onto the GPU\n");
 
-/* Cub likes smaller blocks, but increases memory use */
-#ifdef HAVE_MPI
-	p->preferred_block = 250000 * p->mpi_nrows;
-	p->preferred_trans_block = 250000 * p->mpi_ncols;
-#else
-	p->preferred_block = 250000;
-	p->preferred_trans_block = 250000;
-#endif 
-
 	while (start_col < p->ncols) {
 
 		block_row_t *b;
-		uint32 block_size = MIN(p->preferred_block, 
-					p->ncols - start_col);
+		uint32 blocksize;
 		uint32 num_entries;
 
 		num_entries = extract_block(p->unpacked_cols,
 					0, p->nrows,
-					start_col,
-					start_col + block_size,
+					start_col, p->ncols,
+				 	p->block_nnz,
+					&blocksize,
 					&entries,
 					&num_entries_alloc);
 
@@ -311,14 +395,14 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 		}
 
 		b = block_rows + num_block_rows++;
-
+		b->blocksize = blocksize;
 		pack_matrix_block(d, b, entries, num_entries,
 				0, p->nrows, 
 				start_col,
-				start_col + block_size,
+				start_col + b->blocksize,
 				0);
 
-		start_col += block_size;
+		start_col += b->blocksize;
 	}
 
 	d->num_block_rows = num_block_rows;
@@ -329,14 +413,15 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 	while (start_row < p->nrows) {
 
 		block_row_t *b;
-		uint32 block_size = MIN(p->preferred_trans_block, 
-					p->nrows - start_row);
+		uint32 blocksize;
 		uint32 num_entries;
 
-		num_entries = extract_block(p->unpacked_cols,
+		num_entries = extract_block_trans(p->unpacked_cols,
 					start_row,
-					start_row + block_size,
+					p->nrows,
 					0, p->ncols,
+					p->block_nnz,
+					&blocksize,
 					&entries,
 					&num_entries_alloc);
 
@@ -355,14 +440,14 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 		}
 
 		b = trans_block_rows + num_trans_block_rows++;
-
+		b->blocksize = blocksize;
 		pack_matrix_block(d, b, entries, num_entries,
 				0, p->ncols, 
 				start_row,
-				start_row + block_size,
+				start_row + b->blocksize,
 				1);
 
-		start_row += block_size;
+		start_row += b->blocksize;
 	}
 
 	d->num_trans_block_rows = num_trans_block_rows;
@@ -527,6 +612,16 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 
 	CUDA_TRY(cuMemAlloc(&d->gpu_scratch, VBITS * sizeof(v_t)))
 
+	/* Set preferred nonzeros per matrix block */
+
+	p->block_nnz = 100000000;
+	if (obj->nfs_args != NULL) {
+		const char *tmp;
+		tmp = strstr(obj->nfs_args, "block_nnz=");
+		if (tmp != NULL) p->block_nnz = (uint32)atoi(tmp + 10);
+	}
+	printf("Nonzeros per block: %u\n", p->block_nnz);
+
 	/* set up the matrix on the card */
 
 	gpu_matrix_init(p);
@@ -581,7 +676,7 @@ static void mul_packed_gpu(packed_matrix_t *p,
 
 		d->spmv_engine_run(d->spmv_engine, &spmv_data);
 
-		start_col += p->preferred_block;
+		start_col += blk->blocksize;
 	}
 
 	/* handle dense rows */
@@ -623,7 +718,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 
 		d->spmv_engine_run(d->spmv_engine, &spmv_data);
 
-		start_row += p->preferred_trans_block;
+		start_row += blk->blocksize;
 	}
 
 	/* handle dense rows */

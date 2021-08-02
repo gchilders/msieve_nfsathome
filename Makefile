@@ -21,7 +21,7 @@ VBITS = 64
 # get overridden by architecture-specific builds)
 CC = gcc
 WARN_FLAGS = -Wall -W
-OPT_FLAGS = -O3 -fomit-frame-pointer -march=native \
+OPT_FLAGS = -O3 -g -march=native \
 	    -D_FILE_OFFSET_BITS=64 -DNDEBUG -D_LARGEFILE64_SOURCE -DVBITS=$(VBITS)
 
 # use := instead of = so we only run the following once
