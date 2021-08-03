@@ -117,8 +117,9 @@ static uint32 extract_block(la_col_t *cols,
 static uint32 extract_block_trans(la_col_t *cols,
 			uint32 row_min, uint32 row_max,
 			uint32 col_min, uint32 col_max,
-			uint32 nnz, uint32 *blocksize,
-			entry_idx_t **entries_in, 
+			uint32 nnz, uint32 num_dense_rows,
+			uint32 *blocksize,
+			entry_idx_t **entries_in,
 			uint32 *max_entries_in)
 {
 	uint32 i, j;
@@ -150,6 +151,11 @@ static uint32 extract_block_trans(la_col_t *cols,
 		}
 		if (num_entries > max_nnz) {
 			my_blocksize = 4 * (my_blocksize / 5);
+			if ((row_min == 0) && (my_blocksize <= num_dense_rows)) {
+				/* just grab a few and continue */
+				my_row_max = num_dense_rows + 10;
+				break;
+			}
 			my_row_max = row_min + my_blocksize;
 			if (my_blocksize == 2) break;
 			min_nnz = 0;
@@ -168,6 +174,8 @@ static uint32 extract_block_trans(la_col_t *cols,
 		break;
 	}
 
+	if (num_entries == 0) /* shouldn't happen */
+		my_row_max = MIN(my_row_max + 10, row_max);
 	num_entries = 0;
 	for (i = col_min; i < col_max; i++) {
 
@@ -448,6 +456,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 					p->nrows,
 					0, p->ncols,
 					p->block_nnz,
+					p->num_dense_rows,
 					&blocksize,
 					&entries,
 					&num_entries_alloc);
