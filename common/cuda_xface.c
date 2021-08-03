@@ -56,7 +56,7 @@ cuGetErrorMessage(CUresult result)
 void
 gpu_init(gpu_config_t *config)
 {
-	int32 i, j;
+	int32 i;
 
 	/* determine the specifics of CUDA GPUs using the 14 different
 	   methods in the Nvidia documentation */
@@ -129,6 +129,9 @@ gpu_init(gpu_config_t *config)
 				device))
 		CUDA_TRY(cuDeviceGetAttribute(&info->has_timeout,
 				CU_DEVICE_ATTRIBUTE_KERNEL_EXEC_TIMEOUT,
+				device))
+		CUDA_TRY(cuDeviceGetAttribute(&info->concurrent_managed_access,
+				CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS,
 				device))
 	}
 }

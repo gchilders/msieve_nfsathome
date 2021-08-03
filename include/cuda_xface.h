@@ -43,6 +43,7 @@ typedef struct {
 	int32 max_thread_dim[3];
 	int32 max_grid_size[3];
 	int32 has_timeout;
+	int32 concurrent_managed_access;
 	CUdevice device_handle;
 } gpu_info_t;
 

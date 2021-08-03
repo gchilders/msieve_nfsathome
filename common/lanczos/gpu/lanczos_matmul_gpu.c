@@ -12,6 +12,8 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
+#define USE_CUDAMANAGED
+
 #include "lanczos_gpu.h"
 #include "lanczos_gpu_core.h"
 
@@ -319,6 +321,29 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 	b->num_col_entries = num_entries;
 	printf("%u %u %u\n", num_entries, num_rows, b->blocksize);
 
+#ifdef USE_CUDAMANAGED
+	CUDA_TRY(cuMemAllocManaged(&b->col_entries,
+				num_entries * sizeof(uint32),
+				CU_MEM_ATTACH_GLOBAL))
+	CUDA_TRY(cuMemcpy(b->col_entries,
+				(CUdeviceptr) col_entries,
+				num_entries * sizeof(uint32)))
+	CUDA_TRY(cuMemAdvise(b->col_entries,
+				num_entries * sizeof(uint32),
+				CU_MEM_ADVISE_SET_READ_MOSTLY,
+				d->gpu_info->device_handle))
+
+	CUDA_TRY(cuMemAllocManaged(&b->row_entries,
+				(num_rows + 1) * sizeof(uint32),
+				CU_MEM_ATTACH_GLOBAL))
+	CUDA_TRY(cuMemcpy(b->row_entries,
+				(CUdeviceptr) row_entries,
+				(num_rows + 1) * sizeof(uint32)))
+	CUDA_TRY(cuMemAdvise(b->row_entries,
+				(num_rows + 1) * sizeof(uint32),
+				CU_MEM_ADVISE_SET_READ_MOSTLY,
+				d->gpu_info->device_handle))
+#else
 	CUDA_TRY(cuMemAlloc(&b->col_entries,
 				num_entries * sizeof(uint32)))
 	CUDA_TRY(cuMemcpyHtoD(b->col_entries,
@@ -330,6 +355,7 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 	CUDA_TRY(cuMemcpyHtoD(b->row_entries,
 				row_entries,
 				(num_rows + 1) * sizeof(uint32)))
+#endif
 
 	free(col_entries);
 	free(row_entries);
@@ -674,6 +700,16 @@ static void mul_packed_gpu(packed_matrix_t *p,
 		block_row_t *blk = d->block_rows + i;
 		spmv_data_t spmv_data;
 
+#ifdef USE_CUDAMANAGED
+		if (d->gpu_info->concurrent_managed_access) {
+			CUDA_TRY(cuMemPrefetchAsync(blk->col_entries,
+				blk->num_col_entries * sizeof(uint32),
+				d->gpu_info->device_handle, 0))
+			CUDA_TRY(cuMemPrefetchAsync(blk->row_entries,
+				(blk->num_rows + 1) * sizeof(uint32),
+				d->gpu_info->device_handle, 0))
+		}
+#endif
 		spmv_data.num_rows = blk->num_rows;
 		spmv_data.num_cols = blk->num_cols;
 		spmv_data.num_col_entries = blk->num_col_entries;
@@ -716,6 +752,16 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 		block_row_t *blk = d->trans_block_rows + i;
 		spmv_data_t spmv_data;
 
+#ifdef USE_CUDAMANAGED
+		if (d->gpu_info->concurrent_managed_access) {
+			CUDA_TRY(cuMemPrefetchAsync(blk->col_entries,
+				blk->num_col_entries * sizeof(uint32),
+				d->gpu_info->device_handle, 0))
+			CUDA_TRY(cuMemPrefetchAsync(blk->row_entries,
+				(blk->num_rows + 1) * sizeof(uint32),
+				d->gpu_info->device_handle, 0))
+		}
+#endif
 		spmv_data.num_rows = blk->num_rows;
 		spmv_data.num_cols = blk->num_cols;
 		spmv_data.num_col_entries = blk->num_col_entries;
