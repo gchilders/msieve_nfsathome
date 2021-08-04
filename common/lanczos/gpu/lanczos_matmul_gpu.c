@@ -12,8 +12,6 @@ benefit from your work.
 $Id$
 --------------------------------------------------------------------*/
 
-#define USE_CUDAMANAGED
-
 #include "lanczos_gpu.h"
 #include "lanczos_gpu_core.h"
 
@@ -56,10 +54,23 @@ static void copy_dense(packed_matrix_t *p)
 			}
 		}
 
-		CUDA_TRY(cuMemAlloc(&d->dense_blocks[i], 
+		if (d->use_cudamanaged) {
+			CUDA_TRY(cuMemAllocManaged(&d->dense_blocks[i],
+				ncols * sizeof(v_t),
+				CU_MEM_ATTACH_GLOBAL))
+			CUDA_TRY(cuMemcpy(d->dense_blocks[i],
+				(CUdeviceptr) tmp,
+				ncols * sizeof(v_t)))
+			CUDA_TRY(cuMemAdvise(d->dense_blocks[i],
+				ncols * sizeof(v_t),
+				CU_MEM_ADVISE_SET_READ_MOSTLY,
+				d->gpu_info->device_handle))
+		} else {
+			CUDA_TRY(cuMemAlloc(&d->dense_blocks[i],
 					ncols * sizeof(v_t)))
-		CUDA_TRY(cuMemcpyHtoD(d->dense_blocks[i], tmp,
+			CUDA_TRY(cuMemcpyHtoD(d->dense_blocks[i], tmp,
 					ncols * sizeof(v_t)))
+		}
 	}
 
 	free(tmp);
@@ -329,41 +340,41 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 	b->num_col_entries = num_entries;
 	printf("%u %u %u\n", num_entries, num_rows, b->blocksize);
 
-#ifdef USE_CUDAMANAGED
-	CUDA_TRY(cuMemAllocManaged(&b->col_entries,
+	if (d->use_cudamanaged) {
+		CUDA_TRY(cuMemAllocManaged(&b->col_entries,
 				num_entries * sizeof(uint32),
 				CU_MEM_ATTACH_GLOBAL))
-	CUDA_TRY(cuMemcpy(b->col_entries,
+		CUDA_TRY(cuMemcpy(b->col_entries,
 				(CUdeviceptr) col_entries,
 				num_entries * sizeof(uint32)))
-	CUDA_TRY(cuMemAdvise(b->col_entries,
+		CUDA_TRY(cuMemAdvise(b->col_entries,
 				num_entries * sizeof(uint32),
 				CU_MEM_ADVISE_SET_READ_MOSTLY,
 				d->gpu_info->device_handle))
 
-	CUDA_TRY(cuMemAllocManaged(&b->row_entries,
+		CUDA_TRY(cuMemAllocManaged(&b->row_entries,
 				(num_rows + 1) * sizeof(uint32),
 				CU_MEM_ATTACH_GLOBAL))
-	CUDA_TRY(cuMemcpy(b->row_entries,
+		CUDA_TRY(cuMemcpy(b->row_entries,
 				(CUdeviceptr) row_entries,
 				(num_rows + 1) * sizeof(uint32)))
-	CUDA_TRY(cuMemAdvise(b->row_entries,
+		CUDA_TRY(cuMemAdvise(b->row_entries,
 				(num_rows + 1) * sizeof(uint32),
 				CU_MEM_ADVISE_SET_READ_MOSTLY,
 				d->gpu_info->device_handle))
-#else
-	CUDA_TRY(cuMemAlloc(&b->col_entries,
+	} else {
+		CUDA_TRY(cuMemAlloc(&b->col_entries,
 				num_entries * sizeof(uint32)))
-	CUDA_TRY(cuMemcpyHtoD(b->col_entries,
+		CUDA_TRY(cuMemcpyHtoD(b->col_entries,
 				col_entries,
 				num_entries * sizeof(uint32)))
 
-	CUDA_TRY(cuMemAlloc(&b->row_entries,
+		CUDA_TRY(cuMemAlloc(&b->row_entries,
 				(num_rows + 1) * sizeof(uint32)))
-	CUDA_TRY(cuMemcpyHtoD(b->row_entries,
+		CUDA_TRY(cuMemcpyHtoD(b->row_entries,
 				row_entries,
 				(num_rows + 1) * sizeof(uint32)))
-#endif
+	}
 
 	free(col_entries);
 	free(row_entries);
@@ -665,6 +676,20 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	}
 	printf("Nonzeros per block: %u\n", p->block_nnz);
 
+	/* should we used CUDA managed memory to store the matrix */
+
+	d->use_cudamanaged = 0;
+	if (obj->nfs_args != NULL) {
+		const char *tmp;
+		tmp = strstr(obj->nfs_args, "use_managed=1");
+		if (tmp != NULL) {
+			if (d->gpu_info->concurrent_managed_access)
+				d->use_cudamanaged = 2; /* can prefetch */
+			else d->use_cudamanaged = 1;
+			printf("Storing matrix in managed memory\n");
+		}
+	}
+
 	/* set up the matrix on the card */
 
 	gpu_matrix_init(p);
@@ -709,8 +734,7 @@ static void mul_packed_gpu(packed_matrix_t *p,
 		block_row_t *blk = d->block_rows + i;
 		spmv_data_t spmv_data;
 
-#ifdef USE_CUDAMANAGED
-		if (d->gpu_info->concurrent_managed_access) {
+		if (d->use_cudamanaged == 2) {
 			CUDA_TRY(cuMemPrefetchAsync(blk->col_entries,
 				blk->num_col_entries * sizeof(uint32),
 				d->gpu_info->device_handle, 0))
@@ -718,7 +742,6 @@ static void mul_packed_gpu(packed_matrix_t *p,
 				(blk->num_rows + 1) * sizeof(uint32),
 				d->gpu_info->device_handle, 0))
 		}
-#endif
 		spmv_data.num_rows = blk->num_rows;
 		spmv_data.num_cols = blk->num_cols;
 		spmv_data.num_col_entries = blk->num_col_entries;
@@ -735,6 +758,11 @@ static void mul_packed_gpu(packed_matrix_t *p,
 	/* handle dense rows */
 
 	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++) {
+		if (d->use_cudamanaged == 2) {
+			CUDA_TRY(cuMemPrefetchAsync(d->dense_blocks[i],
+				p->ncols * sizeof(v_t),
+				d->gpu_info->device_handle, 0))
+		}
 		mul_BxN_NxB_gpu(p, 
 			d->dense_blocks[i], 
 			x->gpu_vec, 
@@ -761,8 +789,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 		block_row_t *blk = d->trans_block_rows + i;
 		spmv_data_t spmv_data;
 
-#ifdef USE_CUDAMANAGED
-		if (d->gpu_info->concurrent_managed_access) {
+		if (d->use_cudamanaged == 2) {
 			CUDA_TRY(cuMemPrefetchAsync(blk->col_entries,
 				blk->num_col_entries * sizeof(uint32),
 				d->gpu_info->device_handle, 0))
@@ -770,7 +797,6 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 				(blk->num_rows + 1) * sizeof(uint32),
 				d->gpu_info->device_handle, 0))
 		}
-#endif
 		spmv_data.num_rows = blk->num_rows;
 		spmv_data.num_cols = blk->num_cols;
 		spmv_data.num_col_entries = blk->num_col_entries;
@@ -787,10 +813,15 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 	/* handle dense rows */
 
 	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++) {
-		mul_NxB_BxB_acc_gpu(p, 
-			d->dense_blocks[i], 
+		if (d->use_cudamanaged == 2) {
+			CUDA_TRY(cuMemPrefetchAsync(d->dense_blocks[i],
+				p->ncols * sizeof(v_t),
+				d->gpu_info->device_handle, 0))
+		}
+		mul_NxB_BxB_acc_gpu(p,
+			d->dense_blocks[i],
 			(CUdeviceptr)((v_t *)x->gpu_vec + VBITS * i),
-			(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i), 
+			(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i),
 			p->ncols);
 	}
 }

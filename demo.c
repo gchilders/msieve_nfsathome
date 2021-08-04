@@ -172,6 +172,8 @@ void print_usage(char *progname) {
 		 "   cado_filter=1    assume filtering used the CADO-NFS suite\n"
 #ifdef HAVE_CUDA
 		 "   block_nnz=X      use approx. X nonzeros per CUB SpMV block\n"
+		 "   use_managed=1    store a matrix larger than will fit on the\n"
+		 "                    GPU in CUDA managed memory\n"
 #endif
 #ifdef HAVE_MPI
 		 "   mpi_nrows=X      use a grid with X rows\n"

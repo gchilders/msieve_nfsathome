@@ -65,6 +65,9 @@ typedef struct {
 	spmv_engine_run_func spmv_engine_run;
 	void * spmv_engine;
 
+	/* use managed memory to store the matrix data */
+	uint32 use_cudamanaged;
+
 } gpudata_t;
 
 
