@@ -95,8 +95,8 @@ clean :
 	rm -f  *.dll *.so *.lib *.exp built
 
 $(LIBNAME).$(EXT) : $(DEPS)
-	$(NVCC) $(SM_TARGETS) $(SM_DEF) -o $@ sort_engine.cu $(NVCCFLAGS) $(INC) -O3  
+	$(NVCC) $(SM_TARGETS) $(SM_DEF) -o $@ sort_engine.cu $(NVCCFLAGS) $(INC) -O3 -DTHRUST_IGNORE_CUB_VERSION_CHECK
 
 $(LIBNAME2).$(EXT) : $(DEPS)
-	$(NVCC) $(SM_TARGETS) $(SM_DEF) -o $@ spmv_engine.cu $(NVCCFLAGS) -DVBITS=$(VBITS) $(INC) -O3  
+	$(NVCC) $(SM_TARGETS) $(SM_DEF) -o $@ spmv_engine.cu $(NVCCFLAGS) -DVBITS=$(VBITS) $(INC) -O3 -DTHRUST_IGNORE_CUB_VERSION_CHECK
 

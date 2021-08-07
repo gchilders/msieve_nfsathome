@@ -115,6 +115,9 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 		/* now wait for the send to end */
 
 		MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
+#if defined(HAVE_CUDAAWARE_MPI)
+		CUDA_TRY(cuCtxSynchronize())
+#endif
 	}	
 		
 	/* stage 2
@@ -148,6 +151,9 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 		/* now wait for the send to end */
 
 		MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
+#if defined(HAVE_CUDAAWARE_MPI)
+		CUDA_TRY(cuCtxSynchronize())
+#endif
 	}
 }
 
@@ -167,6 +173,7 @@ void global_xor(void *send_buf_in, void *recv_buf_in,
 #ifdef HAVE_CUDAAWARE_MPI
 	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->gpu_vec;
 	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->gpu_vec;
+	CUDA_TRY(cuCtxSynchronize())
 #else
 	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
 	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
@@ -240,6 +247,7 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->gpu_vec;
 	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->gpu_vec;
 	scratch  = (v_t *)((gpuvec_t *)scratch_in)->gpu_vec;
+	CUDA_TRY(cuCtxSynchronize())
 #else
 	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
 	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
@@ -332,6 +340,9 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 		/* now wait for the send to end */
         
 		MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
+#ifdef HAVE_CUDAAWARE_MPI
+		CUDA_TRY(cuCtxSynchronize())
+#endif
 	}	
     
 	/* asynchronously send the current chunk */
@@ -368,6 +379,9 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 	/* now wait for the send to end */
     
 	MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
+#ifdef HAVE_CUDAAWARE_MPI
+		CUDA_TRY(cuCtxSynchronize())
+#endif
 #endif
 
 #if defined(HAVE_CUDA) && !defined(HAVE_CUDAAWARE_MPI)
@@ -417,6 +431,7 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 #ifdef HAVE_CUDAAWARE_MPI
 	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->gpu_vec;
 	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->gpu_vec;
+	CUDA_TRY(cuCtxSynchronize())
 #else
 	send_buf = (v_t *)((gpuvec_t *)send_buf_in)->host_vec;
 	recv_buf = (v_t *)((gpuvec_t *)recv_buf_in)->host_vec;
@@ -476,6 +491,9 @@ void global_allgather(void *send_buf_in, void *recv_buf_in,
 		/* now wait for the send to end */
         
 		MPI_TRY(MPI_Wait(&mpi_req, &mpi_status))
+#ifdef HAVE_CUDAAWARE_MPI
+		CUDA_TRY(cuCtxSynchronize())
+#endif
 	}
 #endif
 
