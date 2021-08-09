@@ -610,11 +610,11 @@ void scatter_ncols(msieve_obj *obj,
 	MPI_TRY(MPI_Scatterv(scratch, packed_matrix->subcol_counts,
 	       			packed_matrix->subcol_offsets, 
 	      			obj->mpi_word, out,
-				packed_matrix->ncols,
+				packed_matrix->nsubcols,
 	   			obj->mpi_word, 0, 
        				obj->mpi_la_col_grid))
 #ifdef HAVE_CUDA
-	vv_copyin(out_in, out, packed_matrix->ncols); 
+	vv_copyin(out_in, out, packed_matrix->nsubcols); 
 #endif
 }
 
