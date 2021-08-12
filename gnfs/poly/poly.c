@@ -138,6 +138,13 @@ int32 read_poly(msieve_obj *obj, mpz_t n,
 	mpz_mul(val, val, rat_poly->coeff[0]);
 	mpz_addmul(val, alg_poly->coeff[i], rpow);
 	mpz_neg(rat_poly->coeff[0], rat_poly->coeff[0]);
+	
+	if (mpz_sgn(alg_poly->coeff[alg_poly->degree]) < 0) {
+		logprintf(obj, "reversing signs of algebraic polynomial\n");
+		for (i = 0; i <= alg_poly->degree; i++)
+			mpz_neg(alg_poly->coeff[i], alg_poly->coeff[i]);
+		mpz_neg(val, val);
+	}
 
 	/* verify that result % N == 0. 
 
