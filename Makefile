@@ -45,7 +45,12 @@ ifeq ($(WIN),1)
 else
 	LIBS += -ldl
 endif
+ifdef CUDA
 ifeq ($(CUDA),1)
+	SM = 60
+else
+	SM = $(CUDA)
+endif
 
 ifeq ($(WIN),1)
 	CUDA_ROOT = $(shell echo $$CUDA_PATH)
@@ -168,7 +173,7 @@ COMMON_NOGPU_SRCS = \
 		common/lanczos/cpu/lanczos_matmul2.c \
 		common/lanczos/cpu/lanczos_vv.c
 
-ifeq ($(CUDA),1)
+ifdef CUDA
 	COMMON_SRCS += $(COMMON_GPU_SRCS)
 	COMMON_HDR += $(COMMON_GPU_HDR)
 	GPU_OBJS += \
@@ -276,7 +281,7 @@ NFS_NOGPU_SRCS = \
 
 NFS_NOGPU_OBJS = $(NFS_NOGPU_SRCS:.c=.no)
 
-ifeq ($(CUDA),1)
+ifdef CUDA
 	NFS_HDR += $(NFS_GPU_HDR)
 	NFS_SRCS += $(NFS_GPU_SRCS)
 	NFS_OBJS += $(NFS_GPU_OBJS)
@@ -295,7 +300,8 @@ help:
 	@echo "add 'WIN=1 if building on windows"
 	@echo "add 'WIN64=1 if building on 64-bit windows"
 	@echo "add 'ECM=1' if GMP-ECM is available (enables ECM)"
-	@echo "add 'CUDA=1' for Nvidia graphics card support"
+	@echo "add 'CUDA=cc' for Nvidia graphics card support where cc is the compute"
+	@echo "     capacity of the gpu. CUDA=1 defaults to 60"
 	@echo "add 'MPI=1' for parallel processing using MPI"
 	@echo "     add 'CUDAAWARE=1' if using CUDA-Aware MPI"
 	@echo "add 'BOINC=1' to add BOINC wrapper"
@@ -344,10 +350,10 @@ mpqs/sieve_core_generic_64k.qo: mpqs/sieve_core.c $(COMMON_HDR) $(QS_HDR)
 # GPU build rules
 
 stage1_core.ptx: $(NFS_GPU_HDR)
-	$(NVCC) -arch sm_35 -ptx -o $@ $<
+	$(NVCC) -arch sm_$(SM) -ptx -o $@ $<
 
 lanczos_kernel.ptx: $(COMMON_GPU_HDR)
-	$(NVCC) -arch sm_35 -ptx -DVBITS=$(VBITS) -o $@ $<
+	$(NVCC) -arch sm_$(SM) -ptx -DVBITS=$(VBITS) -o $@ $<
 
 cub/built:
-	cd cub && make WIN=$(WIN) WIN64=$(WIN64) VBITS=$(VBITS) sm=350 && cd ..
+	cd cub && make WIN=$(WIN) WIN64=$(WIN64) VBITS=$(VBITS) sm=$(SM)0 && cd ..
