@@ -463,6 +463,73 @@ void mul_BxN_NxB(v_t *x, v_t *y, v_t *xy, uint32 n) {
 }
 
 /*-------------------------------------------------------------------*/
+void mul_BxN_NxB_2(v_t *x, v_t *y, v_t *xy, uint32 n) {
+
+	/* Let x and y be N x B matrices. This routine computes
+	   the B x B matrix xy[][] given by transpose(x) * y 
+	   This version is as fast as or faster than the previous
+	   on most CPUs for VBITS >= 128 */
+
+	/* use only for VWORDS = 2, 4, or 8
+	   processes 128 bits per loop */
+	   
+	uint32 w_x, w_y;
+
+	for (w_x = 0; w_x < VWORDS; w_x += 2) {
+		for (w_y = 0; w_y < VWORDS; w_y += 2) {
+
+			int i, j, k;
+			uint64 c[16][256][2];
+			for (i = 0; i < 16; i++) {
+				for (j = 0; j < 256; j++)  {
+					c[i][j][0] = 0;
+					c[i][j][1] = 0;
+				}
+			}
+
+			for (i = 0; i < n; i++) {
+				uint64 xi[2], yi[2];
+				xi[0] = x[i].w[w_x];
+				xi[1] = x[i].w[w_x + 1];
+				yi[0] = y[i].w[w_y];
+				yi[1] = y[i].w[w_y + 1];
+
+				for (j = 0; j < 16; j++) { 
+					k = (xi[(j >> 3)] >> (8*(j & 7))) & 255; 
+					c[j][k][0] ^= yi[0];
+					c[j][k][1] ^= yi[1];
+				}
+			}
+			
+			// Now combine the table entries
+
+			for (i = 0; i < 8; i++) {
+				uint64 a[16][2];
+
+				for (j = 0; j < 16; j++) {
+					a[j][0] = 0;
+					a[j][1] = 0;
+				}
+
+				for (j = 0; j < 256; j++) {
+					if ((j >> i) & 1) {
+						for (k = 0; k < 16; k++) { 
+							a[k][0] ^= c[k][j][0];
+							a[k][1] ^= c[k][j][1];
+						}
+					}
+				}
+
+				for (j = 0; j < 16; j++) {
+					xy[64 * w_x + 8 * j + i].w[w_y] = a[j][0];
+					xy[64 * w_x + 8 * j + i].w[w_y + 1] = a[j][1];
+				}
+			}
+		}
+	}
+}
+
+/*-------------------------------------------------------------------*/
 static void inner_thread_run(void *data, int thread_num)
 {
 	la_task_t *task = (la_task_t *)data;
@@ -470,7 +537,11 @@ static void inner_thread_run(void *data, int thread_num)
 	cpudata_t *cpudata = (cpudata_t *)p->extra;
 	thread_data_t *t = cpudata->thread_data + task->task_num;
 
+#if VWORDS == 1
 	mul_BxN_NxB(t->x, t->y, t->tmp_b, t->vsize);
+#else
+	mul_BxN_NxB_2(t->x, t->y, t->tmp_b, t->vsize);
+#endif
 }
 
 void vv_mul_BxN_NxB(packed_matrix_t *matrix,
