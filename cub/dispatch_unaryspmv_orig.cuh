@@ -265,8 +265,8 @@ struct DispatchUnarySpmv
     struct Policy350
     {
         typedef AgentUnarySpmvPolicy<
-                (sizeof(ValueT) > 4) ? 96 : 128,
-                (sizeof(ValueT) > 4) ? 4 : 7,
+                (sizeof(ValueT) > 4) ? 64 : 128,
+                (sizeof(ValueT) > 4) ? 1 : 7,
                 LOAD_LDG,
                 LOAD_CA,
                 LOAD_LDG,
@@ -291,8 +291,8 @@ struct DispatchUnarySpmv
     {
 
         typedef AgentUnarySpmvPolicy<
-                (sizeof(ValueT) > 4) ? 128 : 128,
-                (sizeof(ValueT) > 4) ? 9 : 14,
+                (sizeof(ValueT) > 4) ? 64 : 128,
+                (sizeof(ValueT) > 4) ? 1 : 14,
                 LOAD_LDG,
                 LOAD_CA,
                 LOAD_LDG,
@@ -316,7 +316,7 @@ struct DispatchUnarySpmv
     {
         typedef AgentUnarySpmvPolicy<
                 (sizeof(ValueT) > 4) ? 64 : 128,
-                (sizeof(ValueT) > 4) ? 6 : 7,
+                (sizeof(ValueT) > 4) ? 1 : 7,
                 LOAD_LDG,
                 LOAD_DEFAULT,
                 (sizeof(ValueT) > 4) ? LOAD_LDG : LOAD_DEFAULT,
@@ -341,8 +341,8 @@ struct DispatchUnarySpmv
     struct Policy600
     {
         typedef AgentUnarySpmvPolicy<
-                (sizeof(ValueT) > 4) ? 96 : 128,
-                (sizeof(ValueT) > 4) ? 4 : 7,
+                (sizeof(ValueT) > 4) ? 64 : 128,
+                (sizeof(ValueT) > 4) ? 1 : 7,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
                 LOAD_DEFAULT,
