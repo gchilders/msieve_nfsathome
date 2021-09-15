@@ -48,9 +48,15 @@ __device__ v_t v_and(v_t a, v_t b) {
 	res.w[3] = a.w[3] & b.w[3];
 	#if VWORDS > 4
 	res.w[4] = a.w[4] & b.w[4];
+	#if VWORDS > 5
 	res.w[5] = a.w[5] & b.w[5];
+	#if VWORDS > 6
 	res.w[6] = a.w[6] & b.w[6];
+	#if VWORDS > 7
 	res.w[7] = a.w[7] & b.w[7];
+	#endif
+	#endif
+	#endif
 	#endif
 	#endif
 	#endif
@@ -70,9 +76,15 @@ __device__ v_t v_xor(v_t a, v_t b) {
 	res.w[3] = a.w[3] ^ b.w[3];
 	#if VWORDS > 4
 	res.w[4] = a.w[4] ^ b.w[4];
+	#if VWORDS > 5
 	res.w[5] = a.w[5] ^ b.w[5];
+	#if VWORDS > 6
 	res.w[6] = a.w[6] ^ b.w[6];
+	#if VWORDS > 7
 	res.w[7] = a.w[7] ^ b.w[7];
+	#endif
+	#endif
+	#endif
 	#endif
 	#endif
 	#endif
@@ -90,9 +102,15 @@ __device__ void v_atomicxor(v_t * a, v_t b) {
 	atomicXor(&(a->w[3]), b.w[3]);
 	#if VWORDS > 4
 	atomicXor(&(a->w[4]), b.w[4]);
+	#if VWORDS > 5
 	atomicXor(&(a->w[5]), b.w[5]);
+	#if VWORDS > 6
 	atomicXor(&(a->w[6]), b.w[6]);
+	#if VWORDS > 7
 	atomicXor(&(a->w[7]), b.w[7]);
+	#endif
+	#endif
+	#endif
 	#endif
 	#endif
 	#endif

@@ -470,7 +470,7 @@ void mul_BxN_NxB_2(v_t *x, v_t *y, v_t *xy, uint32 n) {
 	   This version is as fast as or faster than the previous
 	   on most CPUs for VBITS >= 128 */
 
-	/* use only for VWORDS = 2, 4, or 8
+	/* use only for VWORDS = 2, 4, 6, or 8
 	   processes 128 bits per loop */
 	   
 	uint32 w_x, w_y;
@@ -537,10 +537,10 @@ static void inner_thread_run(void *data, int thread_num)
 	cpudata_t *cpudata = (cpudata_t *)p->extra;
 	thread_data_t *t = cpudata->thread_data + task->task_num;
 
-#if VWORDS == 1
-	mul_BxN_NxB(t->x, t->y, t->tmp_b, t->vsize);
-#else
+#if VWORDS == 2 || VWORDS == 4 || VWORDS == 6 || VWORDS == 8
 	mul_BxN_NxB_2(t->x, t->y, t->tmp_b, t->vsize);
+#else
+	mul_BxN_NxB(t->x, t->y, t->tmp_b, t->vsize);
 #endif
 }
 

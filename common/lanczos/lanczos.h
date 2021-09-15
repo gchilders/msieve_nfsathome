@@ -31,7 +31,7 @@ extern "C" {
 
 #define VWORDS ((VBITS + 63) / 64)
 
-#if VBITS!=64 && VBITS!=128 && VBITS!=256 && VBITS!=512
+#if VBITS!=64 && VBITS!=128 && VBITS!=192 && VBITS!=256 && VBITS!=320 && VBITS!=384 && VBITS!=448 && VBITS!=512
 #error "unsupported vector size"
 #endif
 

@@ -306,7 +306,8 @@ help:
 	@echo "     add 'CUDAAWARE=1' if using CUDA-Aware MPI"
 	@echo "add 'BOINC=1' to add BOINC wrapper"
 	@echo "add 'NO_ZLIB=1' if you don't have zlib"
-	@echo "add 'VBITS=X' for linear algebra with X-bit vectors (64, 128, 256, 512)"
+	@echo "add 'VBITS=X' for linear algebra with X-bit vectors"
+	@echo "     (64, 128, 192, 256, 320, 384, 448, 512)"
 
 all: $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(GPU_OBJS)
 	rm -f libmsieve.a
