@@ -25,7 +25,7 @@ $Id$
 extern "C" {
 #endif
 
-#define MAX_GPU 4
+#define MAX_GPU 16
 
 typedef struct {
 	char name[32];
