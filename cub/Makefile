@@ -27,6 +27,14 @@ else
     SM_ARCH = 600
 endif
 
+ifeq (860, $(findstring 860, $(SM_ARCH)))
+    SM_TARGETS  += -gencode=arch=compute_86,code=\"sm_86,compute_86\"
+    SM_DEF              += -DSM800
+endif
+ifeq (800, $(findstring 800, $(SM_ARCH)))
+    SM_TARGETS  += -gencode=arch=compute_80,code=\"sm_80,compute_80\"
+    SM_DEF              += -DSM800
+endif
 ifeq (750, $(findstring 750, $(SM_ARCH)))
     SM_TARGETS  += -gencode=arch=compute_75,code=\"sm_75,compute_75\"
     SM_DEF              += -DSM700
@@ -76,7 +84,7 @@ rwildcard=$(foreach d,$(wildcard $1*),$(call rwildcard,$d/,$2) $(filter $(subst 
 
 CUB_DEPS = 	$(call rwildcard, cub,*.cuh)
 
-INC = -I"$(CUDA_ROOT)/include" -I.
+INC = -I. -I"$(CUDA_ROOT)/include"
 
 DEPS = ./Makefile \
 	sort_engine.cu \
