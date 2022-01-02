@@ -689,6 +689,9 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 			printf("Storing matrix in managed memory\n");
 		}
 	}
+	
+	/* Possibly adjust L2 fetch granularity. Default is 128. Try 32 for VBITS=256, 64 for higher. */
+	/* if (gpu_info->compute_version_major >= 8) CUDA_TRY(cudaDeviceSetLimit(cudaLimitMaxL2FetchGranularity, 32)) */
 
 	/* set up the matrix on the card */
 
