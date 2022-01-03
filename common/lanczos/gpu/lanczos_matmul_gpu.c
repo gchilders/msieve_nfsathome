@@ -28,6 +28,76 @@ typedef struct {
 	uint32 col_off;
 } entry_idx_t;
 
+static CUresult setProp(CUmemAllocationProp *prop, bool UseCompressibleMemory)
+{
+    CUdevice currentDevice;
+    CUDA_TRY(cuCtxGetDevice(&currentDevice))
+
+    memset(prop, 0, sizeof(CUmemAllocationProp));
+    prop->type = CU_MEM_ALLOCATION_TYPE_PINNED;
+    prop->location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+    prop->location.id = currentDevice;
+
+    if (UseCompressibleMemory)
+        prop->allocFlags.compressionType = CU_MEM_ALLOCATION_COMP_GENERIC;
+
+    return CUDA_SUCCESS;
+}
+
+CUresult allocateCompressible(void **adr, size_t size, bool UseCompressibleMemory)
+{
+    CUmemAllocationProp prop = {};
+    setProp(&prop, UseCompressibleMemory);
+
+    size_t granularity = 0;
+    CUDA_TRY(cuMemGetAllocationGranularity(&granularity, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM))
+    size = ((size - 1) / granularity + 1) * granularity;
+    CUdeviceptr dptr;
+    CUDA_TRY(cuMemAddressReserve(&dptr, size, 0, 0, 0))
+    
+	CUmemGenericAllocationHandle allocationHandle;
+    CUDA_TRY(cuMemCreate(&allocationHandle, size, &prop, 0))
+
+    // Check if cuMemCreate was able to allocate compressible memory.
+    if (UseCompressibleMemory) {
+        CUmemAllocationProp allocationProp = {};
+        cuMemGetAllocationPropertiesFromHandle(&allocationProp, allocationHandle);
+        if (allocationProp.allocFlags.compressionType != CU_MEM_ALLOCATION_COMP_GENERIC) {
+            printf("Could not allocate compressible memory...\n");
+            exit(-1);
+        }
+    }
+
+    CUDA_TRY(cuMemMap(dptr, size, 0, allocationHandle, 0))
+    CUDA_TRY(cuMemRelease(allocationHandle))
+
+    CUmemAccessDesc accessDescriptor;
+    accessDescriptor.location.id = prop.location.id;
+    accessDescriptor.location.type = prop.location.type;
+    accessDescriptor.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+
+    CUDA_TRY(cuMemSetAccess(dptr, size, &accessDescriptor, 1))
+
+    *adr = (void *)dptr;
+    return CUDA_SUCCESS;
+}
+
+CUresult freeCompressible(void *ptr, size_t size, bool UseCompressibleMemory)
+{
+    CUmemAllocationProp prop = {};
+    setProp(&prop, UseCompressibleMemory);
+
+    size_t granularity = 0;
+    CUDA_TRY(cuMemGetAllocationGranularity(&granularity, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM))
+    size = ((size - 1) / granularity + 1) * granularity;
+
+    if (ptr == NULL) return CUDA_SUCCESS;
+    if (cuMemUnmap((CUdeviceptr)ptr, size) != CUDA_SUCCESS ||
+        cuMemAddressFree((CUdeviceptr)ptr, size) != CUDA_SUCCESS)
+        return CUDA_ERROR_INVALID_VALUE;
+    return CUDA_SUCCESS;
+}
+
 /*-------------------------------------------------------------------*/
 static void copy_dense(packed_matrix_t *p) 
 {
@@ -66,6 +136,7 @@ static void copy_dense(packed_matrix_t *p)
 				CU_MEM_ADVISE_SET_READ_MOSTLY,
 				d->gpu_info->device_handle))
 		} else {
+			/* CUDA_TRY(allocateCompressible((void **)&d->dense_blocks[i], ncols * sizeof(v_t), true)) */
 			CUDA_TRY(cuMemAlloc(&d->dense_blocks[i],
 					ncols * sizeof(v_t)))
 			CUDA_TRY(cuMemcpyHtoD(d->dense_blocks[i], tmp,
@@ -363,12 +434,14 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 				CU_MEM_ADVISE_SET_READ_MOSTLY,
 				d->gpu_info->device_handle))
 	} else {
+		/* CUDA_TRY(allocateCompressible((void **)&b->col_entries, num_entries * sizeof(uint32), true)) */
 		CUDA_TRY(cuMemAlloc(&b->col_entries,
 				num_entries * sizeof(uint32)))
 		CUDA_TRY(cuMemcpyHtoD(b->col_entries,
 				col_entries,
 				num_entries * sizeof(uint32)))
 
+		/* CUDA_TRY(allocateCompressible((void **)&b->row_entries, (num_rows + 1) * sizeof(uint32), true)) */
 		CUDA_TRY(cuMemAlloc(&b->row_entries,
 				(num_rows + 1) * sizeof(uint32)))
 		CUDA_TRY(cuMemcpyHtoD(b->row_entries,
@@ -690,8 +763,8 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		}
 	}
 	
-	/* Possibly adjust L2 fetch granularity. Default is 128. Try 32 for VBITS=256, 64 for higher. */
-	/* if (gpu_info->compute_version_major >= 8) CUDA_TRY(cudaDeviceSetLimit(cudaLimitMaxL2FetchGranularity, 32)) */
+	/* Adjust L2 fetch granularity. Default is 128. Tried 32 for VBITS=256, but makes no difference */
+	/* if (gpu_info->compute_version_major >= 8) CUDA_TRY(cuCtxSetLimit(CU_LIMIT_MAX_L2_FETCH_GRANULARITY, 32)) */
 
 	/* set up the matrix on the card */
 
