@@ -28,7 +28,7 @@ typedef struct {
 	uint32 col_off;
 } entry_idx_t;
 
-static CUresult setProp(CUmemAllocationProp *prop, bool UseCompressibleMemory)
+static CUresult setProp(CUmemAllocationProp *prop, int UseCompressibleMemory)
 {
     CUdevice currentDevice;
     CUDA_TRY(cuCtxGetDevice(&currentDevice))
@@ -44,7 +44,7 @@ static CUresult setProp(CUmemAllocationProp *prop, bool UseCompressibleMemory)
     return CUDA_SUCCESS;
 }
 
-CUresult allocateCompressible(void **adr, size_t size, bool UseCompressibleMemory)
+CUresult allocateCompressible(void **adr, size_t size, int UseCompressibleMemory)
 {
     CUmemAllocationProp prop = {};
     setProp(&prop, UseCompressibleMemory);
@@ -82,7 +82,7 @@ CUresult allocateCompressible(void **adr, size_t size, bool UseCompressibleMemor
     return CUDA_SUCCESS;
 }
 
-CUresult freeCompressible(void *ptr, size_t size, bool UseCompressibleMemory)
+CUresult freeCompressible(void *ptr, size_t size, int UseCompressibleMemory)
 {
     CUmemAllocationProp prop = {};
     setProp(&prop, UseCompressibleMemory);
@@ -136,7 +136,7 @@ static void copy_dense(packed_matrix_t *p)
 				CU_MEM_ADVISE_SET_READ_MOSTLY,
 				d->gpu_info->device_handle))
 		} else {
-			/* CUDA_TRY(allocateCompressible((void **)&d->dense_blocks[i], ncols * sizeof(v_t), true)) */
+			/* CUDA_TRY(allocateCompressible((void **)&d->dense_blocks[i], ncols * sizeof(v_t), 1)) */
 			CUDA_TRY(cuMemAlloc(&d->dense_blocks[i],
 					ncols * sizeof(v_t)))
 			CUDA_TRY(cuMemcpyHtoD(d->dense_blocks[i], tmp,
@@ -434,14 +434,14 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 				CU_MEM_ADVISE_SET_READ_MOSTLY,
 				d->gpu_info->device_handle))
 	} else {
-		/* CUDA_TRY(allocateCompressible((void **)&b->col_entries, num_entries * sizeof(uint32), true)) */
+		/* CUDA_TRY(allocateCompressible((void **)&b->col_entries, num_entries * sizeof(uint32), 1)) */
 		CUDA_TRY(cuMemAlloc(&b->col_entries,
 				num_entries * sizeof(uint32)))
 		CUDA_TRY(cuMemcpyHtoD(b->col_entries,
 				col_entries,
 				num_entries * sizeof(uint32)))
 
-		/* CUDA_TRY(allocateCompressible((void **)&b->row_entries, (num_rows + 1) * sizeof(uint32), true)) */
+		/* CUDA_TRY(allocateCompressible((void **)&b->row_entries, (num_rows + 1) * sizeof(uint32), 1)) */
 		CUDA_TRY(cuMemAlloc(&b->row_entries,
 				(num_rows + 1) * sizeof(uint32)))
 		CUDA_TRY(cuMemcpyHtoD(b->row_entries,
