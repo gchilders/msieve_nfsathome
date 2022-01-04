@@ -322,6 +322,33 @@ static void mul_trans_one_block(const packed_block_t *curr_block,
 }
 
 /*-------------------------------------------------------------------*/
+void mul_trans_packed_core_csr(void *data, int thread_num)
+{
+	la_task_t *task = (la_task_t *)data;
+	packed_matrix_t *p = task->matrix;
+	cpudata_t *c = (cpudata_t *)p->extra;
+	
+	block_row_t *blk = c->trans_block_rows + task->block_num;
+
+	v_t *x = c->x + task->block_num * blk->blocksize;
+	v_t *b = c->b;
+	
+	uint32 i, j;
+	uint32 row;
+	
+	for(row = task->task_num; row < blk->num_rows; row += p->num_threads)
+    {
+        uint32 idx;
+		v_t tmp = {0};
+        for(idx=blk->row_entries[row]; idx<blk->row_entries[row+1]; ++idx)
+        {
+            tmp = v_xor(tmp, x[blk->col_entries[idx]]);
+        }
+        b[row] = tmp;
+    }
+}
+
+/*-------------------------------------------------------------------*/
 void mul_trans_packed_core(void *data, int thread_num)
 {
 	la_task_t *task = (la_task_t *)data;

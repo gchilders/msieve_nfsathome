@@ -14,6 +14,115 @@ $Id$
 
 #include "lanczos_cpu.h"
 
+#ifdef CSR
+/*-------------------------------------------------------------------*/
+static void mul_packed_csr(packed_matrix_t *p, v_t *x, v_t *b) 
+{
+	uint32 i, j;
+	task_control_t task = {NULL, NULL, NULL, NULL};
+	cpudata_t *c = (cpudata_t *)p->extra;
+
+	c->x = x;
+	c->b = b;
+	vv_clear(b, p->nrows);
+
+	/* start accumulating the dense matrix multiply results;
+	   each thread has scratch space for these, so we don't have
+	   to wait for the tasks to finish */
+
+	task.run = mul_packed_small_core;
+
+	for (i = 0; i < p->num_threads - 1; i++) {
+		task.data = c->tasks + i;
+		threadpool_add_task(c->threadpool, &task, 1);
+	}
+	mul_packed_small_core(c->tasks + i, i);
+
+	/* switch to the sparse blocks */
+
+	task.run = mul_packed_core_csr;
+
+	for (i = 0; i < c->num_block_rows; i++) {
+
+		la_task_t *t = c->tasks;
+				
+		for (j = 0; j < p->num_threads; j++)
+			t[j].block_num = i;
+
+		for (j = 0; j < p->num_threads - 1; j++) {
+			task.data = t + j;
+			threadpool_add_task(c->threadpool, &task, 1);
+		}
+
+		mul_packed_core_csr(t + j, j);
+		if (j) {
+			threadpool_drain(c->threadpool, 1);
+		}
+	}
+
+	/* xor the small vectors from each thread */
+
+	vv_copy(b, c->thread_data[0].tmp_b, 
+			MAX(c->first_block_size, VBITS * 
+				((p->num_dense_rows + VBITS - 1) / VBITS)));
+
+	for (i = 1; i < p->num_threads; i++)
+		vv_xor(b, c->thread_data[i].tmp_b,
+			MAX(c->first_block_size, VBITS * 
+				((p->num_dense_rows + VBITS - 1) / VBITS)));
+}
+
+/*-------------------------------------------------------------------*/
+static void mul_trans_packed_csr(packed_matrix_t *p, v_t *x, v_t *b) 
+{
+	uint32 i, j;
+	task_control_t task = {NULL, NULL, NULL, NULL};
+	cpudata_t *c = (cpudata_t *)p->extra;
+
+	c->x = x;
+	c->b = b;
+	vv_clear(b, p->ncols);
+
+	task.run = mul_trans_packed_core_csr;
+
+	for (i = 0; i < c->num_trans_block_rows; i++) {
+
+		la_task_t *t = c->tasks;
+				
+		for (j = 0; j < p->num_threads; j++)
+			t[j].block_num = i;
+
+		for (j = 0; j < p->num_threads - 1; j++) {
+			task.data = t + j;
+			threadpool_add_task(c->threadpool, &task, 1);
+		}
+
+		mul_trans_packed_core_csr(t + j, j);
+		if (j) {
+			threadpool_drain(c->threadpool, 1);
+		}
+	}
+
+	if (p->num_dense_rows) {
+		/* add in the dense matrix multiply blocks; these don't 
+		   use scratch space, but need all of b to accumulate 
+		   results so we have to wait until all tasks finish */
+
+		task.run = mul_trans_packed_small_core;
+
+		for (i = 0; i < p->num_threads - 1; i++) {
+			task.data = c->tasks + i;
+			threadpool_add_task(c->threadpool, &task, 1);
+		}
+
+		mul_trans_packed_small_core(c->tasks + i, i);
+		if (i) {
+			threadpool_drain(c->threadpool, 1);
+		}
+	}
+}
+#endif
+
 /*-------------------------------------------------------------------*/
 static void mul_packed(packed_matrix_t *p, v_t *x, v_t *b) 
 {
@@ -171,6 +280,339 @@ static int compare_row_off(const void *x, const void *y) {
 	return (int)xx->col_off - (int)yy->col_off;
 }
 
+/*-------------------------------------------------------------------*/
+static void radix_sort(entry_idx_t *arr, uint32 n) {
+
+	/* simple radix sort, much faster than qsort() */
+
+	uint32 i, pass, skip;
+	uint64 *a, *b, *from, *to, *temp;
+
+	a = (uint64 *) malloc(n * sizeof(uint64));
+	b = (uint64 *) malloc(n * sizeof(uint64));
+
+	for (i = 0; i < n; i++) {
+		entry_idx_t *e = arr + i;
+		a[i] = ((uint64)(e->row_off) << 32) | (uint64)(e->col_off);
+	}
+
+	from = a;
+	to = b;
+	skip = 0;
+	for (pass = 0; pass < 8; pass++)  {
+		uint32 box[256] = { 0 };
+
+		for (i = 0; i < n; i++) box[ (from[i] >> (8*pass)) & 255]++;
+		if (box[0] == n) { /* this word is all 0's, don't need to sort */
+			skip++;
+			continue;
+		}
+		for (i = 1; i < 256; i++) box[i] += box[i-1];
+		for (i = n - 1; i != (uint32)(-1); i--) to[--box[(from[i] >> (8*pass)) & 255]] = from[i];
+
+		temp = from;
+		from = to;
+		to = temp;
+	}
+
+	if (skip & 1) to = b;
+	else to = a;
+	for (i = 0; i < n; i++) {
+		entry_idx_t *e = arr + i;
+		e->row_off = (uint32)(to[i] >> 32);
+		e->col_off = (uint32)(to[i]);
+	}
+
+	free(a);
+	free(b);
+}
+
+/*-------------------------------------------------------------------*/
+#ifdef CSR
+static uint32 extract_block(la_col_t *cols,
+			uint32 row_min, uint32 row_max,
+			uint32 col_min, uint32 col_max,
+			entry_idx_t **entries_in, 
+			uint32 *max_entries_in)
+{
+	uint32 i, j;
+	uint32 num_entries = 0;
+	entry_idx_t *entries = *entries_in;
+	uint32 max_entries = *max_entries_in;
+
+	for (i = col_min; i < col_max; i++) {
+
+		la_col_t *col = cols + i;
+
+		for (j = 0; j < col->weight; j++) {
+			uint32 idx = col->data[j];
+
+			if (idx >= row_max)
+				break;
+
+			if (idx >= row_min) {
+
+				entry_idx_t *e;
+
+				if (num_entries == max_entries) {
+					max_entries *= 2;
+					entries = (entry_idx_t *)xrealloc(
+							entries, 
+							max_entries *
+							sizeof(entry_idx_t));
+				}
+
+				e = entries + num_entries++;
+				e->row_off = idx;
+				e->col_off = i;
+			}
+		}
+	}
+
+	*entries_in = entries;
+	*max_entries_in = max_entries;
+	return num_entries;
+}
+
+/*-------------------------------------------------------------------*/
+static void pack_matrix_block(block_row_t *b,
+			entry_idx_t *entries, uint32 num_entries,
+			uint32 row_min, uint32 row_max, 
+			uint32 col_min, uint32 col_max,
+			uint32 is_trans)
+{
+
+	uint32 i, j;
+	uint32 num_rows = row_max - row_min;
+
+	/* convert a block of matrix rows from COO to CSR format */
+
+	uint32 *col_entries = (uint32 *)xmalloc(num_entries * 
+					sizeof(uint32));
+	uint32 *row_entries = (uint32 *)xcalloc(num_rows + 1,
+					sizeof(uint32));
+
+	if (is_trans) {
+		for (i = 0; i < num_entries; i++) {
+			entry_idx_t *e = entries + i;
+			j = e->row_off;
+			e->row_off = e->col_off;
+			e->col_off = j;
+		}
+	}
+	else {
+		/* qsort(entries, num_entries, sizeof(entry_idx_t),
+				compare_row_off); */
+		radix_sort(entries, num_entries);
+	}
+
+	for (i = j = 0; i < num_entries; i++, j++) {
+
+		entry_idx_t *e = entries + i;
+
+		col_entries[i] = e[0].col_off - col_min;
+
+		if (i > 0 && e[0].row_off != e[-1].row_off) {
+			row_entries[e[-1].row_off - row_min] = j;
+			j = 0;
+		}
+	}
+	row_entries[entries[i-1].row_off - row_min] = j;
+
+	for (i = j = 0; i < num_rows; i++) {
+		uint32 t = row_entries[i];
+		row_entries[i] = j;
+		j += t;
+	}
+	row_entries[num_rows] = num_entries;
+
+	b->num_rows = num_rows;
+	b->num_cols = col_max - col_min;
+	b->num_col_entries = num_entries;
+	b->col_entries = col_entries;
+	b->row_entries = row_entries;
+	printf("%u %u\n", num_entries, num_rows);
+}
+
+/*-------------------------------------------------------------------*/
+static void csr_matrix_init(packed_matrix_t *p) {
+
+	uint32 start_row = 0;
+	uint32 start_col = 0;
+	cpudata_t *d = (cpudata_t *)p->extra;
+
+	uint32 num_block_rows = 0;
+	uint32 num_trans_block_rows = 0;
+	uint32 num_block_rows_alloc = 100;
+	uint32 num_trans_block_rows_alloc = 100;
+	block_row_t *block_rows = (block_row_t *)xmalloc(
+					num_block_rows_alloc *
+					sizeof(block_row_t));
+	block_row_t *trans_block_rows = (block_row_t *)xmalloc(
+					num_trans_block_rows_alloc *
+					sizeof(block_row_t));
+
+	uint32 num_entries_alloc = 10000;
+	entry_idx_t *entries = (entry_idx_t *)xmalloc(
+					num_entries_alloc *
+					sizeof(entry_idx_t));
+
+	/* pack the dense rows VBITS at a time */
+
+	uint32 dense_row_blocks = (p->num_dense_rows + VBITS - 1) / VBITS;
+	if (dense_row_blocks) {
+		uint32 i, j, k;
+		la_col_t *A = p->unpacked_cols;
+		d->dense_blocks = (v_t **)xmalloc(dense_row_blocks *
+						sizeof(v_t *));
+		for (i = 0; i < dense_row_blocks; i++) {
+			d->dense_blocks[i] = (v_t *)vv_alloc(p->ncols, p->extra);
+		}
+
+		for (i = 0; i < p->ncols; i++) {
+			la_col_t *col = A + i;
+			uint32 *src = col->data + col->weight;
+			for (j = 0; j < dense_row_blocks; j++) {
+				for (k = 0; k < VWORDS; k++) {
+					uint32 t = j * VWORDS + k;
+					d->dense_blocks[j][i].w[k] = 
+						(uint64)src[2 * t + 1] << 32 |
+						(uint64)src[2 * t];
+				}
+			}
+		}
+	}
+	
+	/* deal with the sparse rows */
+
+	printf("converting matrix to CSR\n");
+
+/* Cub likes smaller blocks, but increases memory use */
+#ifdef HAVE_MPI
+	p->preferred_block = 250000 * p->mpi_nrows;
+	p->preferred_trans_block = 250000 * p->mpi_ncols;
+#else
+	p->preferred_block = 250000;
+	p->preferred_trans_block = 250000;
+#endif 
+
+	while (start_col < p->ncols) {
+
+		block_row_t *b;
+		uint32 block_size = MIN(p->preferred_block, 
+					p->ncols - start_col);
+		uint32 num_entries;
+
+		num_entries = extract_block(p->unpacked_cols,
+					0, p->nrows,
+					start_col,
+					start_col + block_size,
+					&entries,
+					&num_entries_alloc);
+
+		if (num_entries > 4000000000) {
+			printf("max column entries over 4 billion\n");
+			printf("adjust preferred block to compensate\n");
+			exit(42);
+		}
+
+		if (num_block_rows == num_block_rows_alloc) {
+			num_block_rows_alloc *= 2;
+			block_rows = (block_row_t *)xrealloc(
+					block_rows,
+					num_block_rows_alloc *
+					sizeof(block_row_t));
+		}
+
+		b = block_rows + num_block_rows++;
+
+		pack_matrix_block(b, entries, num_entries,
+				0, p->nrows, 
+				start_col,
+				start_col + block_size,
+				0);
+
+		start_col += block_size;
+	}
+
+	d->num_block_rows = num_block_rows;
+	d->block_rows = block_rows;
+
+	/* handle the transpose of the matrix */
+
+	while (start_row < p->nrows) {
+
+		block_row_t *b;
+		uint32 block_size = MIN(p->preferred_trans_block, 
+					p->nrows - start_row);
+		uint32 num_entries;
+
+		num_entries = extract_block(p->unpacked_cols,
+					start_row,
+					start_row + block_size,
+					0, p->ncols,
+					&entries,
+					&num_entries_alloc);
+
+		if (num_entries > 4000000000) {
+			printf("max column entries over 4 billion\n");
+			printf("adjust preferred transpose block to compensate\n");
+			exit(42);
+		}
+
+		if (num_trans_block_rows == num_trans_block_rows_alloc) {
+			num_trans_block_rows_alloc *= 2;
+			trans_block_rows = (block_row_t *)xrealloc(
+					trans_block_rows,
+					num_trans_block_rows_alloc *
+					sizeof(block_row_t));
+		}
+
+		b = trans_block_rows + num_trans_block_rows++;
+
+		pack_matrix_block(b, entries, num_entries,
+				0, p->ncols, 
+				start_row,
+				start_row + block_size,
+				1);
+
+		start_row += block_size;
+	}
+
+	d->num_trans_block_rows = num_trans_block_rows;
+	d->trans_block_rows = trans_block_rows;
+
+	free(entries);
+}
+
+/*-------------------------------------------------------------------*/
+static void csr_matrix_free(packed_matrix_t *p) {
+
+	uint32 i;
+	cpudata_t *d = (cpudata_t *)p->extra;
+
+	for (i = 0; i < d->num_block_rows; i++) {
+		block_row_t *b = d->block_rows + i;
+
+		free(b->row_entries);
+		free(b->col_entries);
+	}
+	free(d->block_rows);
+
+	for (i = 0; i < d->num_trans_block_rows; i++) {
+		block_row_t *b = d->trans_block_rows + i;
+
+		free(b->row_entries);
+		free(b->col_entries);
+	}
+	free(d->trans_block_rows);
+
+	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++)
+		free(d->dense_blocks[i]);
+	free(d->dense_blocks);
+}
+#endif
+
 /*--------------------------------------------------------------------*/
 static void pack_med_block(packed_block_t *b)
 {
@@ -184,8 +626,9 @@ static void pack_med_block(packed_block_t *b)
 	   16-bit array */
 
 	e = b->d.entries;
-	qsort(e, (size_t)b->num_entries, 
-			sizeof(entry_idx_t), compare_row_off);
+	/* qsort(e, (size_t)b->num_entries, 
+			sizeof(entry_idx_t), compare_row_off); */
+	radix_sort(e, (size_t)b->num_entries);
 	for (j = k = 1; j < b->num_entries; j++) {
 		if (e[j].row_off != e[j-1].row_off)
 			k++;
@@ -386,6 +829,11 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		c->tasks[i].task_num = i;
 	}
 
+#ifdef CSR
+	csr_matrix_init(p);
+	return;
+#endif
+	
 	if (p->max_nrows <= MIN_NROWS_TO_PACK)
 		return;
 
@@ -447,7 +895,10 @@ void matrix_extra_free(packed_matrix_t *p) {
 
 	uint32 i;
 	cpudata_t *c = (cpudata_t *)p->extra;
-
+	
+#ifdef CSR
+	csr_matrix_free(p);
+#else
 	if (p->unpacked_cols) {
 		la_col_t *A = p->unpacked_cols;
 		for (i = 0; i < p->ncols; i++) {
@@ -465,6 +916,7 @@ void matrix_extra_free(packed_matrix_t *p) {
 		free(c->dense_blocks);
 		free(c->blocks);
 	}
+#endif
 
 	if (p->num_threads > 1) {
 		threadpool_drain(c->threadpool, 1);
@@ -540,11 +992,15 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 
 	v_t *x = (v_t *)x_in;
 	v_t *b = (v_t *)b_in;
-
+	
+#ifdef CSR
+	mul_packed_csr(A, x, b);
+#else
 	if (A->unpacked_cols)
 		mul_unpacked(A, x, b);
 	else
 		mul_packed(A, x, b);
+#endif
 }
 
 /*-------------------------------------------------------------------*/
@@ -556,8 +1012,12 @@ void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
 	v_t *x = (v_t *)x_in;
 	v_t *b = (v_t *)b_in;
 
+#ifdef CSR
+	mul_trans_packed_csr(A, x, b);
+#else
 	if (A->unpacked_cols)
 		mul_trans_unpacked(A, x, b);
 	else
 		mul_trans_packed(A, x, b);
+#endif
 }

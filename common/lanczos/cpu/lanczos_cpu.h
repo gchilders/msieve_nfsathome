@@ -15,6 +15,8 @@ $Id$
 #ifndef _COMMON_LANCZOS_CPU_LANCZOS_CPU_H_
 #define _COMMON_LANCZOS_CPU_LANCZOS_CPU_H_
 
+#define CSR
+
 #ifdef A64FX
 #include <arm_sve.h>
 #endif
@@ -45,6 +47,17 @@ typedef struct {
 		uint16 *med_entries;	  /* nonzero entries for medium dense rows */
 	} d;
 } packed_block_t;
+
+#ifdef CSR
+typedef struct {
+	uint32 num_rows;
+	uint32 num_cols;
+	uint32 num_col_entries;
+	uint32 blocksize;
+	uint32 *col_entries;
+	uint32 *row_entries;
+} block_row_t;
+#endif
 
 #define MAX_THREADS 32
 #define MIN_NROWS_TO_THREAD 200000
@@ -84,6 +97,11 @@ typedef struct {
 	uint32 block_size;
 	uint32 num_block_rows;
 	uint32 num_block_cols;
+#ifdef CSR
+	uint32 num_trans_block_rows;
+	block_row_t *block_rows;
+	block_row_t *trans_block_rows;
+#endif	
 
 	uint32 superblock_size;  /* in units of blocks */
 	uint32 num_superblock_rows;
@@ -107,10 +125,12 @@ typedef struct {
    these routines for the heavy lifting */
 
 void mul_packed_core(void *data, int thread_num);
+void mul_packed_core_csr(void *data, int thread_num);
 
 void mul_packed_small_core(void *data, int thread_num);
 
 void mul_trans_packed_core(void *data, int thread_num);
+void mul_trans_packed_core_csr(void *data, int thread_num);
 
 void mul_trans_packed_small_core(void *data, int thread_num);
 
