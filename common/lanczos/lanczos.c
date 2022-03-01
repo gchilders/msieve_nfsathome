@@ -14,7 +14,7 @@ $Id$
 
 #include "lanczos.h"
 
-#define DEFAULT_DUMP_INTERVAL 2000
+#define DEFAULT_DUMP_INTERVAL 30*VBITS
 
 #ifdef HAVE_MPI
 	#define MPI_NODE_0_START if (obj->mpi_la_row_rank + \
@@ -1202,9 +1202,9 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 					max_n, eta / 3600, (eta % 3600) / 60);
 
 				/* report the ETA to the logfile once 
-				   (wait 6 intervals for a better ETA) */
+				   (wait 30 intervals for a better ETA) */
 
-				if (++log_eta_once == 6) {
+				if (++log_eta_once == 30) {
 					logprintf(obj, "linear algebra at "
 						   "%1.1f%%, ETA %dh%2dm\n",
 						100.0 * dim_solved / max_n,
