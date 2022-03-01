@@ -28,6 +28,8 @@ typedef struct {
 	uint32 col_off;
 } entry_idx_t;
 
+#if 0
+// Tried using compressible memory on an A100. Did not help 
 static CUresult setProp(CUmemAllocationProp *prop, int UseCompressibleMemory)
 {
     CUdevice currentDevice;
@@ -97,6 +99,7 @@ CUresult freeCompressible(void *ptr, size_t size, int UseCompressibleMemory)
         return CUDA_ERROR_INVALID_VALUE;
     return CUDA_SUCCESS;
 }
+#endif
 
 /*-------------------------------------------------------------------*/
 static void copy_dense(packed_matrix_t *p) 
