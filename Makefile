@@ -16,6 +16,7 @@
 WIN = 0
 WIN64 = 0
 VBITS = 64
+CPUCOO = 1
 
 # gcc with basic optimization (-march flag could
 # get overridden by architecture-specific builds)
@@ -39,6 +40,9 @@ CFLAGS = $(OPT_FLAGS) $(MACHINE_FLAGS) $(WARN_FLAGS) \
 ifeq ($(ECM),1)
 	CFLAGS += -DHAVE_GMP_ECM
 	LIBS += -lecm
+endif
+ifeq ($(CPUCSR),1)
+	CFLAGS += -DUSE_CSR
 endif
 ifeq ($(WIN),1)
 
@@ -127,6 +131,9 @@ COMMON_GPU_HDR = \
 COMMON_NOGPU_HDR = \
 	common/lanczos/cpu/lanczos_cpu.h
 
+COMMON_CSR_HDR = \
+	common/lanczos/csr/lanczos_csr.h
+	
 COMMON_SRCS = \
 	aprcl/mpz_aprcl32.c \
 	common/filter/clique.c \
@@ -164,21 +171,35 @@ COMMON_SRCS = \
 	common/util.c
 
 COMMON_GPU_SRCS = \
-		common/lanczos/gpu/lanczos_matmul_gpu.c \
-		common/lanczos/gpu/lanczos_vv.c
+	common/lanczos/gpu/lanczos_matmul_gpu.c \
+	common/lanczos/gpu/lanczos_vv.c
 
 COMMON_NOGPU_SRCS = \
-		common/lanczos/cpu/lanczos_matmul0.c \
-		common/lanczos/cpu/lanczos_matmul1.c \
-		common/lanczos/cpu/lanczos_matmul2.c \
-		common/lanczos/cpu/lanczos_vv.c
+	common/lanczos/cpu/lanczos_matmul0.c \
+	common/lanczos/cpu/lanczos_matmul1.c \
+	common/lanczos/cpu/lanczos_matmul2.c \
+	common/lanczos/cpu/lanczos_vv.c
 
+COMMON_CSR_SRCS = \
+	common/lanczos/csr/lanczos_matmul.c \
+	common/lanczos/csr/lanczos_vv.c
+		
 ifdef CUDA
+	CPUCSR = 0
+	CPUCOO = 0
 	COMMON_SRCS += $(COMMON_GPU_SRCS)
 	COMMON_HDR += $(COMMON_GPU_HDR)
 	GPU_OBJS += \
 		lanczos_kernel.ptx
-else
+endif
+
+ifeq ($(CPUCSR),1)
+	CPUCOO = 0
+	COMMON_SRCS += $(COMMON_CSR_SRCS)
+	COMMON_HDR += $(COMMON_CSR_HDR)
+endif
+
+ifeq ($(CPUCOO),1)
 	COMMON_SRCS += $(COMMON_NOGPU_SRCS)
 	COMMON_HDR += $(COMMON_NOGPU_HDR)
 endif
@@ -186,6 +207,7 @@ endif
 COMMON_OBJS = $(COMMON_SRCS:.c=.o)
 COMMON_GPU_OBJS = $(COMMON_GPU_SRCS:.c=.o)
 COMMON_NOGPU_OBJS = $(COMMON_NOGPU_SRCS:.c=.o)
+COMMON_CSR_OBJS = $(COMMON_CSR_SRCS:.c=.o)
 
 #---------------------------------- QS file lists -------------------------
 
@@ -300,6 +322,7 @@ help:
 	@echo "add 'WIN=1 if building on windows"
 	@echo "add 'WIN64=1 if building on 64-bit windows"
 	@echo "add 'ECM=1' if GMP-ECM is available (enables ECM)"
+	@echo "add 'CPUCSR=1' to use CSR matrix format"
 	@echo "add 'CUDA=cc' for Nvidia graphics card support where cc is the compute"
 	@echo "     capacity of the gpu. CUDA=1 defaults to 60"
 	@echo "add 'MPI=1' for parallel processing using MPI"
@@ -319,7 +342,7 @@ all: $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(GPU_OBJS)
 clean:
 	cd cub && make clean WIN=$(WIN) WIN64=$(WIN64) && cd ..
 	rm -f msieve msieve.exe libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
-		$(COMMON_GPU_OBJS) $(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) *.ptx
+		$(COMMON_GPU_OBJS) $(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) $(COMMON_CSR_OBJS) *.ptx
 
 #----------------------------------------- build rules ----------------------
 
