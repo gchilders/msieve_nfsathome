@@ -15,6 +15,7 @@ $Id$
 #ifndef _COMMON_LANCZOS_CSR_LANCZOS_CSR_H_
 #define _COMMON_LANCZOS_CSR_LANCZOS_CSR_H_
 
+#include <omp.h>
 #include "../lanczos.h"
 
 #ifdef __cplusplus

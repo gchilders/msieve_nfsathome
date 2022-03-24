@@ -490,6 +490,9 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	printf("Nonzeros per block: %u\n", p->block_nnz);
 
 	csr_matrix_init(p);
+	omp_set_num_threads(obj->num_threads);
+	printf("Using %u threads\n", obj->num_threads);
+
 }
 
 /*-------------------------------------------------------------------*/
@@ -502,12 +505,13 @@ void matrix_extra_free(packed_matrix_t *p) {
 }
 
 /*-------------------------------------------------------------------*/
-static void spmv_csr(int32 num_rows, uint32 num_cols, uint32 num_col_entries, uint32 *col_entries, uint32 *row_entries, v_t *x, v_t *b) {
+static void spmv_csr(int32 num_rows, uint32 *col_entries, uint32 *row_entries, v_t *x, v_t *b) {
 	
-	/* perform b = A * x + b */
+	/* b = A * x + b */
 
     uint32 row;
 
+#pragma omp parallel for schedule(dynamic)
     for(row = 0; row < num_rows; row++) {
         uint32 idx;
         v_t tmp = {0};
@@ -534,8 +538,7 @@ static void mul_packed_csr(packed_matrix_t *p,
 
 		block_row_t *blk = d->block_rows + i;
 		
-		spmv_csr(blk->num_rows, blk->num_cols, blk->num_col_entries, 
-			blk->col_entries, blk->row_entries, x + start_col, b);
+		spmv_csr(blk->num_rows, blk->col_entries, blk->row_entries, x + start_col, b);
 
 		start_col += blk->blocksize;
 	}
@@ -567,8 +570,7 @@ static void mul_packed_trans_csr(packed_matrix_t *p,
 
 		block_row_t *blk = d->trans_block_rows + i;
 		
-		spmv_csr(blk->num_rows, blk->num_cols, blk->num_col_entries, 
-			blk->col_entries, blk->row_entries, x + start_row, b);
+		spmv_csr(blk->num_rows, blk->col_entries, blk->row_entries, x + start_row, b);
 
 		start_row += blk->blocksize;
 	}

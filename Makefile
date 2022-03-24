@@ -42,7 +42,7 @@ ifeq ($(ECM),1)
 	LIBS += -lecm
 endif
 ifeq ($(CPUCSR),1)
-	CFLAGS += -DUSE_CSR
+	CFLAGS += -fopenmp -DUSE_CSR
 endif
 ifeq ($(WIN),1)
 

@@ -52,7 +52,7 @@ void vv_xor(void *dest_in, void *src_in, uint32 n) {
 	v_t *dest = (v_t *)dest_in;
 	uint32 i;
 
-	// openmp
+#pragma omp parallel for
 	for (i = 0; i < n; i++)
 		dest[i] = v_xor(dest[i], src[i]);
 }
@@ -61,8 +61,8 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 
 	v_t *v = (v_t *)v_in;
 	uint32 i;
-
-	// openmp
+	
+#pragma omp parallel for
 	for (i = 0; i < n; i++)
 		v[i] = v_and(v[i], mask);
 
@@ -73,7 +73,7 @@ static void core_NxB_BxB_acc(const v_t *v, const v_t *c, v_t * __restrict__ y, u
 
 	uint32 i, j;
 
-    // openmp
+#pragma omp parallel for
 	for (i = 0; i < n; i++) {
 		#ifdef MANUAL_PREFETCH
 		PREFETCH(y+i+4);
@@ -143,6 +143,7 @@ static void mul_NxB_BxB_precomp(v_t *c, v_t *x) {
 	uint32 i, j;
 	v_t acc[8 * VWORDS];
 
+#pragma omp parallel for
 	for (i = 0; i < 8 * VWORDS; i++)
 		acc[i] = c[i * 256] = v_zero;
 
@@ -249,6 +250,67 @@ void mul_BxN_NxB_cpu(v_t *x, v_t *y, v_t *xy, uint32 n) {
 	mul_BxN_NxB_postproc(c, xy);
 }
 
+/*-------------------------------------------------------------------*/
+void mul_BxN_NxB_2(v_t *x, v_t *y, v_t *xy, uint32 n) {
+
+	/* Let x and y be N x B matrices. This routine computes
+	   the B x B matrix xy[][] given by transpose(x) * y 
+	   This version is as fast as or faster than the previous
+	   on most CPUs for VBITS >= 128 */
+
+	/* use only for VWORDS = 2, 4, 6, or 8
+	   processes 128 bits per loop */
+	   
+	uint32 w_x, w_y;
+
+	for (w_x = 0; w_x < VWORDS; w_x += 2) {
+		for (w_y = 0; w_y < VWORDS; w_y += 2) {
+
+			int i, j, k;
+			uint64 c[16][256][2];
+			memset(c, 0, 16 * 256 * 2 * sizeof(uint64));
+			
+#pragma omp parallel for reduction(^:c)			
+			for (i = 0; i < n; i++) {
+				uint64 xi[2], yi[2];
+				xi[0] = x[i].w[w_x];
+				xi[1] = x[i].w[w_x + 1];
+				yi[0] = y[i].w[w_y];
+				yi[1] = y[i].w[w_y + 1];
+
+				for (j = 0; j < 16; j++) { 
+					k = (xi[(j >> 3)] >> (8*(j & 7))) & 255; 
+					c[j][k][0] ^= yi[0];
+					c[j][k][1] ^= yi[1];
+				}
+			}
+			
+			// Now combine the table entries
+
+			for (i = 0; i < 8; i++) {
+				uint64 a[16][2];
+				memset(a, 0, 16 * 2 * sizeof(uint64));
+
+#pragma omp parallel for reduction(^:a)
+				for (j = 0; j < 256; j++) {
+					if ((j >> i) & 1) {
+						for (k = 0; k < 16; k++) { 
+							a[k][0] ^= c[k][j][0];
+							a[k][1] ^= c[k][j][1];
+						}
+					}
+				}
+
+#pragma omp parallel for
+				for (j = 0; j < 16; j++) {
+					xy[64 * w_x + 8 * j + i].w[w_y] = a[j][0];
+					xy[64 * w_x + 8 * j + i].w[w_y + 1] = a[j][1];
+				}
+			}
+		}
+	}
+}
+
 
 /*-------------------------------------------------------------------*/
 void vv_mul_BxN_NxB(packed_matrix_t *matrix,
@@ -259,12 +321,31 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 	v_t *x = (v_t *)x_in;
 	v_t *y = (v_t *)y_in;
 
+#if VWORDS == 2 || VWORDS == 4 || VWORDS == 6 || VWORDS == 8
+	mul_BxN_NxB_2(x, y, xy, n);
+#else
 	mul_BxN_NxB_cpu(x, y, xy, n);
+#endif	
+	
 
 #ifdef HAVE_MPI
 	/* combine the results across the entire MPI grid */
+	
+	v_t xytmp[VBITS];
+	
+	/* combine the results across an entire MPI row */
 
-	MPI_TRY(MPI_Allreduce(MPI_IN_PLACE, xy, VWORDS * VBITS,
-		MPI_LONG_LONG, MPI_BXOR, matrix->mpi_la_grid))		
+	global_xor(xy, xytmp, VBITS, matrix->mpi_ncols,
+			matrix->mpi_la_col_rank,
+			matrix->mpi_word, matrix->mpi_la_row_grid);
+
+	/* combine the results across an entire MPI column */
+    
+	global_xor(xytmp, xy, VBITS, matrix->mpi_nrows,
+			matrix->mpi_la_row_rank,
+			matrix->mpi_word, matrix->mpi_la_col_grid);  
+
+	/* MPI_TRY(MPI_Allreduce(MPI_IN_PLACE, xy, VWORDS * VBITS,
+		MPI_LONG_LONG, MPI_BXOR, matrix->mpi_la_grid))	*/	
 #endif
 }

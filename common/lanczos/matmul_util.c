@@ -108,8 +108,9 @@ static void global_xor_async(v_t *send_buf, v_t *recv_buf,
 		vv_xor_gpu(curr_buf + m * chunk, send_buf + m * chunk, size,
 			((gpuvec_t *)send_buf_in)->gpudata);
 #else
-		for (j = 0; j < size; j++) 
-			curr_buf[m * chunk + j] = v_xor(curr_buf[m * chunk + j], send_buf[m * chunk + j]);
+		vv_xor(curr_buf + m * chunk, send_buf + m * chunk, size);
+		/* for (j = 0; j < size; j++) 
+			curr_buf[m * chunk + j] = v_xor(curr_buf[m * chunk + j], send_buf[m * chunk + j]); */
 #endif
 		
 		/* now wait for the send to end */
@@ -333,8 +334,9 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 		vv_xor_gpu(send_buf + m * chunk, scratch, size,
 			((gpuvec_t *)send_buf_in)->gpudata);
 #else
-		for (j = 0; j < size; j++) 
-			send_buf[m * chunk + j] = v_xor(send_buf[m * chunk + j], scratch[j]);
+		vv_xor(send_buf + m * chunk, scratch, size); 
+		/* for (j = 0; j < size; j++) 
+			send_buf[m * chunk + j] = v_xor(send_buf[m * chunk + j], scratch[j]); */
 #endif
 		
 		/* now wait for the send to end */
@@ -372,8 +374,9 @@ void global_xor_scatter(void *send_buf_in, void *recv_buf_in,
 		vv_xor_gpu(recv_buf, send_buf + m * chunk, size,
 			((gpuvec_t *)send_buf_in)->gpudata);
 #else
-		for (j = 0; j < size; j++) 
-			recv_buf[j] = v_xor(recv_buf[j], send_buf[m * chunk + j]);
+		vv_xor(recv_buf, send_buf + m * chunk, size);
+		/* for (j = 0; j < size; j++) 
+			recv_buf[j] = v_xor(recv_buf[j], send_buf[m * chunk + j]); */
 #endif
 
 	/* now wait for the send to end */
