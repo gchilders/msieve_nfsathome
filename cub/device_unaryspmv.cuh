@@ -41,7 +41,7 @@ namespace cub {
 
 struct DeviceUnarySpmv
 {
-    /* y = A * x + y, commenting out a single line in ConsumeTile() will make it y = A * x. */
+    /* y = A * x + y */
     template <
         typename            ValueT>
     CUB_RUNTIME_FUNCTION

@@ -559,7 +559,7 @@ struct AgentUnarySpmv
             #pragma unroll 1
             for (int item = threadIdx.x; item < tile_num_rows; item += BLOCK_THREADS)
             {
-                spmv_params.d_vector_y[tile_start_coord.x + item] = s_partials[item];
+                spmv_params.d_vector_y[tile_start_coord.x + item] = wd_vector_y[tile_start_coord.x + item] + s_partials[item];
             }
         }
 
@@ -627,7 +627,6 @@ struct AgentUnarySpmv
             d_tile_carry_pairs[tile_idx]    = tile_carry;
         }
     }
-
 
 };
 
