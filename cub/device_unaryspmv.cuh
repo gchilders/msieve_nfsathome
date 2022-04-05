@@ -1,3 +1,4 @@
+// Adapted from CUB's device/device_spmv.cuh
 
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
@@ -26,12 +27,7 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  ******************************************************************************/
-
-/**
- * \file
- * cub::DeviceUnarySpmv provides device-wide parallel operations for performing unary sparse-matrix * vector multiplication (SpMV).
- */
-
+ 
 #pragma once
 
 #include <stdio.h>
@@ -41,91 +37,11 @@
 #include "dispatch_unaryspmv_orig.cuh"
 #include "cub/config.cuh"
 
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
 namespace cub {
 
-
-/**
- * \brief DeviceUnarySpmv provides device-wide parallel operations for performing unary sparse-matrix * dense-vector multiplication (SpMV).
- * \ingroup SingleModule
- *
- * \par Overview
- * The [<em>SpMV computation</em>](http://en.wikipedia.org/wiki/Sparse_matrix-vector_multiplication)
- * performs the matrix-vector operation
- * <em>y</em> = <b>A</b>*<em>x</em> or <em>y</em> = <b>A</b>*<em>x</em> + <em>y</em>,
- * where:
- *  - <b>A</b> is an <em>m</em>x<em>n</em> sparse matrix whose non-zero structure is specified in modified
- *    [<em>compressed-storage-row (CSR) format</em>](http://en.wikipedia.org/wiki/Sparse_matrix#Compressed_row_Storage_.28CRS_or_CSR.29)
- *    (i.e., two arrays: <em>row_offsets</em> and <em>column_indices</em>)
- *  - <em>x</em> and <em>y</em> are dense vectors
- *
- * \par Usage Considerations
- * \cdp_class{DeviceUnarySpmv}
- *
- */
 struct DeviceUnarySpmv
 {
-    /******************************************************************//**
-     * \name CSR matrix operations
-     *********************************************************************/
-    //@{
-
-    /**
-     * \brief This function performs the matrix-vector operation <em>y</em> = <b>A</b>*<em>x</em> + <em>y</em>.
-     * Commenting out a single line in ConsumeTile() will make it <em>y</em> = <b>A</b>*<em>x</em>.
-     *
-     * \par Snippet
-     * The code snippet below illustrates SpMV upon a 9x9 CSR matrix <b>A</b>
-     * representing a 3x3 lattice (24 non-zeros).
-     *
-     * \par
-     * \code
-     * #include <device_unaryspmv.cuh>
-     *
-     * // Declare, allocate, and initialize device-accessible pointers for input matrix A, input vector x,
-     * // and output vector y
-     * int    num_rows = 9;
-     * int    num_cols = 9;
-     * int    num_nonzeros = 24;
-     *
-     * // values array, all 1's, isn't used  // e.g., [1, 1, 1, 1, 1, 1, 1, 1,
-     *                                       //        1, 1, 1, 1, 1, 1, 1, 1,
-     *                                       //        1, 1, 1, 1, 1, 1, 1, 1]
-     *
-     * int*   d_column_indices; // e.g., [1, 3, 0, 2, 4, 1, 5, 0,
-     *                          //        4, 6, 1, 3, 5, 7, 2, 4,
-     *                          //        8, 3, 7, 4, 6, 8, 5, 7]
-     *
-     * int*   d_row_offsets;    // e.g., [0, 2, 5, 7, 10, 14, 17, 19, 22, 24]
-     *
-     * float* d_vector_x;       // e.g., [1, 1, 1, 1, 1, 1, 1, 1, 1]
-     * float* d_vector_y;       // e.g., [ ,  ,  ,  ,  ,  ,  ,  ,  ]
-     * ...
-     *
-     * // Determine temporary device storage requirements
-     * void*    d_temp_storage = NULL;
-     * size_t   temp_storage_bytes = 0;
-     * cub::DeviceUnarySpmv::CsrMV(d_temp_storage, temp_storage_bytes,
-     *     d_row_offsets, d_column_indices, d_vector_x, d_vector_y,
-     *     num_rows, num_cols, num_nonzeros); 
-     *
-     * // Allocate temporary storage
-     * cudaMalloc(&d_temp_storage, temp_storage_bytes);
-     *
-     * // Run SpMV
-     * cub::DeviceUnarySpmv::CsrMV(d_temp_storage, temp_storage_bytes,
-     *     d_row_offsets, d_column_indices, d_vector_x, d_vector_y,
-     *     num_rows, num_cols, num_nonzeros);
-     *
-     * // d_vector_y <-- [2, 3, 2, 3, 4, 3, 2, 3, 2]
-     *
-     * \endcode
-     *
-     * \tparam ValueT       <b>[inferred]</b> Matrix and vector value type (e.g., /p float, /p double, etc.)
-     */
+    /* y = A * x + y, commenting out a single line in ConsumeTile() will make it y = A * x. */
     template <
         typename            ValueT>
     CUB_RUNTIME_FUNCTION
@@ -161,12 +77,6 @@ struct DeviceUnarySpmv
             debug_synchronous);
     }
 
-    //@}  end member group
 };
 
-
-
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
-
-
+}

@@ -1,3 +1,5 @@
+// Adapted from CUB's agent/agent_spmv_orig.cuh
+
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
  * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
@@ -26,10 +28,7 @@
  *
  ******************************************************************************/
 
-/**
- * \file
- * cub::AgentUnarySpmv implements a stateful abstraction of CUDA thread blocks for participating in device-wide SpMV.
- */
+/* AgentUnarySpmv implements a stateful abstraction of CUDA thread blocks for participating in device-wide SpMV. */
 
 #pragma once
 
@@ -46,10 +45,6 @@
 #include "cub/iterator/counting_input_iterator.cuh"
 #include "cub/iterator/tex_ref_input_iterator.cuh"
 
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
 namespace cub {
 
 
@@ -636,9 +631,4 @@ struct AgentUnarySpmv
 
 };
 
-
-
-
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
-
+} 

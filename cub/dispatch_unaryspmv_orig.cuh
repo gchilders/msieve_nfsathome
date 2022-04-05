@@ -1,3 +1,4 @@
+// Adapted from CUB's device/dispatch/dispatch_spmv_orig.cuh
 
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
@@ -27,11 +28,6 @@
  *
  ******************************************************************************/
 
-/**
- * \file
- * cub::DeviceUnarySpmv provides device-wide parallel operations for performing unary sparse-matrix * vector multiplication (SpMV).
- */
-
 #pragma once
 
 #include <stdio.h>
@@ -50,10 +46,6 @@
 
 #include <thrust/system/cuda/detail/core/triple_chevron_launch.h>
 
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
 namespace cub {
 
 
@@ -739,8 +731,5 @@ struct DispatchUnarySpmv
     }
 };
 
-
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
-
+}
 
