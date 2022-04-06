@@ -284,6 +284,26 @@ typedef struct {
 	la_cycle_t cycle;       /* list of relations comprising this column */
 } la_col_t;
 
+/*------------------------------------------------------------------
+
+Modification to msieve from FaaS
+
+Struct: la_dep_t
+
+This struct allows for a list of dependencies to be created, each
+containing a list of cycles. 
+
+Used to collect cycles in read_cycles_threaded() and then relations
+in nfs_get_cycle_relations_threaded().
+
+-------------------------------------------------------------------*/
+
+typedef struct {
+	la_col_t *column;
+	uint32 num_cycles;
+	uint32 curr_cycle;
+} la_dep_t;
+
 /* merge src1[] and src2[] into merge_array[], assumed
    large enough to hold the merged result. Return the
    final number of elements in merge_array */
@@ -334,6 +354,32 @@ void read_cycles(msieve_obj *obj,
 		la_col_t **cycle_list_out, 
 		uint32 dependency,
 		uint32 *colperm);
+
+/*------------------------------------------------------------------
+
+Modification to msieve from FaaS
+
+Method: read_cycles_threaded()
+
+This is a modified version of read_cycles() that enables the 
+threading of the square root stage. 
+
+The key modification is that it creates lists of cycles (and relation
+ids within them) for each of the dependencies in one pass of the .cyc
+ cycle file.
+
+It also takes in uint32 pointers for dep_lower and dep_upper. This
+allows for the modification of dep_lower and dep_upper, as some of 
+the dependencies will not contain any cycles. This differs from the 
+original code, which due to its sequential nature would normally "hit"
+a "good" dependency before running out of dependencies.
+
+-------------------------------------------------------------------*/
+
+void read_cycles_threaded(msieve_obj *obj, 
+		la_dep_t **dep_cycle_list_out, 
+		uint32 *dep_lower,
+		uint32 *dep_upper);
 
 /*-------------- MISCELLANEOUS STUFF ----------------------------------*/
 

@@ -164,8 +164,12 @@ uint32 factor_gnfs(msieve_obj *obj, mp_t *input_n,
 	if (obj->flags & MSIEVE_FLAG_NFS_LA)
 		nfs_solve_linear_system(obj, n);
 		
-	if (obj->flags & MSIEVE_FLAG_NFS_SQRT)
-		factor_found = nfs_find_factors(obj, n, factor_list);
+	if (obj->flags & MSIEVE_FLAG_NFS_SQRT) {
+		if (obj->num_threads < 2)
+			factor_found = nfs_find_factors(obj, n, factor_list);
+		else
+			factor_found = nfs_find_factors_threaded(obj, n, factor_list);
+	}
 
 finished:
 	mpz_poly_free(&rat_poly);

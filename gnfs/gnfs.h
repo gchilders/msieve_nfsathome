@@ -56,6 +56,30 @@ static INLINE void mpz_poly_init(mpz_poly_t * poly) {
 		mpz_init_set_ui(poly->coeff[i], 0);
 }
 
+/*------------------------------------------------------------------
+
+Modification to msieve from FaaS
+
+Method: mpz_poly_copy()
+
+This is a bug fix to the existing mpz_poly_copy() code. A simple 
+memcpy is not sufficient for mpz_t. It must be set correctly using
+the mpz_set() method.
+
+-------------------------------------------------------------------*/
+
+static INLINE void mpz_poly_copy(mpz_poly_t *dst, mpz_poly_t * src) {
+	uint32 i;
+	dst->degree = src->degree;
+
+	for (i = 0; i <= MAX_POLY_DEGREE; i++)
+		mpz_set(dst->coeff[i], src->coeff[i]);
+
+	mpz_set(dst->tmp1, src->tmp1);
+	mpz_set(dst->tmp2, src->tmp2);
+	mpz_set(dst->tmp3, src->tmp3);
+}
+
 static INLINE void mpz_poly_free(mpz_poly_t * poly) {
 	uint32 i;
 
@@ -262,6 +286,34 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n);
 uint32 nfs_find_factors(msieve_obj *obj, mpz_t n, 
 			factor_list_t *factor_list);
 
+/*------------------------------------------------------------------
+
+Modification to msieve from FaaS
+
+Method: nfs_find_factors_threaded()
+
+Implements a threaded version of nfs_find_factors(), where multiple
+dependencies are worked on at the same time. This eliminates the 
+non-deterministic runtime of nfs_find_factors(), where the time taken
+would scale linearly with the number of "bad" dependencies it encounters.
+
+Currently, all threads are given new tasks at the same time. This is
+to allow all of the threads to finish first, and allow the master thread
+to check if the factor has been found. 
+
+A modification that could be made in the future to modify the threading
+code to allow each thread to be killed at any time. This is a major
+nightmare due to the fact that mutexes are involved and memory is freed
+during the execution of thread, so I have not implemented it here.
+
+As we must wait for all threads to complete, there is a ~10% overhead
+here compared to the time it takes to work on one dependency only.
+
+-------------------------------------------------------------------*/
+
+uint32 nfs_find_factors_threaded(msieve_obj *obj, mpz_t n,
+			factor_list_t *factor_list);
+
 /*------------------- relation processing stuff --------------------------*/
 
 #define RATIONAL_IDEAL 0
@@ -333,6 +385,24 @@ typedef struct relation_t {
 				 factors first, then algebraic */
 } relation_t;
 
+
+/*------------------------------------------------------------------
+
+Modification to msieve from FaaS
+
+Struct: relation_lists_t
+
+Allows the store of a list of relations for multiple dependencies.
+
+-------------------------------------------------------------------*/
+
+typedef struct relation_lists_t {
+	uint32 dep_no;
+	uint32 num_relations;
+	relation_t *rlist;
+
+} relation_lists_t;
+
 /* structure used to conveniently represent all of
    the large ideals that occur in a relation. The
    structure is far too large to be useful when 
@@ -383,6 +453,29 @@ void nfs_read_cycles(msieve_obj *obj, factor_base_t *fb, uint32 *ncols,
 			la_col_t **cols, uint32 *num_relations,
 			relation_t **relation_list, uint32 compress,
 			uint32 dependency);
+
+/*------------------------------------------------------------------
+
+Modification to msieve from FaaS
+
+Method: nfs_read_cycles_threaded()
+
+This is a modified version of nfs_read_cycles() that enables the 
+threading of the square root stage. 
+
+Using the modified read_cycles_threaded() and 
+nfs_get_cycle_relations_threaded(), it allows us to create lists of 
+relations for each of the dependencies in one pass of the .cyc cycle 
+file and the .dat relation file. 
+
+By creating all of the dependency relations objects in one go, 
+this allows us to save on file IO time and to create threads for 
+multiple dependencies at the same time.
+
+-------------------------------------------------------------------*/
+
+void nfs_read_cycles_threaded(msieve_obj *obj, factor_base_t *fb, relation_lists_t **rlists, 
+			uint32 *dep_lower, uint32 *dep_upper);
 
 void nfs_free_relation_list(relation_t *rlist, uint32 num_relations);
 

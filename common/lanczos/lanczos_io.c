@@ -337,6 +337,199 @@ void read_cycles(msieve_obj *obj,
 	*cycle_list_out = (la_col_t *)xrealloc(cycle_list, 
 				num_cycles * sizeof(la_col_t));
 }
+
+/*------------------------------------------------------------------
+
+Modification to msieve from FaaS
+
+Method: read_cycles_threaded()
+
+This is a modified version of read_cycles() that enables the 
+threading of the square root stage. 
+
+The key modification is that it creates lists of cycles (and relation
+ids within them) for each of the dependencies in one pass of the .cyc
+ cycle file.
+
+It also takes in uint32 pointers for dep_lower and dep_upper. This
+allows for the modification of dep_lower and dep_upper, as some of 
+the dependencies will not contain any cycles. This differs from the 
+original code, which due to its sequential nature would normally "hit"
+a "good" dependency before running out of dependencies.
+
+-------------------------------------------------------------------*/
+
+void read_cycles_threaded(msieve_obj *obj, 
+		la_dep_t **dep_cycle_list_out, 
+		uint32 *dep_lower,
+		uint32 *dep_upper) {
+
+	uint32 i;
+	uint32 j;
+	uint32 num_cycles;
+	uint32 max_cycles = 0;
+	uint32 rel_index[MAX_COL_IDEALS];
+	char buf[256];
+	FILE *cycle_fp;
+	FILE *dep_fp = NULL;
+	la_dep_t *dep_cycle_list = NULL;
+	uint64 mask = 0;
+	uint32 temp_dep_upper = *dep_upper;
+
+	/* open cycle file */
+	sprintf(buf, "%s.cyc", obj->savefile.name);
+	cycle_fp = fopen(buf, "rb");
+	if (cycle_fp == NULL) {
+		logprintf(obj, "error: read_cycles can't open cycle file\n");
+		exit(-1);
+	}
+
+	/* open dependency file */
+	sprintf(buf, "%s.dep", obj->savefile.name);
+	dep_fp = fopen(buf, "rb");
+	if (dep_fp == NULL) {
+		logprintf(obj, "error: read_cycles can't "
+				"open dependency file\n");
+		exit(-1);
+	}
+
+	/* read the total number of cycles, and allocate 
+	   sufficient space for each dependency to hold them */
+	fread(&num_cycles, sizeof(uint32), (size_t)1, cycle_fp);
+	logprintf(obj, "Sqrt: Assigning space for %u cycles for %u dependencies\n", 
+		      num_cycles, *dep_upper - *dep_lower + 1);
+	dep_cycle_list = (la_dep_t *)xcalloc((size_t)(*dep_upper - *dep_lower + 1),
+										 sizeof(la_dep_t));
+
+	for (i = *dep_lower; i <= *dep_upper; i++) {
+		la_dep_t *dep = dep_cycle_list + i - *dep_lower;
+		dep->column = xcalloc((size_t)num_cycles, sizeof(la_col_t));
+		dep->curr_cycle = 0;
+		dep->num_cycles = num_cycles;
+	}
+
+	/* read the relation numbers for each cycle and copy it to 
+	   all of the dependencies that it belongs to */
+	for (i = 0; i < num_cycles; i++) {
+		la_dep_t *dep;
+		la_col_t *c;
+		uint32 num_relations;
+		uint64 curr_dep;
+
+		if (fread(&num_relations, sizeof(uint32), 
+					(size_t)1, cycle_fp) != 1)
+			break;
+
+		if (num_relations > MAX_COL_IDEALS) {
+			printf("error: cycle too large; corrupt file?\n");
+			exit(-1);
+		}
+
+		if (fread(rel_index, sizeof(uint32), (size_t)num_relations, 
+					cycle_fp) != num_relations)
+			break;
+
+		/* all the relation numbers for this cycle
+		   have been read; save them and start the
+		   count for the next cycle. */
+
+		if (fread(&curr_dep, sizeof(uint64), 
+					(size_t)1, dep_fp) == 0) {
+			printf("dependency file corrupt\n");
+			exit(-1);
+		} 
+
+		mask = (uint64) 1 << (*dep_lower - 1);
+
+		for (j = *dep_lower; j <= *dep_upper; j++) {
+			if (mask & curr_dep) {
+				dep = dep_cycle_list + j - *dep_lower;
+				c = dep->column + dep->curr_cycle;
+				dep->curr_cycle++;
+
+				c->cycle.num_relations = num_relations;
+				c->cycle.list = (uint32 *)xmalloc(num_relations * 
+								sizeof(uint32));
+				memcpy(c->cycle.list, rel_index, 
+						num_relations * sizeof(uint32));
+			}
+			mask <<= 1;
+		}
+	}
+
+	/* Assigns the correct number of cycles for each cycle.
+	   Also set the maximum number of cycles to ensure that at least
+	   one of the dependencies has a non-zero number of cycles */
+	for (i = *dep_lower; i <= *dep_upper; i++) {
+		la_dep_t *dep;
+
+		dep = dep_cycle_list + i - *dep_lower;
+
+		if (dep->curr_cycle > 0)
+			logprintf(obj, "Sqrt: For dependency %u, read %u cycles\n", i, 
+			      dep->curr_cycle);
+		dep->num_cycles = dep->curr_cycle;
+		max_cycles = MAX(max_cycles, dep->num_cycles);
+	}
+
+	/* Checks all of the cycles to ensure that none of them are empty. */
+	for (i = *dep_lower; i <= *dep_upper; i++) {
+		la_dep_t *dep;
+
+		dep = dep_cycle_list + i - *dep_lower;
+
+		for (j = 0; j < dep->num_cycles; j++) {
+			if (dep->column[j].cycle.num_relations == 0) {
+				logprintf(obj, "error: empty cycle encountered\n");
+				exit(-1);
+			}
+		}
+	}
+	fclose(cycle_fp);
+	fclose(dep_fp);
+
+	/* Check to ensure that at least one of the dependencies 
+	   has a non-zero number of cycles */
+	if (max_cycles == 0) {
+		for (i = *dep_lower; i <= *dep_upper; i++) {
+			la_dep_t *dep;
+
+			dep = dep_cycle_list + i - *dep_lower;
+			free(dep->column);
+		}
+		free(dep_cycle_list);
+		*dep_cycle_list_out = NULL;
+		logprintf(obj, "Sqrt: error: no dependencies with non-zero cycles");
+		return;
+	}
+
+	/* Reallocate the memory as the number of cycles per dep is probably
+	   less than the total number of cycles. If the dependency has no cycles,
+	   free it and change the dep_upper bound. 
+	   Reallocate the entire dependency list as well. */
+	for (i = *dep_lower; i <= *dep_upper; i++) {
+		la_dep_t *dep;
+
+		dep = dep_cycle_list + i - *dep_lower;
+
+		if (dep->num_cycles == 0) {
+			temp_dep_upper = MIN(i - 1, temp_dep_upper);
+			free(dep->column);
+		} else {
+			dep->column = (la_col_t *)xrealloc(dep->column, dep->num_cycles *
+											   sizeof(la_col_t));
+		}
+	}
+
+	*dep_upper = temp_dep_upper;
+	dep_cycle_list = (la_dep_t *)xrealloc(dep_cycle_list, 
+										  (*dep_upper - *dep_lower + 1) *
+										  sizeof(la_dep_t));
+
+	*dep_cycle_list_out = dep_cycle_list;
+}
+
+
 /*--------------------------------------------------------------------*/
 static int compare_uint32(const void *x, const void *y) {
 	uint32 *xx = (uint32 *)x;
