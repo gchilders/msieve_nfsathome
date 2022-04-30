@@ -88,7 +88,7 @@ void vv_xor(void *dest_in, void *src_in, uint32 n) {
 	void *args[3] = {&dest->gpu_vec, &src->gpu_vec, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
-				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
+				MIN(10000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
 				0, NULL, args, NULL))
 }
 
@@ -104,7 +104,7 @@ void vv_xor_gpu(void *dest_in, void *src_in, uint32 n, gpudata_t *d) {
 	void *args[3] = {&dest, &src, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
-				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
+				MIN(10000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
 				0, NULL, args, NULL))
 }
 
@@ -120,7 +120,7 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 	void *args[3] = {&v->gpu_vec, &mask, &n};
 
 	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
-				MIN(1000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
+				MIN(10000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
 				0, NULL, args, NULL))
 
 }
@@ -543,8 +543,8 @@ void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 	num_threads = MIN(256, launch->threads_per_block);	
 	num_blocks = (n + num_threads - 1) / num_threads;
 
-	num_blocks = MIN(num_blocks, 
-			(uint32)(100 * d->gpu_info->num_compute_units));
+	num_blocks = MIN(num_blocks, 10000); 
+			/* (uint32)(125 * d->gpu_info->num_compute_units)); */
 
 	void *args[4] = {&x, &y, &xy, &n};
 
