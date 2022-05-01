@@ -201,7 +201,7 @@ struct AgentUnarySpmv
       // (NullType if loading values directly during merge)
       using MergeValueT =
         cub::detail::conditional_t<
-          AgentSpmvPolicyT::DIRECT_LOAD_NONZEROS, NullType, ValueT>;
+          AgentUnarySpmvPolicyT::DIRECT_LOAD_NONZEROS, NullType, ValueT>;
 
       OffsetT row_end_offset;
       MergeValueT nonzero;
