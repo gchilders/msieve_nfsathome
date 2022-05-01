@@ -49,11 +49,7 @@
 #endif // THRUST_VERSION
 
 
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
-namespace cub {
+CUB_NAMESPACE_BEGIN
 
 /**
  * \addtogroup UtilIterator
@@ -77,7 +73,7 @@ namespace cub {
  * - Compatible with Thrust API v1.7 or newer.
  *
  * \par Snippet
- * The code snippet below illustrates the use of \p TexRefInputIterator to
+ * The code snippet below illustrates the use of \p TexObjInputIterator to
  * dereference a device array of doubles through texture cache.
  * \par
  * \code
@@ -121,9 +117,9 @@ public:
 
 #if (THRUST_VERSION >= 100700)
     // Use Thrust's iterator categories so we can use these iterators in Thrust 1.7 (or newer) methods
-    typedef typename thrust::detail::iterator_facade_category<
-        thrust::device_system_tag,
-        thrust::random_access_traversal_tag,
+    typedef typename THRUST_NS_QUALIFIER::detail::iterator_facade_category<
+        THRUST_NS_QUALIFIER::device_system_tag,
+        THRUST_NS_QUALIFIER::random_access_traversal_tag,
         value_type,
         reference
       >::type iterator_category;                                        ///< The iterator category
@@ -161,11 +157,11 @@ public:
     template <typename QualifiedT>
     cudaError_t BindTexture(
         QualifiedT      *ptr,               ///< Native pointer to wrap that is aligned to cudaDeviceProp::textureAlignment
-        size_t          bytes = size_t(-1),         ///< Number of bytes in the range
+        size_t          bytes,              ///< Number of bytes in the range
         size_t          tex_offset = 0)     ///< OffsetT (in items) from \p ptr denoting the position of the iterator
     {
-        this->ptr = const_cast<typename RemoveQualifiers<QualifiedT>::Type *>(ptr);
-        this->tex_offset = tex_offset;
+        this->ptr = const_cast<typename std::remove_cv<QualifiedT>::type *>(ptr);
+        this->tex_offset = static_cast<difference_type>(tex_offset);
 
         cudaChannelFormatDesc   channel_desc = cudaCreateChannelDesc<TextureWord>();
         cudaResourceDesc        res_desc;
@@ -208,6 +204,11 @@ public:
             #if CUB_INCLUDE_HOST_CODE
                 // Simply dereference the pointer on the host
                 return ptr[tex_offset];
+            #else
+                // Never executed, just need a return value for this codepath.
+                // The `reference` type is actually just T, so we can fake this
+                // easily.
+                return reference{};
             #endif
         } else {
             #if CUB_INCLUDE_DEVICE_CODE
@@ -305,6 +306,9 @@ public:
     /// ostream operator
     friend std::ostream& operator<<(std::ostream& os, const self_type& itr)
     {
+        os << "cub::TexObjInputIterator( ptr=" << itr.ptr
+           << ", offset=" << itr.tex_offset
+           << ", tex_obj=" << itr.tex_obj << " )";
         return os;
     }
 
@@ -314,5 +318,4 @@ public:
 
 /** @} */       // end group UtilIterator
 
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
+CUB_NAMESPACE_END
