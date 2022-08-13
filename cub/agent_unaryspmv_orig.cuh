@@ -44,7 +44,7 @@
 #include "cub/iterator/cache_modified_input_iterator.cuh"
 #include "cub/iterator/counting_input_iterator.cuh"
 
-CUB_NAMESPACE_BEGIN
+using namespace cub;
 
 /******************************************************************************
  * Tuning policy
@@ -641,6 +641,3 @@ struct AgentUnarySpmv
     }
 
 };
-
-
-CUB_NAMESPACE_END

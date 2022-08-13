@@ -69,7 +69,7 @@ spmv_engine_run(void * e, spmv_data_t * data)
 	spmv_engine *engine = (spmv_engine *)e;
 	size_t temp_size;
 
-	cub::DeviceUnarySpmv::CsrMV(NULL, temp_size, 
+	DeviceUnarySpmv::CsrMV(NULL, temp_size, 
 		(int *)data->row_entries, (int *)data->col_entries, (v_t *)data->vector_in, (v_t *)data->vector_out,
 		data->num_rows, data->num_cols, data->num_col_entries, v_zero);
 
@@ -81,7 +81,7 @@ spmv_engine_run(void * e, spmv_data_t * data)
 	}
 
 	// Run SpMV: y = A x + y
-	cub::DeviceUnarySpmv::CsrMV(engine->temp_data, temp_size,
+	DeviceUnarySpmv::CsrMV(engine->temp_data, temp_size,
 		(int *)data->row_entries, (int *)data->col_entries, (v_t *)data->vector_in, (v_t *)data->vector_out,
 		data->num_rows, data->num_cols, data->num_col_entries, v_zero);
 }

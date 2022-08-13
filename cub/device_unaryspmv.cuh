@@ -37,7 +37,7 @@
 #include "dispatch_unaryspmv_orig.cuh"
 #include "cub/config.cuh"
 
-CUB_NAMESPACE_BEGIN
+using namespace cub;
 
 struct DeviceUnarySpmv
 {
@@ -78,5 +78,3 @@ struct DeviceUnarySpmv
     }
 
 };
-
-CUB_NAMESPACE_END

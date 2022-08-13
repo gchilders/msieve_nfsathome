@@ -46,8 +46,7 @@
 
 #include <thrust/system/cuda/detail/core/triple_chevron_launch.h>
 
-CUB_NAMESPACE_BEGIN
-
+using namespace cub;
 
 /******************************************************************************
  * Unary SpMV kernel entry points
@@ -729,6 +728,3 @@ struct DispatchUnarySpmv
         return error;
     }
 };
-
-CUB_NAMESPACE_END
-
