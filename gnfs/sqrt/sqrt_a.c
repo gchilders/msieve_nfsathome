@@ -60,14 +60,15 @@ typedef struct {
 static void mpz_poly_mod_q(mpz_poly_t *p, mpz_t q, mpz_poly_t *res) {
 
 	uint32 i;
-	uint64 pbits, resbits;
 
 	/* also trim aggressively the memory use of the
 	   computed remainders; the algebraic square root has
 	   comparatively few arithmetic operations but the
 	   memory use for large problems is a concern */
 
+#pragma omp parallel for
 	for (i = 0; i <= p->degree; i++) {
+		uint64 pbits, resbits;
 		pbits = mpz_sizeinbase(p->coeff[i], 2);
 		mpz_fdiv_r(res->coeff[i], p->coeff[i], q);
 		resbits = mpz_sizeinbase(res->coeff[i], 2);
@@ -143,6 +144,7 @@ static void mpz_poly_mul(mpz_poly_t *p1, mpz_poly_t *p2,
 
 	/* multiply p1 by the leading coefficient of p2 */
 
+#pragma omp parallel for
 	for (i = 0; i <= d1; i++) {
 		mpz_mul(tmp[i], p1->coeff[i], p2->coeff[d2]);
 	}
@@ -164,10 +166,11 @@ static void mpz_poly_mul(mpz_poly_t *p1, mpz_poly_t *p2,
 		/* add in the product of p1(x) and coefficient
 		   i of p2 */
 
-		for (j = d1; j; j--) {
+		mpz_mul(tmp[0], p1->coeff[0], p2->coeff[i]);
+#pragma omp parallel for
+		for (j = 1; j <= d1; j++) {
 			mpz_addmul(tmp[j], p1->coeff[j], p2->coeff[i]);
 		}
-		mpz_mul(tmp[j], p1->coeff[j], p2->coeff[i]);
 		if (free_p2) {
 			mpz_realloc2(p2->coeff[i], 1);
 		}
@@ -184,7 +187,8 @@ static void mpz_poly_mul(mpz_poly_t *p1, mpz_poly_t *p2,
 		if (prod_degree <= d)
 			continue;
 
-		for (j = d; (int32)j >= 0; j--) {
+#pragma omp parallel for
+		for (j = 0; j <= d; j++) {
 			mpz_submul(tmp[j], mod->coeff[j], tmp[prod_degree]);
 		}
 		prod_degree--;
@@ -226,11 +230,11 @@ static uint32 verify_product(mpz_poly_t *gmp_prod, abpair_t *abpairs,
 	uint32 ref_prod[MAX_POLY_DEGREE];
 	uint32 prod[MAX_POLY_DEGREE];
 	uint32 mod[MAX_POLY_DEGREE];
-	uint32 accum[MAX_POLY_DEGREE + 1];
 
 	/* compute the product mod q directly. First initialize
 	   and reduce the coefficients of alg_poly and gmp_prod mod q */
 
+#pragma omp parallel for
 	for (i = 0; i <= d; i++) {
 		prod[i] = 0;
 		ref_prod[i] = mpz_fdiv_ui(gmp_prod->coeff[i],
@@ -247,6 +251,7 @@ static uint32 verify_product(mpz_poly_t *gmp_prod, abpair_t *abpairs,
 		int64 a = abpairs[i].a;
 		uint32 b = q - (abpairs[i].b % q);
 		uint32 ac;
+		uint32 accum[MAX_POLY_DEGREE + 1];
 
 		a = a % (int64)q;
 		if (a < 0)
@@ -336,8 +341,15 @@ static void multiply_relations(relation_prod_t *prodinfo,
 		   half and the last half of the relations */
 
 		uint32 mid = (index1 + index2) / 2;
+#pragma omp parallel
+#pragma omp single
+		{
+#pragma omp task
 		multiply_relations(prodinfo, index1, mid, &prod1);
+#pragma omp task
 		multiply_relations(prodinfo, mid + 1, index2, &prod2);
+#pragma omp taskwait
+		}
 	}
 
 	/* multiply them together and save the result */
@@ -471,6 +483,7 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 		mpz_sub_ui(tmp_poly.coeff[0], tmp_poly.coeff[0], 
 				(unsigned long)3);
 
+#pragma omp parallel for
 		for (j = 0; j <= tmp_poly.degree; j++) {
 
 			mpz_t *c = tmp_poly.coeff + j;
@@ -516,6 +529,7 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	   expect for the square root coefficients, this
 	   is so unlikely that it's not worth worrying about */
 
+#pragma omp parallel for
 	for (i = 0; i <= isqrt_mod_q->degree; i++) {
 		mpz_t *c = isqrt_mod_q->coeff + i;
 		size_t limbs = mpz_size(*c);

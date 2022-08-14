@@ -417,6 +417,7 @@ uint32 nfs_find_factors(msieve_obj *obj, mpz_t n,
 
 		abpairs = (abpair_t *)xmalloc(num_relations *
 						sizeof(abpair_t));
+#pragma omp parallel for
 		for (j = 0; j < num_relations; j++) {
 			abpairs[j].a = rlist[j].a;
 			abpairs[j].b = rlist[j].b;

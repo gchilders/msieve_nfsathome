@@ -448,13 +448,15 @@ static void remap_relation_numbers(msieve_obj *obj,
 				la_col_t *cycle_list, 
 				uint32 num_relations,
 				relation_t *rlist) {
-	uint32 i, j;
+	uint32 i;
 
 	/* walk through the list of cycles and convert
 	   each occurence of a line number in the savefile
 	   to an offset in the relation array */
 
+#pragma omp parallel for
 	for (i = 0; i < num_cycles; i++) {
+		uint32 j;
 		la_col_t *c = cycle_list + i;
 
 		for (j = 0; j < c->cycle.num_relations; j++) {

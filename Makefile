@@ -16,6 +16,7 @@
 WIN = 0
 WIN64 = 0
 VBITS = 64
+OMP = 1
 
 # gcc with basic optimization (-march flag could
 # get overridden by architecture-specific builds)
@@ -36,6 +37,9 @@ CFLAGS = $(OPT_FLAGS) $(MACHINE_FLAGS) $(WARN_FLAGS) \
 
 # tweak the compile flags
 
+ifeq ($(OMP),1)
+	CFLAGS += -fopenmp -DHAVE_OMP
+endif
 ifeq ($(ECM),1)
 	CFLAGS += -DHAVE_GMP_ECM
 	LIBS += -lecm
