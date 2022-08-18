@@ -190,6 +190,7 @@ static uint32 fill_qcb(msieve_obj *obj, mpz_poly_t *apoly,
 	/* strike out all the algebraic factors of relations that
 	   are between min_qcb_ideal and 2^32 */
 
+#pragma omp parallel for private(j) reduction(|:bits)
 	for (i = 0; i < num_relations; i++) {
 		relation_t *r = rlist + i;
 		uint32 num_r = r->num_factors_r;
@@ -250,6 +251,7 @@ static uint32 fill_qcb(msieve_obj *obj, mpz_poly_t *apoly,
 
 	/* cache each relation's quadratic characters for later use */
 
+#pragma omp parallel for private(j)
 	for (i = 0; i < num_relations; i++) {
 		relation_t *rel = rlist + i;
 		int64 a = rel->a;

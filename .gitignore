@@ -1,2 +1,6 @@
 
 common/lanczos/gpu/BxN_NxB_cpu.c
+.vscode/configurationCache.log
+.vscode/dryrun.log
+.vscode/settings.json
+.vscode/targets.log
