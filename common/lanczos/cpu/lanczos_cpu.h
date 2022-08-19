@@ -19,7 +19,6 @@ $Id$
 #include <arm_sve.h>
 #endif
 
-#include <thread.h>
 #include "../lanczos.h"
 
 #ifdef __cplusplus
@@ -46,38 +45,11 @@ typedef struct {
 	} d;
 } packed_block_t;
 
-#define MAX_THREADS 32
 #define MIN_NROWS_TO_THREAD 200000
-
-/* struct used by threads for computing partial
-   matrix multiplies */
-
-typedef struct {
-	/* items for matrix-vector operations */
-
-	v_t *tmp_b;
-
-	/* items for vector-vector operations */
-
-	v_t *x;
-	v_t *b;
-	v_t *y;
-	uint32 vsize;
-
-} thread_data_t;
-
-typedef struct {
-	struct packed_matrix_t *matrix;
-	uint32 task_num;
-	uint32 block_num;
-} la_task_t;
 
 /* implementation-specific structure */
 
 typedef struct {
-
-	v_t *x;
-	v_t *b;
 
 	/* used for block matrix multiplies */
 
@@ -96,23 +68,22 @@ typedef struct {
 				   64 matrix rows */
 	packed_block_t *blocks; /* sparse part of matrix, in block format */
 
-	/* threading stuff */
-
-	struct threadpool *threadpool;
-	thread_data_t thread_data[MAX_THREADS];
-	la_task_t *tasks;
 } cpudata_t;
 
 /* for big jobs, we use a multithreaded framework that calls
    these routines for the heavy lifting */
 
-void mul_packed_core(void *data, int thread_num);
+void mul_one_med_block(packed_block_t *curr_block,
+			v_t *curr_col, v_t *curr_b);
 
-void mul_packed_small_core(void *data, int thread_num);
+void mul_one_block(const packed_block_t *curr_block,
+			const v_t *curr_col, v_t * __restrict__ curr_b);
 
-void mul_trans_packed_core(void *data, int thread_num);
+void mul_trans_one_med_block(packed_block_t *curr_block,
+			v_t *curr_row, v_t *curr_b);
 
-void mul_trans_packed_small_core(void *data, int thread_num);
+void mul_trans_one_block(const packed_block_t *curr_block,
+				const v_t *curr_row, v_t * __restrict__ curr_b);
 
 /* internal stuff for vector-vector operations within the
    matrix multiply */
@@ -120,6 +91,12 @@ void mul_trans_packed_small_core(void *data, int thread_num);
 void mul_NxB_BxB_acc(v_t *v, v_t *x, v_t *y, uint32 n);
 
 void mul_BxN_NxB(v_t *x, v_t *y, v_t *xy, uint32 n);
+
+void mul_BxN_NxB_2(v_t *x, v_t *y, v_t *xy, uint32 n);
+
+#pragma omp declare reduction(^ : v_t : \
+        omp_out = v_xor(omp_out, omp_in)) \
+        initializer( omp_priv = {0})
 
 #ifdef __cplusplus
 }

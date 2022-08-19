@@ -187,7 +187,7 @@ void msieve_run(msieve_obj *obj) {
 	omp_set_num_threads(omp_threads);
 	omp_levels = 0;
 	while (omp_threads > (1 << omp_levels)) omp_levels++;
-	omp_set_max_active_levels(omp_levels);
+	omp_set_max_active_levels(omp_levels+1);
 #endif
 
 #ifdef HAVE_MPI
