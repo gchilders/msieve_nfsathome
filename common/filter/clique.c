@@ -210,6 +210,7 @@ void check_relations_array(filter_t *filter, uint32 location) {
         num_ideals = filter->num_ideals;
 
         for (i = 0; i < num_relations; i++) {
+				if (curr_relation != filter->relation_ptr[i]) badrel = 1;
             	for (j = 0; j < curr_relation->ideal_count; j++) {
                 	ideal = curr_relation->ideal_list[j];
                 	if (ideal >= num_ideals) badrel = 1; 
@@ -238,9 +239,10 @@ void check_relations_array(filter_t *filter, uint32 location) {
 static void delete_relations(filter_t *filter,
 			uint64 *delete_array, uint32 num_delete) {
 
-	uint32 i, j;
+	uint32 i, j, new_rels;
 	uint32 num_relations = filter->num_relations;
 	relation_ideal_t *relation_array = filter->relation_array;
+	relation_ideal_t **relation_ptr = filter->relation_ptr;
 	relation_ideal_t *curr_relation;
 	relation_ideal_t *old_relation;
 
@@ -254,6 +256,7 @@ static void delete_relations(filter_t *filter,
 
 	curr_relation = relation_array;
 	old_relation = relation_array;
+	new_rels = 0;
 	for (i = j = 0; i < num_relations; i++) {
 		uint64 array_word = (uint64)((uint32 *)curr_relation -
 						(uint32 *)relation_array);
@@ -274,6 +277,7 @@ static void delete_relations(filter_t *filter,
 
 			uint8 curr_num_ideals = curr_relation->ideal_count;
 			uint32 k;
+			filter->relation_ptr[new_rels++] = old_relation;
 			old_relation->rel_index = curr_relation->rel_index;
 			old_relation->gf2_factors = curr_relation->gf2_factors;
 			old_relation->ideal_count = curr_num_ideals;
@@ -286,13 +290,22 @@ static void delete_relations(filter_t *filter,
 		curr_relation = next_relation;
 	}
 
+	if (new_rels != num_relations - num_delete) {
+		printf("ERROR: new_rels = %u, num_relations = %u, num_delete = %u\n",
+			new_rels, num_relations, num_delete);
+		exit(1);
+	}  // DEBUG DEBUG DEBUG
+
 	/* trim the relation array */
 
 	filter->relation_array = (relation_ideal_t *)xrealloc(relation_array,
 				(size_t)(old_relation + 1 - relation_array) *
 				sizeof(relation_ideal_t));
 	filter->num_relations = num_relations - num_delete;
-        check_relations_array(filter, 1);
+	filter->relation_ptr = (relation_ideal_t **)xrealloc(relation_ptr,
+				filter->num_relations *
+				sizeof(relation_ideal_t *));
+	check_relations_array(filter, 1);
 }
 
 /*--------------------------------------------------------------------*/
@@ -375,9 +388,6 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 		uint64 relation_array_word = 
 				((uint32 *)curr_relation -
 				 (uint32 *)relation_array);
-
-		/* if (relation_array_word > (uint32)(-1))
-			break; */
 
 		/* for each ideal in the relation */
 

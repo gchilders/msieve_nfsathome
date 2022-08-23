@@ -87,6 +87,7 @@ static uint32 check_excess(filter_t *filter) {
 			relations_needed = MAX(relations_needed, 1000000);
 		}
 		free(filter->relation_array);
+		free(filter->relation_ptr);
 		filter->relation_array = NULL;
 	}
 	return relations_needed;
@@ -398,6 +399,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 					filter.num_relations, 1, &filter);
 
 		free(filter.relation_array);
+		free(filter.relation_ptr);
 		filter.relation_array = NULL;
 
 		nfs_write_lp_file(obj, &fb, &filter, max_relations, 1);
