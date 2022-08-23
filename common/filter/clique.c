@@ -318,12 +318,14 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 	uint32 i, j;
 	ideal_map_t *ideal_map;
 	relation_ideal_t *relation_array;
+	relation_ideal_t **relation_ptr;
 	relation_ideal_t *curr_relation;
 	uint32 num_relations;
 	uint32 num_ideals;
 	uint32 num_ideals_delete;
 	clique_t *clique_heap;
 	uint32 num_clique;
+	omp_lock_t *ideallock;
 
 	uint64 *delete_array;
 	uint32 num_delete;
@@ -342,6 +344,7 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 	uint32 num_clique_ideals_alloc;
 
 	relation_array = filter->relation_array;
+	relation_ptr = filter->relation_ptr;
 	num_relations = filter->num_relations;
 	num_ideals = filter->num_ideals;
 
@@ -349,7 +352,11 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 
 	ideal_map = (ideal_map_t *)xcalloc((size_t)num_ideals, 
 					sizeof(ideal_map_t));
+	ideallock = (omp_lock_t *)malloc(num_ideals * sizeof(omp_lock_t));
 
+#pragma omp parallel for
+	for (i = 0; i < num_ideals; i++) omp_init_lock(&ideallock[i]);
+	
 	/* set up structure for linked lists of clique relations */
 
 	num_reverse = 1;
@@ -359,20 +366,23 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 
 	/* count the number of times each ideal occurs in relations */
 
-	curr_relation = relation_array;
+#pragma omp parallel for private(j, curr_relation)
 	for (i = 0; i < num_relations; i++) {
+		curr_relation = relation_ptr[i];
 		curr_relation->connected = 0;
 		for (j = 0; j < curr_relation->ideal_count; j++) {
 			uint32 ideal = curr_relation->ideal_list[j];
+			omp_set_lock(&ideallock[ideal]);
 			ideal_map[ideal].payload++;
+			omp_unset_lock(&ideallock[ideal]);
 		}
-		curr_relation = next_relation_ptr(curr_relation);
 	}
 
 	/* mark all the ideals with small enough weight as 
 	   belonging to a clique, and set the head of their 
 	   linked list of relations to empty */
 
+#pragma omp parallel for
 	for (i = 0; i < num_ideals; i++) {
 		if (ideal_map[i].payload <= max_clique_relations) {
 			ideal_map[i].payload = 0;
@@ -381,11 +391,12 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 	}
 
 	/* for each relation */
-
-	curr_relation = relation_array;
+	
+#pragma omp parallel for private(j, curr_relation)
 	for (i = 0; i < num_relations; i++) {
-
-		uint64 relation_array_word = 
+		uint64 relation_array_word;
+		curr_relation = relation_ptr[i];
+		relation_array_word = 
 				((uint32 *)curr_relation -
 				 (uint32 *)relation_array);
 
@@ -399,22 +410,22 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 
 			/* relation belongs in a clique because of this
 			   ideal; add it to the ideal's linked list */
-
-			if (num_reverse == num_reverse_alloc) {
-				num_reverse_alloc *= 2;
-				reverse_array = (ideal_relation_t *)xrealloc(
+#pragma omp critical (add_relation)
+			{
+				if (num_reverse == num_reverse_alloc) {
+					num_reverse_alloc *= 2;
+					reverse_array = (ideal_relation_t *)xrealloc(
 						reverse_array,
 						num_reverse_alloc *
 						sizeof(ideal_relation_t));
-			}
-			reverse_array[num_reverse].relation_array_word =
+				}
+				reverse_array[num_reverse].relation_array_word =
 						relation_array_word;
-			reverse_array[num_reverse].next = 
+				reverse_array[num_reverse].next = 
 						ideal_map[ideal].payload;
-			ideal_map[ideal].payload = num_reverse++;
+				ideal_map[ideal].payload = num_reverse++;
+			}
 		}
-
-		curr_relation = next_relation_ptr(curr_relation);
 	}
 
 	num_clique = 0;
@@ -582,6 +593,9 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 		}
 	}
 
+#pragma omp parallel for
+	for (i = 0; i < num_ideals; i++) omp_destroy_lock(&ideallock[i]);
+	free(ideallock);
 	free(reverse_array);
 	free(ideal_map);
 	free(clique_relations);
