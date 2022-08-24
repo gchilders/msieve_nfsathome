@@ -97,6 +97,9 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	uint32 array_size = 0;
 	uint8 *factors = r->factors;
 
+	/* Make thread-safe */
+	mpz_t tmp1, tmp2, tmp3;
+
 	/* read the relation coordinates */
 
 	a = strtoll(buf, &next_field, 10);
@@ -172,6 +175,7 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	}
 
 	/* read the rational factors (possibly an empty list) */
+	mpz_inits(tmp1, tmp2, tmp3, NULL);
 
 	if (isxdigit(tmp[1])) {
 		do {
@@ -180,14 +184,17 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 			if (test_primality && 
 			    p > RELATION_TF_BOUND && 
 			    p < ((uint64)1 << 32) &&
-	    		    !mp_is_prime_1((uint32)p))
+	    		    !mp_is_prime_1((uint32)p)) {
+				mpz_clears(tmp1, tmp2, tmp3, NULL);
 				return -98;
+			}
 
 			if (p > 1 && divide_factor_out(polyval, p, 
 						factors, &array_size,
 						&num_factors_r, compress,
-						rpoly->tmp1, rpoly->tmp2,
-						rpoly->tmp3)) {
+						tmp1, tmp2,
+						tmp3)) {
+				mpz_clears(tmp1, tmp2, tmp3, NULL);
 				return -8;
 			}
 			tmp = next_field;
@@ -197,8 +204,10 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 		tmp++;
 	}
 
-	if (tmp[0] != ':')
+	if (tmp[0] != ':') {
+		mpz_clears(tmp1, tmp2, tmp3, NULL);
 		return -9;
+	}
 
 	/* if there are rational factors still to be accounted
 	   for, assume they are small and find them by trial division */
@@ -209,20 +218,25 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 		p += prime_delta[i];
 		if (divide_factor_out(polyval, p, factors, 
 				&array_size, &num_factors_r, 
-				compress, rpoly->tmp1, 
-				rpoly->tmp2, rpoly->tmp3)) {
+				compress, tmp1, 
+				tmp2, tmp3)) {
+			mpz_clears(tmp1, tmp2, tmp3, NULL);
 			return -10;
 		}
 	}
 
-	if (mpz_cmp_ui(polyval, 1) != 0)
+	if (mpz_cmp_ui(polyval, 1) != 0) {
+		mpz_clears(tmp1, tmp2, tmp3, NULL);
 		return -11;
+	}
 
 	/* read the algebraic factors */
 
 	eval_poly(polyval, a, b, apoly);
-	if (mpz_cmp_ui(polyval, 0) == 0)
+	if (mpz_cmp_ui(polyval, 0) == 0) {
+		mpz_clears(tmp1, tmp2, tmp3, NULL);
 		return -12;
+	}
 	mpz_abs(polyval, polyval);
 
 	if (isxdigit(tmp[1])) {
@@ -232,14 +246,17 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 			if (test_primality &&
 			    p > RELATION_TF_BOUND && 
 			    p < ((uint64)1 << 32) &&
-	    		    !mp_is_prime_1((uint32)p))
+	    		    !mp_is_prime_1((uint32)p)) {
+				mpz_clears(tmp1, tmp2, tmp3, NULL);
 				return -98;
+			}
 
 			if (p > 1 && divide_factor_out(polyval, p, 
 						factors, &array_size,
 						&num_factors_a, compress,
-						apoly->tmp1, apoly->tmp2,
-						apoly->tmp3)) {
+						tmp1, tmp2,
+						tmp3)) {
+				mpz_clears(tmp1, tmp2, tmp3, NULL);
 				return -13;
 			}
 			tmp = next_field;
@@ -255,11 +272,14 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 		p += prime_delta[i];
 		if (divide_factor_out(polyval, p, factors, 
 				&array_size, &num_factors_a, 
-				compress, apoly->tmp1,
-				apoly->tmp2, apoly->tmp3)) {
+				compress, tmp1,
+				tmp2, tmp3)) {
+			mpz_clears(tmp1, tmp2, tmp3, NULL);
 			return -14;
 		}
 	}
+
+	mpz_clears(tmp1, tmp2, tmp3, NULL);
 
 	if (mpz_cmp_ui(polyval, 1) != 0)
 		return -15;
