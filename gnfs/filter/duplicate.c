@@ -274,7 +274,7 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	uint32 *array_size;
 	relation_t *tmp_rel;
 
-	uint32 batch = 8 * obj->num_threads;
+	uint32 batch = 1024 * obj->num_threads;
 	uint32 num_relations_read;
 	int32 *status;
 
@@ -528,7 +528,6 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	}
 	
 	free(my_curr_relation);
-	free(buf);
 	free(scratch);
 	free(array_size);
 	free(tmp_rel);
@@ -553,6 +552,8 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 					log2_hashtable1_size,
 					max_relations);
 	}
+
+	free(buf);
 
 	/* the large prime cutoff for the rest of the filtering
 	   process should be chosen here. We don't want the bound
