@@ -29,20 +29,39 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 	savefile_t *savefile = &obj->savefile;
 	FILE *relation_fp;
 	FILE *final_fp;
-	char buf[LINE_BUF_SIZE];
+	char *buf;
 	size_t header_words;
 	uint32 next_relation;
 	uint32 curr_relation;
+	uint32 *my_curr_relation;
 	uint32 num_relations;
 	hashtable_t unique_ideals;
-	uint8 tmp_factors[COMPRESSED_P_MAX_SIZE];
-	uint32 tmp_factor_size;
-	relation_t tmp_relation;
+	uint32 *tmp_factor_size;
+	relation_t *tmp_relation;
 	relation_ideal_t packed_ideal;
 	uint32 have_skip_list = (pass == 0);
-	mpz_t scratch;
+	mpz_t *scratch;
+	relation_lp_t *tmp_ideal;
+	
+	uint32 batch = 1024 * obj->num_threads;
+	uint32 num_relations_read;
+	int32 *status;
 
-	tmp_relation.factors = tmp_factors;
+	if (batch < 1) batch = 1;
+
+	/* per thread variables */
+	my_curr_relation = (uint32 *)malloc(batch * sizeof(uint32));
+	buf = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
+	scratch = (mpz_t *)malloc(batch * sizeof(mpz_t));
+	tmp_factor_size = (uint32 *)malloc(batch * sizeof(uint32));
+	tmp_relation = (relation_t *)malloc(batch * sizeof(relation_t));
+	tmp_ideal = (relation_lp_t *)malloc(batch * sizeof(relation_lp_t));
+	status = (int32 *)malloc(batch * sizeof(int32));
+
+	for (i = 0; i < batch; i++) {
+		tmp_relation[i].factors = (uint8 *)malloc(COMPRESSED_P_MAX_SIZE * sizeof(uint8));
+		mpz_init(scratch[i]);
+	}
 
 	logprintf(obj, "commencing singleton removal, initial pass\n");
 
@@ -69,82 +88,103 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 	curr_relation = (uint32)(-1);
 	next_relation = (uint32)(-1);
 	num_relations = 0;
-	mpz_init(scratch);
 	fread(&next_relation, (size_t)1, 
 			sizeof(uint32), relation_fp);
-	savefile_read_line(buf, sizeof(buf), savefile);
-
-	while (!savefile_eof(savefile)) {
-		
-		int32 status;
-
-		if (buf[0] != '-' && !isdigit(buf[0])) {
-			savefile_read_line(buf, sizeof(buf), savefile);
-			continue;
-		}
-
-		curr_relation++;
-		if (max_relations && curr_relation >= max_relations)
-			break;
-
-		if (have_skip_list) {
-			if (curr_relation == next_relation) {
-				fread(&next_relation, sizeof(uint32), 
+	
+	do {
+		num_relations_read = 0;
+		for(i = 0; i < batch; i++) {
+			char *buf_i = buf + i * LINE_BUF_SIZE;
+			savefile_read_line(buf_i, 
+					LINE_BUF_SIZE * sizeof(char), savefile);
+			if (savefile_eof(savefile)) break;
+			if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
+				/* no relation on this line */
+				i--;
+				continue;
+			} 
+			num_relations_read++;
+			curr_relation++;
+			my_curr_relation[i] = curr_relation;
+			if (max_relations && curr_relation >= max_relations) break;
+			if (have_skip_list) {
+				if (curr_relation == next_relation) {
+					fread(&next_relation, sizeof(uint32), 
+							(size_t)1, relation_fp);
+					i--;
+					num_relations_read--;
+					continue;
+				}
+			}
+			else {
+				if (curr_relation < next_relation) {
+					i--;
+					num_relations_read--;
+					continue;
+				} else
+					fread(&next_relation, sizeof(uint32), 
 						(size_t)1, relation_fp);
-				savefile_read_line(buf, sizeof(buf), savefile);
-				continue;
 			}
-		}
-		else {
-			if (curr_relation < next_relation) {
-				savefile_read_line(buf, sizeof(buf), savefile);
-				continue;
-			}
-			fread(&next_relation, sizeof(uint32), 
-					(size_t)1, relation_fp);
 		}
 
 		/* read it in */
 
-		status = nfs_read_relation(buf, fb, &tmp_relation, 
-						&tmp_factor_size, 1,
-						scratch, 0);
-
-		if (status == 0) {
-			relation_lp_t tmp_ideal;
-			num_relations++;
+#pragma omp parallel for
+		for (i = 0; i < num_relations_read; i++) {
+			char *buf_i = buf + i * LINE_BUF_SIZE;
+			status[i] = nfs_read_relation(buf_i, fb, &tmp_relation[i], 
+						&tmp_factor_size[i], 1,
+						scratch[i], 0);
 
 			/* get the large ideals */
-
-			find_large_ideals(&tmp_relation, &tmp_ideal, 
-						filter->filtmin_r,
-						filter->filtmin_a);
-
-			packed_ideal.rel_index = curr_relation;
-			packed_ideal.gf2_factors = tmp_ideal.gf2_factors;
-			packed_ideal.ideal_count = tmp_ideal.ideal_count;
-
-			/* map each ideal to a unique integer */
-
-			for (i = 0; i < tmp_ideal.ideal_count; i++) {
-				ideal_t *ideal = tmp_ideal.ideal_list + i;
-
-				hashtable_find(&unique_ideals, ideal,
-						packed_ideal.ideal_list + i,
-						NULL);
-			}
-
-			/* dump the relation to disk */
-
-			fwrite(&packed_ideal, sizeof(uint32),
-				header_words + tmp_ideal.ideal_count, 
-				final_fp);
+			if (status[i] == 0)
+				find_large_ideals(&tmp_relation[i], &tmp_ideal[i], 
+							filter->filtmin_r,
+							filter->filtmin_a);
 		}
 
-		savefile_read_line(buf, sizeof(buf), savefile);
-	}
+		for (i = 0; i < num_relations_read; i++) {			
+			if (status[i] == 0) {
+				uint32 j;
+				num_relations++;
 
-	mpz_clear(scratch);
+				packed_ideal.rel_index = my_curr_relation[i];
+				packed_ideal.gf2_factors = tmp_ideal[i].gf2_factors;
+				packed_ideal.ideal_count = tmp_ideal[i].ideal_count;
+
+				/* map each ideal to a unique integer */
+
+				for (j = 0; j < tmp_ideal[i].ideal_count; j++) {
+					ideal_t *ideal = tmp_ideal[i].ideal_list + j;
+
+					hashtable_find(&unique_ideals, ideal,
+							packed_ideal.ideal_list + j,
+							NULL);
+				}
+
+				/* dump the relation to disk */
+
+				fwrite(&packed_ideal, sizeof(uint32),
+					header_words + tmp_ideal[i].ideal_count, 
+					final_fp);
+			}
+		}
+	} while (num_relations_read == batch);
+
+	/* free per thread variables */
+
+	for (i = 0; i < batch; i++) {
+		free(tmp_relation[i].factors);
+		mpz_clear(scratch[i]);
+	}
+	
+	free(my_curr_relation);
+	free(scratch);
+	free(tmp_factor_size);
+	free(tmp_relation);
+	free(tmp_ideal);
+	free(status);
+
 	filter->num_relations = num_relations;
 	filter->num_ideals = hashtable_get_num(&unique_ideals);
 	filter->relation_array = NULL;
@@ -163,4 +203,5 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 		logprintf(obj, "error: can't delete dup file\n");
 		exit(-1);
 	}
+	free(buf);
 }
