@@ -380,7 +380,7 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 
 	/* for each relation */
 	
-#pragma omp parallel for private(j, curr_relation)
+// #pragma omp parallel for private(j, curr_relation)
 	for (i = 0; i < num_relations; i++) {
 		uint64 relation_array_word;
 		curr_relation = relation_ptr[i];
@@ -398,7 +398,7 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 
 			/* relation belongs in a clique because of this
 			   ideal; add it to the ideal's linked list */
-#pragma omp critical (add_relation)
+// #pragma omp critical (add_relation)
 			{
 				if (num_reverse == num_reverse_alloc) {
 					num_reverse_alloc *= 2;

@@ -83,6 +83,7 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 	uint32 i, j;
 	ideal_map_t *ideal_map;
 	relation_ideal_t *relation_array;
+	relation_ideal_t **relation_ptr;
 	relation_ideal_t *curr_relation;
 	uint32 num_relations;
 	uint32 num_ideals;
@@ -101,6 +102,7 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 	/* set up the hashtable for ideal counts */
 
 	relation_array = filter->relation_array;
+	relation_ptr = filter->relation_ptr;
 	num_relations = filter->num_relations;
 	num_ideals = filter->num_ideals;
 	ideal_map = (ideal_map_t *)xcalloc((size_t)num_ideals, 
@@ -115,20 +117,22 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 
 	/* count the number of times each ideal occurs in relations */
 
-	curr_relation = relation_array;
+#pragma omp parallel for private(j, curr_relation)
 	for (i = 0; i < num_relations; i++) {
+		curr_relation = relation_ptr[i];
 		curr_relation->connected = 0;
 		for (j = 0; j < curr_relation->ideal_count; j++) {
 			uint32 ideal = curr_relation->ideal_list[j];
+#pragma omp atomic update
 			ideal_map[ideal].payload++;
 		}
-		curr_relation = next_relation_ptr(curr_relation);
 	}
 
 	/* mark all the ideals with weight 2 as belonging
 	   to a clique, and set the head of their linked
 	   list of relations to empty */
 
+#pragma omp parallel for
 	for (i = 0; i < num_ideals; i++) {
 		if (ideal_map[i].payload == 2) {
 			ideal_map[i].payload = 0;
@@ -138,9 +142,9 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 
 	/* for each relation */
 
-	curr_relation = relation_array;
+// #pragma omp parallel for private(j, curr_relation)
 	for (i = 0; i < num_relations; i++) {
-
+		curr_relation = relation_ptr[i];
 		/* for each ideal in the relation */
 
 		for (j = 0; j < curr_relation->ideal_count; j++) {
@@ -151,23 +155,23 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 
 			/* relation belongs in a clique because of this
 			   ideal; add it to the ideal's linked list */
-
-			if (num_reverse == num_reverse_alloc) {
-				num_reverse_alloc *= 2;
-				reverse_array = (ideal_relation_t *)xrealloc(
-						reverse_array,
-						num_reverse_alloc *
-						sizeof(ideal_relation_t));
+// #pragma omp critical (add_relation)
+			{
+				if (num_reverse == num_reverse_alloc) {
+					num_reverse_alloc *= 2;
+					reverse_array = (ideal_relation_t *)xrealloc(
+							reverse_array,
+							num_reverse_alloc *
+							sizeof(ideal_relation_t));
+				}
+				reverse_array[num_reverse].relation_array_word =
+						(uint32 *)curr_relation -
+						(uint32 *)relation_array;
+				reverse_array[num_reverse].next = 
+							ideal_map[ideal].payload;
+				ideal_map[ideal].payload = num_reverse++;
 			}
-			reverse_array[num_reverse].relation_array_word =
-					(uint32 *)curr_relation -
-					(uint32 *)relation_array;
-			reverse_array[num_reverse].next = 
-						ideal_map[ideal].payload;
-			ideal_map[ideal].payload = num_reverse++;
 		}
-
-		curr_relation = next_relation_ptr(curr_relation);
 	}
 
 	num_relset = 0;
@@ -337,10 +341,12 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 	   completely merged */
 
 	memset(ideal_map, 0, num_ideals * sizeof(ideal_map_t));
+#pragma omp parallel for private(j)
 	for (i = 0; i < num_relset; i++) {
 		relation_set_t *r = relset_array + i;
 		uint32 *ideal_list = r->data + r->num_relations;
 		for (j = 0; j < r->num_large_ideals; j++) {
+#pragma omp atomic update
 			ideal_map[ideal_list[j]].payload++;
 		}
 	}
@@ -350,6 +356,7 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 		}
 	}
 	num_ideals = j;
+#pragma omp parallel for private(j)
 	for (i = 0; i < num_relset; i++) {
 		relation_set_t *r = relset_array + i;
 		uint32 *ideal_list = r->data + r->num_relations;
