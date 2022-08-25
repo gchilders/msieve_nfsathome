@@ -290,12 +290,6 @@ static void delete_relations(filter_t *filter,
 		curr_relation = next_relation;
 	}
 
-	if (new_rels != num_relations - num_delete) {
-		printf("ERROR: new_rels = %u, num_relations = %u, num_delete = %u\n",
-			new_rels, num_relations, num_delete);
-		exit(1);
-	}  // DEBUG DEBUG DEBUG
-
 	/* trim the relation array */
 
 	filter->relation_array = (relation_ideal_t *)xrealloc(relation_array,
@@ -325,7 +319,6 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 	uint32 num_ideals_delete;
 	clique_t *clique_heap;
 	uint32 num_clique;
-	omp_lock_t *ideallock;
 
 	uint64 *delete_array;
 	uint32 num_delete;
@@ -352,11 +345,7 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 
 	ideal_map = (ideal_map_t *)xcalloc((size_t)num_ideals, 
 					sizeof(ideal_map_t));
-	ideallock = (omp_lock_t *)malloc(num_ideals * sizeof(omp_lock_t));
 
-#pragma omp parallel for
-	for (i = 0; i < num_ideals; i++) omp_init_lock(&ideallock[i]);
-	
 	/* set up structure for linked lists of clique relations */
 
 	num_reverse = 1;
@@ -372,9 +361,8 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 		curr_relation->connected = 0;
 		for (j = 0; j < curr_relation->ideal_count; j++) {
 			uint32 ideal = curr_relation->ideal_list[j];
-			omp_set_lock(&ideallock[ideal]);
+#pragma omp atomic update
 			ideal_map[ideal].payload++;
-			omp_unset_lock(&ideallock[ideal]);
 		}
 	}
 
@@ -593,9 +581,6 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 		}
 	}
 
-#pragma omp parallel for
-	for (i = 0; i < num_ideals; i++) omp_destroy_lock(&ideallock[i]);
-	free(ideallock);
 	free(reverse_array);
 	free(ideal_map);
 	free(clique_relations);

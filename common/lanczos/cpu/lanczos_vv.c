@@ -504,7 +504,11 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 	int i, threads, size;
 	v_t *xytmp;
 
+#ifdef HAVE_OMP
 	threads = omp_get_max_threads();
+#else 
+	threads = 1;
+#endif
 	xytmp = (v_t *) malloc(threads * VBITS * sizeof(v_t));
 	size = n / threads + 1;
 

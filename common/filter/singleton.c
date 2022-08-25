@@ -430,7 +430,6 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	uint32 num_relations;
 	uint32 num_ideals;
 	uint32 orig_num_relations, new_num_relations;
-	omp_lock_t *freqlock;
 
 	logprintf(obj, "commencing in-memory singleton removal\n");
 
@@ -439,15 +438,11 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	relation_array = filter->relation_array;
 	relation_ptr = filter->relation_ptr;
 	freqtable = (uint32 *)xcalloc((size_t)num_ideals, sizeof(uint32));
-	freqlock = (omp_lock_t *)malloc(orig_num_ideals * sizeof(omp_lock_t));
 
 	/* count the number of times each ideal occurs. Note
 	   that since we know the exact number of ideals, we
 	   don't need a hashtable to store the counts, just an
 	   ordinary random-access array (i.e. a perfect hashtable) */
-
-#pragma omp parallel for
-	for (i = 0; i < num_ideals; i++) omp_init_lock(&freqlock[i]);
 
 #pragma omp parallel for private(j)
 	for (i = 0; i < num_relations; i++) {
@@ -455,9 +450,8 @@ void filter_purge_singletons_core(msieve_obj *obj,
 		my_relation->connected = 0;
 		for (j = 0; j < my_relation->ideal_count; j++) {
 			uint32 ideal = my_relation->ideal_list[j];
-			omp_set_lock(&freqlock[ideal]);
+#pragma omp atomic update
 			freqtable[ideal]++;
-			omp_unset_lock(&freqlock[ideal]);
 		}
 	}
 
@@ -496,9 +490,8 @@ void filter_purge_singletons_core(msieve_obj *obj,
 
 					for (j = 0; j < curr_num_ideals; j++) {
 						ideal = my_relation->ideal_list[j];
-						omp_set_lock(&freqlock[ideal]);
+#pragma omp atomic update
 						freqtable[ideal]--;
-						omp_unset_lock(&freqlock[ideal]);
 					}
 
 					my_relation->connected = 1;
@@ -543,12 +536,6 @@ void filter_purge_singletons_core(msieve_obj *obj,
 		curr_relation = next_relation;
 	}
 
-	// DEBUG DEBUG DEBUG
-	if (num_relations != new_num_relations) {
-		logprintf(obj, " WRONG! num_relations = %u, new_num_relations = %u\n",
-					num_relations, new_num_relations);
-	}
-
 	/* find the ideal that occurs in the most
 	   relations, and renumber the ideals to ignore
 	   any that have a count of zero */
@@ -588,8 +575,5 @@ void filter_purge_singletons_core(msieve_obj *obj,
 		}
 	}
 	
-#pragma omp parallel for
-	for (i = 0; i < orig_num_ideals; i++) omp_destroy_lock(&freqlock[i]);
-	free(freqlock);
 	free(freqtable);
 }
