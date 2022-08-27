@@ -559,7 +559,7 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	filter->num_ideals = num_ideals;
 	filter->relation_array = relation_array = 
 			(relation_ideal_t *)xrealloc(relation_array,
-				(curr_relation - relation_array + 1) *
+				(old_relation - relation_array + 1) *
 				sizeof(relation_ideal_t));
 	filter->relation_ptr = relation_ptr =
 			(relation_ideal_t **)xrealloc(relation_ptr,
