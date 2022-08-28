@@ -554,18 +554,6 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	
 	/* save the current state */
 
-	filter->max_ideal_weight = j;
-	filter->num_relations = num_relations;
-	filter->num_ideals = num_ideals;
-	filter->relation_array = relation_array = 
-			(relation_ideal_t *)xrealloc(relation_array,
-				(old_relation - relation_array + 1) *
-				sizeof(relation_ideal_t));
-	filter->relation_ptr = relation_ptr =
-			(relation_ideal_t **)xrealloc(relation_ptr,
-				num_relations * sizeof(relation_ideal_t *));
-
-
 #pragma omp parallel for
 	for (i = 0; i < num_relations; i++) {
 		relation_ideal_t *my_relation = filter->relation_ptr[i];
@@ -576,4 +564,24 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	}
 	
 	free(freqtable);
+	
+	filter->max_ideal_weight = j;
+	filter->num_relations = num_relations;
+	filter->num_ideals = num_ideals;
+	filter->relation_array = 
+			(relation_ideal_t *)xrealloc(relation_array,
+				(old_relation - relation_array + 1) *
+				sizeof(relation_ideal_t));
+	filter->relation_ptr = 
+			(relation_ideal_t **)xrealloc(relation_ptr,
+				num_relations * sizeof(relation_ideal_t *));
+
+	if (filter->relation_array != relation_array) {
+		/* the realloc moved the relation array */
+		curr_relation = filter->relation_array;
+		for (i = 0; i < num_relations; i++) {
+			filter->relation_ptr[i] = curr_relation;
+			curr_relation = next_relation_ptr(curr_relation);
+		}
+	}
 }

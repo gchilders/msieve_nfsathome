@@ -290,15 +290,7 @@ static void delete_relations(filter_t *filter,
 		curr_relation = next_relation;
 	}
 
-	/* trim the relation array */
-
-	filter->relation_array = (relation_ideal_t *)xrealloc(relation_array,
-				(size_t)(old_relation + 1 - relation_array) *
-				sizeof(relation_ideal_t));
 	filter->num_relations = num_relations - num_delete;
-	filter->relation_ptr = (relation_ideal_t **)xrealloc(relation_ptr,
-				filter->num_relations *
-				sizeof(relation_ideal_t *));
 	check_relations_array(filter, 1);
 }
 
