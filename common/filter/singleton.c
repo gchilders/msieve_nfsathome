@@ -554,7 +554,11 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	
 	/* save the current state */
 
-#pragma omp parallel for
+	filter->max_ideal_weight = j;
+	filter->num_relations = num_relations;
+	filter->num_ideals = num_ideals;
+
+#pragma omp parallel for private(j)
 	for (i = 0; i < num_relations; i++) {
 		relation_ideal_t *my_relation = filter->relation_ptr[i];
 		for (j = 0; j < my_relation->ideal_count; j++) {
@@ -565,9 +569,6 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	
 	free(freqtable);
 	
-	filter->max_ideal_weight = j;
-	filter->num_relations = num_relations;
-	filter->num_ideals = num_ideals;
 	filter->relation_array = 
 			(relation_ideal_t *)xrealloc(relation_array,
 				(old_relation - relation_array + 1) *
