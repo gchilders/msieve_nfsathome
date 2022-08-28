@@ -530,7 +530,7 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 				uint32 compress,
 				uint32 dependency) {
 	uint32 i, j;
-	char *buf;
+	char buf[LINE_BUF_SIZE];
 	relation_t *rlist;
 	savefile_t *savefile = &obj->savefile;
 
@@ -539,28 +539,12 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 	uint32 *relidx_list;
 	relcount_t *entry;
 
-	uint32 *my_curr_relation;
-	uint32 curr_relation;
-	uint32 *tmp_factor_size;
-	relation_t *tmp_relation;
-	mpz_t *scratch;
+	uint8 tmp_factors[COMPRESSED_P_MAX_SIZE];
+	uint32 factor_size;
+	relation_t tmp_relation;
+	mpz_t scratch;
 
-	uint32 batch = 1024 * obj->num_threads;
-	uint32 num_relations_read;
-
-	if (batch < 1) batch = 1;
-
-	/* per thread variables */
-	my_curr_relation = (uint32 *)malloc(batch * sizeof(uint32));
-	buf = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
-	scratch = (mpz_t *)malloc(batch * sizeof(mpz_t));
-	tmp_factor_size = (uint32 *)malloc(batch * sizeof(uint32));
-	tmp_relation = (relation_t *)malloc(batch * sizeof(relation_t));
-
-	for (i = 0; i < batch; i++) {
-		tmp_relation[i].factors = (uint8 *)malloc(COMPRESSED_P_MAX_SIZE * sizeof(uint8));
-		mpz_init(scratch[i]);
-	}
+	tmp_relation.factors = tmp_factors;
 
 	hashtable_init(&unique_relidx, 
 			(uint32)WORDS_IN(relcount_t), 
@@ -618,80 +602,62 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 
 	rlist = (relation_t *)xmalloc(num_unique_relidx * sizeof(relation_t));
 
-	curr_relation = (uint32)(-1);
+	i = (uint32)(-1);
 	j = 0;
-	
-	do {
-		num_relations_read = 0;
-		for(i = 0; i < batch; i++) {
-			char *buf_i = buf + i * LINE_BUF_SIZE;
-			savefile_read_line(buf_i, 
-					LINE_BUF_SIZE * sizeof(char), savefile);
-			if (savefile_eof(savefile)) break;
-			if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
-				/* no relation on this line */
-				i--;
-				continue;
-			}
-			if (++curr_relation < relidx_list[j + num_relations_read]) {
-				/* relation not needed */
-				i--;
-				continue;
-			}
-			num_relations_read++;
-			my_curr_relation[i] = curr_relation;
-			if (j + num_relations_read == num_unique_relidx) break;
+	savefile_read_line(buf, sizeof(buf), savefile);
+	mpz_init(scratch);
+	while (!savefile_eof(savefile) && j < num_unique_relidx) {
+		
+		int32 status;
+
+		if (buf[0] != '-' && !isdigit(buf[0])) {
+
+			/* no relation at this line */
+
+			savefile_read_line(buf, sizeof(buf), savefile);
+			continue;
+		}
+		if (++i < relidx_list[j]) {
+
+			/* relation not needed */
+
+			savefile_read_line(buf, sizeof(buf), savefile);
+			continue;
 		}
 
-#pragma omp parallel for
-		for (i = 0; i < num_relations_read; i++) {
-			int32 status;
-			char *buf_i = buf + i * LINE_BUF_SIZE;
-			status = nfs_read_relation(buf_i, fb, &tmp_relation[i], 
-						&tmp_factor_size[i], compress,
-						scratch[i], 0);
-			if (status) {
-				/* at this point, if the relation couldn't be
-			       read then the filtering stage should have
-			       found that out and skipped it */
+		status = nfs_read_relation(buf, fb, &tmp_relation, 
+						&factor_size, compress,
+						scratch, 0);
+		if (status) {
+			/* at this point, if the relation couldn't be
+			   read then the filtering stage should have
+			   found that out and skipped it */
 
-				logprintf(obj, "error: relation %u corrupt\n", my_curr_relation[i]);
-				exit(-1);
-			}
+			logprintf(obj, "error: relation %u corrupt\n", i);
+			exit(-1);
 		}
-
-		for (i = 0; i < num_relations_read; i++) {
+		else {
 			/* save the relation */
 
 			relation_t *r = rlist + j++;
 
-			*r = tmp_relation[i];
-			r->rel_index = my_curr_relation[i];
-			r->factors = (uint8 *)xmalloc(tmp_factor_size[i] *
+			*r = tmp_relation;
+			r->rel_index = i;
+			r->factors = (uint8 *)xmalloc(factor_size *
 							sizeof(uint8));
-			memcpy(r->factors, tmp_relation[i].factors,
-					tmp_factor_size[i] * sizeof(uint8));
+			memcpy(r->factors, tmp_relation.factors,
+					factor_size * sizeof(uint8));
 		}
-	} while (num_relations_read == batch && j < num_unique_relidx);
+
+		savefile_read_line(buf, sizeof(buf), savefile);
+	}
 
 	num_unique_relidx = *num_relations_out = j;
 	logprintf(obj, "read %u relations\n", j);
 	savefile_close(savefile);
 	hashtable_free(&unique_relidx);
 	*rlist_out = rlist;
-
-	/* free per thread variables */
-
-	for (i = 0; i < batch; i++) {
-		free(tmp_relation[i].factors);
-		mpz_clear(scratch[i]);
-	}
-	
-	free(my_curr_relation);
-	free(scratch);
-	free(tmp_factor_size);
-	free(tmp_relation);
-	free(buf);
+	mpz_clear(scratch);
 }
 
 /*--------------------------------------------------------------------*/
