@@ -341,15 +341,8 @@ static void multiply_relations(relation_prod_t *prodinfo,
 		   half and the last half of the relations */
 
 		uint32 mid = (index1 + index2) / 2;
-#pragma omp parallel
-#pragma omp single
-		{
-#pragma omp task
 		multiply_relations(prodinfo, index1, mid, &prod1);
-#pragma omp task
 		multiply_relations(prodinfo, mid + 1, index2, &prod2);
-#pragma omp taskwait
-		}
 	}
 
 	/* multiply them together and save the result */
