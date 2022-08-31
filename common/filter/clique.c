@@ -242,7 +242,6 @@ static void delete_relations(filter_t *filter,
 	uint32 i, j, new_rels;
 	uint32 num_relations = filter->num_relations;
 	relation_ideal_t *relation_array = filter->relation_array;
-	relation_ideal_t **relation_ptr = filter->relation_ptr;
 	relation_ideal_t *curr_relation;
 	relation_ideal_t *old_relation;
 

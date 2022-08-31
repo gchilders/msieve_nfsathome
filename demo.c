@@ -560,7 +560,7 @@ int main(int argc, char **argv) {
 		}
 		else {
 			if (isdigit(argv[i][0]) || argv[i][0] == '(' )
-				strncpy(buf, argv[i], sizeof(buf));
+				strncpy(buf, argv[i], sizeof(buf)-1);
 			i++;
 		}
 	}

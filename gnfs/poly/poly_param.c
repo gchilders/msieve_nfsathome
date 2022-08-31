@@ -142,8 +142,6 @@ void get_poly_params(msieve_obj *obj, mpz_t n,
 	/* if not, choose the degree automatically */
 
 	if (degree == 0) {
-		uint32 bits = mpz_sizeinbase(n, 2);
-
 		if (digits < 108.0)
 			degree = 4;
 		else if (digits < 220.0)
