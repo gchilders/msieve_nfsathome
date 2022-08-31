@@ -1274,9 +1274,13 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 					   "dimensions\n", check_interval, dump_interval);
 				MPI_NODE_0_END
 #ifdef HAVE_MPI
+				MPI_TRY(MPI_Bcast(&check_interval, 1, 
+						MPI_INT, 0, obj->mpi_la_grid))
 				MPI_TRY(MPI_Bcast(&dump_interval, 1, 
 						MPI_INT, 0, obj->mpi_la_grid))
 #endif
+				next_check = ((dim_solved + 6 * VBITS) / 
+						check_interval + 1) * check_interval;
 				next_dump = ((dim_solved + 6 * VBITS) / 
 						dump_interval + 1) * dump_interval;
 				continue;
