@@ -212,6 +212,10 @@ void msieve_run(msieve_obj *obj) {
 #ifdef HAVE_MPI
 	logprintf(obj, "MPI process %u of %u\n", obj->mpi_rank, obj->mpi_size);
 #endif
+#ifdef HAVE_OMP
+	if (omp_get_max_threads() > 1) 
+		logprintf(obj, "Using %d OpenMP threads\n", omp_get_max_threads());
+#endif
 	logprintf(obj, "factoring %s (%d digits)\n", 
 				n_string, strlen(n_string));
 
