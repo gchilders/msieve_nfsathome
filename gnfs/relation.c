@@ -85,7 +85,7 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	/* note that only the polynomials within the factor
 	   base need to be initialized */
 
-	uint32 i; 
+	uint32 i, colons; 
 	uint64 p, btmp;
 	int64 a, atmp;
 	uint32 b;
@@ -100,6 +100,12 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	/* Make thread-safe */
 	mpz_t tmp1, tmp2, tmp3;
 
+	/* Count the number of colons in the relation */
+	colons = 0;
+	for (tmp = buf; *tmp != '\0'; tmp++) {
+		if (*tmp == ':') colons++;
+	}
+
 	/* read the relation coordinates */
 
 	a = strtoll(buf, &next_field, 10);
@@ -112,6 +118,8 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	b = (uint32)btmp;
 	if (btmp != (uint64)b)
 		return -99; /* cannot use large b */
+	if ((b != 0) && (colons != 2)) 
+		return -97; /* bad relation */
 
 	num_factors_r = 0;
 	num_factors_a = 0;
@@ -226,8 +234,15 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	}
 
 	if (mpz_cmp_ui(polyval, 1) != 0) {
-		mpz_clears(tmp1, tmp2, tmp3, NULL);
-		return -11;
+		if(mpz_probab_prime_p(polyval, 10)) {
+			p = mpz_get_ui(polyval);
+			array_size = compress_p(factors, p, array_size);
+			num_factors_r++;
+		}
+		else {
+			mpz_clears(tmp1, tmp2, tmp3, NULL);
+			return -11;
+		}
 	}
 
 	/* read the algebraic factors */
@@ -281,9 +296,17 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 
 	mpz_clears(tmp1, tmp2, tmp3, NULL);
 
-	if (mpz_cmp_ui(polyval, 1) != 0)
-		return -15;
-	
+	if (mpz_cmp_ui(polyval, 1) != 0) {
+		if(mpz_probab_prime_p(polyval, 10)) {
+			p = mpz_get_ui(polyval);
+			array_size = compress_p(factors, p, array_size);
+			num_factors_a++;
+		}
+		else {
+			return -15;
+		}
+	}
+
 	r->num_factors_r = num_factors_r;
 	r->num_factors_a = num_factors_a;
 	*array_size_out = array_size;

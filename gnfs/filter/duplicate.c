@@ -258,6 +258,7 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	uint32 num_collisions;
 	uint32 num_skipped_b;
 	uint32 num_composite;
+	uint32 num_malformed;
 	uint8 *hashtable;
 	uint32 log2_hashtable1_size;
 	double rel_size = estimate_rel_size(savefile);
@@ -353,6 +354,7 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	num_collisions = 0;
 	num_skipped_b = 0;
 	num_composite = 0;
+	num_malformed = 0;
 	
 	do {
 		num_relations_read = 0;
@@ -404,6 +406,8 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 					num_skipped_b++;
 				else if (status[i] == -98)
 					num_composite++;
+				else if (status[i] == -97)
+					num_malformed++;
 				else
 			   	 logprintf(obj, "error %d reading relation %u\n",
 						status[i], my_curr_relation[i]);
@@ -497,6 +501,9 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	if (num_composite > 0)
 		logprintf(obj, "skipped %d relations with composite factors\n",
 				num_composite);
+	if (num_malformed > 0)
+		logprintf(obj, "skipped %d malformed relations\n",
+				num_malformed);
 	logprintf(obj, "found %u hash collisions in %u relations\n", 
 				num_collisions, num_relations);
 
