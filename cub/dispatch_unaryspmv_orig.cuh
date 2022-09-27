@@ -30,23 +30,7 @@
 
 #pragma once
 
-#include <stdio.h>
-#include <iterator>
-
-#include "cub/agent/single_pass_scan_operators.cuh"
-#include "cub/agent/agent_segment_fixup.cuh"
 #include "agent_unaryspmv_orig.cuh"
-#include "cub/util_type.cuh"
-#include "cub/util_debug.cuh"
-#include "cub/util_device.cuh"
-#include "cub/util_math.cuh"
-#include "cub/thread/thread_search.cuh"
-#include "cub/grid/grid_queue.cuh"
-#include "cub/config.cuh"
-
-#include <thrust/system/cuda/detail/core/triple_chevron_launch.h>
-
-using namespace cub;
 
 /******************************************************************************
  * Unary SpMV kernel entry points
@@ -62,7 +46,7 @@ template <
 __global__ void DeviceUnarySpmv1ColKernel(
     UnarySpmvParams<ValueT, OffsetT> spmv_params)                ///< [in] SpMV input parameter bundle
 {
-    typedef CacheModifiedInputIterator<
+    typedef cub::CacheModifiedInputIterator<
             AgentUnarySpmvPolicyT::VECTOR_VALUES_LOAD_MODIFIER,
             ValueT,
             OffsetT>
@@ -108,7 +92,7 @@ __global__ void DeviceUnarySpmvSearchKernel(
         TILE_ITEMS              = BLOCK_THREADS * ITEMS_PER_THREAD,
     };
 
-    typedef CacheModifiedInputIterator<
+    typedef cub::CacheModifiedInputIterator<
             UnarySpmvPolicyT::ROW_OFFSETS_SEARCH_LOAD_MODIFIER,
             OffsetT,
             OffsetT>
@@ -120,7 +104,7 @@ __global__ void DeviceUnarySpmvSearchKernel(
     {
         OffsetT                         diagonal = (tile_idx * TILE_ITEMS);
         CoordinateT                     tile_coordinate;
-        CountingInputIterator<OffsetT>  nonzero_indices(0);
+        cub::CountingInputIterator<OffsetT>  nonzero_indices(0);
 
         // Search the merge path
         MergePathSearch(
@@ -150,7 +134,7 @@ __launch_bounds__ (int(UnarySpmvPolicyT::BLOCK_THREADS))
 __global__ void DeviceUnarySpmvKernel(
     UnarySpmvParams<ValueT, OffsetT>     spmv_params,           ///< [in] SpMV input parameter bundle
     CoordinateT*                    d_tile_coordinates,         ///< [in] Pointer to the temporary array of tile starting coordinates
-    KeyValuePair<OffsetT,ValueT>*   d_tile_carry_pairs,         ///< [out] Pointer to the temporary array carry-out dot product row-ids, one per block
+    cub::KeyValuePair<OffsetT,ValueT>*   d_tile_carry_pairs,         ///< [out] Pointer to the temporary array carry-out dot product row-ids, one per block
     int                             num_tiles,                  ///< [in] Number of merge tiles
     ScanTileStateT                  tile_state,                 ///< [in] Tile status interface for fixup reduce-by-key kernel
     int                             num_segment_fixup_tiles)    ///< [in] Number of reduce-by-key tiles (fixup grid size)
@@ -180,13 +164,13 @@ __global__ void DeviceUnarySpmvKernel(
  * Multi-block reduce-by-key sweep kernel entry point
  */
 template <
-    typename    AgentSegmentFixupPolicyT,       ///< Parameterized AgentSegmentFixupPolicy tuning policy type
+    typename    AgentUnarySegmentFixupPolicyT,       ///< Parameterized AgentUnarySegmentFixupPolicy tuning policy type
     typename    PairsInputIteratorT,            ///< Random-access input iterator type for keys
     typename    AggregatesOutputIteratorT,      ///< Random-access output iterator type for values
     typename    OffsetT,                        ///< Signed integer type for global offsets
     typename    ScanTileStateT>                 ///< Tile status interface type
-__launch_bounds__ (int(AgentSegmentFixupPolicyT::BLOCK_THREADS))
-__global__ void DeviceSegmentFixupKernel(
+__launch_bounds__ (int(AgentUnarySegmentFixupPolicyT::BLOCK_THREADS))
+__global__ void DeviceUnarySegmentFixupKernel(
     PairsInputIteratorT         d_pairs_in,         ///< [in] Pointer to the array carry-out dot product row-ids, one per spmv block
     AggregatesOutputIteratorT   d_aggregates_out,   ///< [in,out] Output value aggregates
     OffsetT                     num_items,          ///< [in] Total number of items to select from
@@ -194,20 +178,20 @@ __global__ void DeviceSegmentFixupKernel(
     ScanTileStateT              tile_state)         ///< [in] Tile status interface
 {
     // Thread block type for reducing tiles of value segments
-    typedef AgentSegmentFixup<
-            AgentSegmentFixupPolicyT,
+    typedef cub::AgentSegmentFixup<
+            AgentUnarySegmentFixupPolicyT,
             PairsInputIteratorT,
             AggregatesOutputIteratorT,
             cub::Equality,
             cub::Sum,
             OffsetT>
-        AgentSegmentFixupT;
+        AgentUnarySegmentFixupT;
 
-    // Shared memory for AgentSegmentFixup
-    __shared__ typename AgentSegmentFixupT::TempStorage temp_storage;
+    // Shared memory for AgentUnarySegmentFixup
+    __shared__ typename AgentUnarySegmentFixupT::TempStorage temp_storage;
 
     // Process tiles
-    AgentSegmentFixupT(temp_storage, d_pairs_in, d_aggregates_out, cub::Equality(), cub::Sum()).ConsumeRange(
+    AgentUnarySegmentFixupT(temp_storage, d_pairs_in, d_aggregates_out, cub::Equality(), cub::Sum()).ConsumeRange(
         num_items,
         num_tiles,
         tile_state);
@@ -239,13 +223,13 @@ struct DispatchUnarySpmv
     typedef UnarySpmvParams<ValueT, OffsetT> UnarySpmvParamsT;
 
     // 2D merge path coordinate type
-    typedef typename CubVector<OffsetT, 2>::Type CoordinateT;
+    typedef typename cub::CubVector<OffsetT, 2>::Type CoordinateT;
 
     // Tile status descriptor interface type
-    typedef ReduceByKeyScanTileState<ValueT, OffsetT> ScanTileStateT;
+    typedef cub::ReduceByKeyScanTileState<ValueT, OffsetT> ScanTileStateT;
 
     // Tuple type for scanning (pairs accumulated segment-value with segment-index)
-    typedef KeyValuePair<OffsetT, ValueT> KeyValuePairT;
+    typedef cub::KeyValuePair<OffsetT, ValueT> KeyValuePairT;
 
 
     //---------------------------------------------------------------------
@@ -258,22 +242,22 @@ struct DispatchUnarySpmv
         typedef AgentUnarySpmvPolicy<
                 (sizeof(ValueT) > 4) ? 64 : 128,
                 (sizeof(ValueT) > 4) ? 1 : 7,
-                LOAD_LDG,
-                LOAD_CA,
-                LOAD_LDG,
-                LOAD_LDG,
-                LOAD_LDG,
+                cub::LOAD_LDG,
+                cub::LOAD_CA,
+                cub::LOAD_LDG,
+                cub::LOAD_LDG,
+                cub::LOAD_LDG,
                 (sizeof(ValueT) > 4) ? true : false,
-                BLOCK_SCAN_WARP_SCANS>
+                cub::BLOCK_SCAN_WARP_SCANS>
             UnarySpmvPolicyT;
 
-        typedef AgentSegmentFixupPolicy<
+        typedef cub::AgentSegmentFixupPolicy<
                 128,
                 3,
-                BLOCK_LOAD_VECTORIZE,
-                LOAD_LDG,
-                BLOCK_SCAN_WARP_SCANS>
-            SegmentFixupPolicyT;
+                cub::BLOCK_LOAD_VECTORIZE,
+                cub::LOAD_LDG,
+                cub::BLOCK_SCAN_WARP_SCANS>
+            UnarySegmentFixupPolicyT;
     };
 
 
@@ -284,22 +268,22 @@ struct DispatchUnarySpmv
         typedef AgentUnarySpmvPolicy<
                 (sizeof(ValueT) > 4) ? 64 : 128,
                 (sizeof(ValueT) > 4) ? 1 : 14,
-                LOAD_LDG,
-                LOAD_CA,
-                LOAD_LDG,
-                LOAD_LDG,
-                LOAD_LDG,
+                cub::LOAD_LDG,
+                cub::LOAD_CA,
+                cub::LOAD_LDG,
+                cub::LOAD_LDG,
+                cub::LOAD_LDG,
                 (sizeof(ValueT) > 4) ? true : false,
-                BLOCK_SCAN_WARP_SCANS>
+                cub::BLOCK_SCAN_WARP_SCANS>
             UnarySpmvPolicyT;
 
-        typedef AgentSegmentFixupPolicy<
+        typedef cub::AgentSegmentFixupPolicy<
                 128,
                 3,
-                BLOCK_LOAD_VECTORIZE,
-                LOAD_LDG,
-                BLOCK_SCAN_WARP_SCANS>
-            SegmentFixupPolicyT;
+                cub::BLOCK_LOAD_VECTORIZE,
+                cub::LOAD_LDG,
+                cub::BLOCK_SCAN_WARP_SCANS>
+            UnarySegmentFixupPolicyT;
     };
 
     /// SM50
@@ -308,23 +292,23 @@ struct DispatchUnarySpmv
         typedef AgentUnarySpmvPolicy<
                 (sizeof(ValueT) > 4) ? 64 : 128,
                 (sizeof(ValueT) > 4) ? 1 : 7,
-                LOAD_LDG,
-                LOAD_DEFAULT,
-                (sizeof(ValueT) > 4) ? LOAD_LDG : LOAD_DEFAULT,
-                (sizeof(ValueT) > 4) ? LOAD_LDG : LOAD_DEFAULT,
-                LOAD_LDG,
+                cub::LOAD_LDG,
+                cub::LOAD_DEFAULT,
+                (sizeof(ValueT) > 4) ? cub::LOAD_LDG : cub::LOAD_DEFAULT,
+                (sizeof(ValueT) > 4) ? cub::LOAD_LDG : cub::LOAD_DEFAULT,
+                cub::LOAD_LDG,
                 (sizeof(ValueT) > 4) ? true : false,
-                (sizeof(ValueT) > 4) ? BLOCK_SCAN_WARP_SCANS : BLOCK_SCAN_RAKING_MEMOIZE>
+                (sizeof(ValueT) > 4) ? cub::BLOCK_SCAN_WARP_SCANS : cub::BLOCK_SCAN_RAKING_MEMOIZE>
             UnarySpmvPolicyT;
 
 
-        typedef AgentSegmentFixupPolicy<
+        typedef cub::AgentSegmentFixupPolicy<
                 128,
                 3,
-                BLOCK_LOAD_VECTORIZE,
-                LOAD_LDG,
-                BLOCK_SCAN_RAKING_MEMOIZE>
-            SegmentFixupPolicyT;
+                cub::BLOCK_LOAD_VECTORIZE,
+                cub::LOAD_LDG,
+                cub::BLOCK_SCAN_RAKING_MEMOIZE>
+            UnarySegmentFixupPolicyT;
     };
 
 
@@ -334,25 +318,24 @@ struct DispatchUnarySpmv
         typedef AgentUnarySpmvPolicy<
                 (sizeof(ValueT) > 4) ? 64 : 128,
                 (sizeof(ValueT) > 4) ? 1 : 7,
-                LOAD_DEFAULT,
-                LOAD_DEFAULT,
-                LOAD_DEFAULT,
-                LOAD_DEFAULT,
-                LOAD_DEFAULT,
+                cub::LOAD_DEFAULT,
+                cub::LOAD_DEFAULT,
+                cub::LOAD_DEFAULT,
+                cub::LOAD_DEFAULT,
+                cub::LOAD_DEFAULT,
                 (sizeof(ValueT) > 4) ? true : false,
-                BLOCK_SCAN_WARP_SCANS>
+                cub::BLOCK_SCAN_WARP_SCANS>
             UnarySpmvPolicyT;
 
 
-        typedef AgentSegmentFixupPolicy<
+        typedef cub::AgentSegmentFixupPolicy<
                 128,
                 3,
-                BLOCK_LOAD_VECTORIZE, // BLOCK_LOAD_DIRECT,
-                LOAD_LDG,
-                BLOCK_SCAN_WARP_SCANS>
-            SegmentFixupPolicyT;
+                cub::BLOCK_LOAD_VECTORIZE, // BLOCK_LOAD_DIRECT,
+                cub::LOAD_LDG,
+                cub::BLOCK_SCAN_WARP_SCANS>
+            UnarySegmentFixupPolicyT;
     };
-
 
 
     //---------------------------------------------------------------------
@@ -375,7 +358,7 @@ struct DispatchUnarySpmv
 
     // "Opaque" policies (whose parameterizations aren't reflected in the type signature)
     struct PtxUnarySpmvPolicyT : PtxPolicy::UnarySpmvPolicyT {};
-    struct PtxSegmentFixupPolicy : PtxPolicy::SegmentFixupPolicyT {};
+    struct PtxUnarySegmentFixupPolicy : PtxPolicy::UnarySegmentFixupPolicyT {};
 
 
     //---------------------------------------------------------------------
@@ -397,7 +380,7 @@ struct DispatchUnarySpmv
             #if CUB_INCLUDE_DEVICE_CODE
                 // We're on the device, so initialize the kernel dispatch configurations with the current PTX policy
                 spmv_config.template Init<PtxUnarySpmvPolicyT>();
-                segment_fixup_config.template Init<PtxSegmentFixupPolicy>();
+                segment_fixup_config.template Init<PtxUnarySegmentFixupPolicy>();
             #endif
         }
         else
@@ -407,22 +390,22 @@ struct DispatchUnarySpmv
                 if (ptx_version >= 600)
                 {
                     spmv_config.template            Init<typename Policy600::UnarySpmvPolicyT>();
-                    segment_fixup_config.template   Init<typename Policy600::SegmentFixupPolicyT>();
+                    segment_fixup_config.template   Init<typename Policy600::UnarySegmentFixupPolicyT>();
                 }
                 else if (ptx_version >= 500)
                 {
                     spmv_config.template            Init<typename Policy500::UnarySpmvPolicyT>();
-                    segment_fixup_config.template   Init<typename Policy500::SegmentFixupPolicyT>();
+                    segment_fixup_config.template   Init<typename Policy500::UnarySegmentFixupPolicyT>();
                 }
                 else if (ptx_version >= 370)
                 {
                     spmv_config.template            Init<typename Policy370::UnarySpmvPolicyT>();
-                    segment_fixup_config.template   Init<typename Policy370::SegmentFixupPolicyT>();
+                    segment_fixup_config.template   Init<typename Policy370::UnarySegmentFixupPolicyT>();
                 }
                 else
                 {
                     spmv_config.template            Init<typename Policy350::UnarySpmvPolicyT>();
-                    segment_fixup_config.template   Init<typename Policy350::SegmentFixupPolicyT>();
+                    segment_fixup_config.template   Init<typename Policy350::UnarySegmentFixupPolicyT>();
                 }
             #endif
         }
@@ -464,7 +447,7 @@ struct DispatchUnarySpmv
         typename                UnarySpmv1ColKernelT,                    ///< Function type of cub::DeviceUnarySpmv1ColKernel
         typename                UnarySpmvSearchKernelT,                  ///< Function type of cub::AgentUnarySpmvSearchKernel
         typename                UnarySpmvKernelT,                        ///< Function type of cub::AgentUnarySpmvKernel
-        typename                SegmentFixupKernelT>                     ///< Function type of cub::DeviceSegmentFixupKernelT
+        typename                UnarySegmentFixupKernelT>                     ///< Function type of cub::DeviceUnarySegmentFixupKernelT
     CUB_RUNTIME_FUNCTION __forceinline__
     static cudaError_t Dispatch(
         void*                   d_temp_storage,                     ///< [in] Device-accessible allocation of temporary storage.  When NULL, the required allocation size is written to \p temp_storage_bytes and no work is done.
@@ -475,7 +458,7 @@ struct DispatchUnarySpmv
         UnarySpmv1ColKernelT         spmv_1col_kernel,                   ///< [in] Kernel function pointer to parameterization of DeviceUnarySpmv1ColKernel
         UnarySpmvSearchKernelT       spmv_search_kernel,                 ///< [in] Kernel function pointer to parameterization of AgentUnarySpmvSearchKernel
         UnarySpmvKernelT             spmv_kernel,                        ///< [in] Kernel function pointer to parameterization of AgentUnarySpmvKernel
-        SegmentFixupKernelT     segment_fixup_kernel,               ///< [in] Kernel function pointer to parameterization of cub::DeviceSegmentFixupKernel
+        UnarySegmentFixupKernelT     segment_fixup_kernel,               ///< [in] Kernel function pointer to parameterization of cub::DeviceUnarySegmentFixupKernel
         KernelConfig            spmv_config,                        ///< [in] Dispatch parameters that match the policy that \p spmv_kernel was compiled for
         KernelConfig            segment_fixup_config)               ///< [in] Dispatch parameters that match the policy that \p segment_fixup_kernel was compiled for
     {
@@ -530,7 +513,7 @@ struct DispatchUnarySpmv
                 if (CubDebug(error = cudaPeekAtLastError())) break;
 
                 // Sync the stream if specified to flush runtime errors
-                if (debug_synchronous && (CubDebug(error = SyncStream(stream)))) break;
+                if (debug_synchronous && (CubDebug(error = cub::SyncStream(stream)))) break;
 
                 break;
             }
@@ -590,7 +573,7 @@ struct DispatchUnarySpmv
 
             // Alias the temporary allocations from the single storage blob (or compute the necessary size of the blob)
             void* allocations[3] = {};
-            if (CubDebug(error = AliasTemporaries(d_temp_storage, temp_storage_bytes, allocations, allocation_sizes))) break;
+            if (CubDebug(error = cub::AliasTemporaries(d_temp_storage, temp_storage_bytes, allocations, allocation_sizes))) break;
             if (d_temp_storage == NULL)
             {
                 // Return if the caller is simply requesting the size of the storage allocation
@@ -635,7 +618,7 @@ struct DispatchUnarySpmv
                 if (CubDebug(error = cudaPeekAtLastError())) break;
 
                 // Sync the stream if specified to flush runtime errors
-                if (debug_synchronous && (CubDebug(error = SyncStream(stream)))) break;
+                if (debug_synchronous && (CubDebug(error = cub::SyncStream(stream)))) break;
             }
 
             // Log spmv_kernel configuration
@@ -657,7 +640,7 @@ struct DispatchUnarySpmv
             if (CubDebug(error = cudaPeekAtLastError())) break;
 
             // Sync the stream if specified to flush runtime errors
-            if (debug_synchronous && (CubDebug(error = SyncStream(stream)))) break;
+            if (debug_synchronous && (CubDebug(error = cub::SyncStream(stream)))) break;
 
             // Run reduce-by-key fixup if necessary
             if (num_merge_tiles > 1)
@@ -681,7 +664,7 @@ struct DispatchUnarySpmv
                 if (CubDebug(error = cudaPeekAtLastError())) break;
 
                 // Sync the stream if specified to flush runtime errors
-                if (debug_synchronous && (CubDebug(error = SyncStream(stream)))) break;
+                if (debug_synchronous && (CubDebug(error = cub::SyncStream(stream)))) break;
             }
         }
         while (0);
@@ -708,7 +691,7 @@ struct DispatchUnarySpmv
         {
             // Get PTX version
             int ptx_version = 0;
-            if (CubDebug(error = PtxVersion(ptx_version))) break;
+            if (CubDebug(error = cub::PtxVersion(ptx_version))) break;
 
             // Get kernel kernel dispatch configurations
             KernelConfig spmv_config, segment_fixup_config;
@@ -719,7 +702,7 @@ struct DispatchUnarySpmv
                 DeviceUnarySpmv1ColKernel<PtxUnarySpmvPolicyT, ValueT, OffsetT>,
                 DeviceUnarySpmvSearchKernel<PtxUnarySpmvPolicyT, OffsetT, CoordinateT, UnarySpmvParamsT>,
                 DeviceUnarySpmvKernel<PtxUnarySpmvPolicyT, ScanTileStateT, ValueT, OffsetT, CoordinateT>,
-                DeviceSegmentFixupKernel<PtxSegmentFixupPolicy, KeyValuePairT*, ValueT*, OffsetT, ScanTileStateT>,
+                DeviceUnarySegmentFixupKernel<PtxUnarySegmentFixupPolicy, KeyValuePairT*, ValueT*, OffsetT, ScanTileStateT>,
                 spmv_config, segment_fixup_config))) break;
 
         }

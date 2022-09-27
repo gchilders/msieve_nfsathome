@@ -32,20 +32,6 @@
 
 #pragma once
 
-#include <iterator>
-
-#include "cub/util_type.cuh"
-#include "cub/block/block_reduce.cuh"
-#include "cub/block/block_scan.cuh"
-#include "cub/block/block_exchange.cuh"
-#include "cub/config.cuh"
-#include "cub/thread/thread_search.cuh"
-#include "cub/thread/thread_operators.cuh"
-#include "cub/iterator/cache_modified_input_iterator.cuh"
-#include "cub/iterator/counting_input_iterator.cuh"
-
-using namespace cub;
-
 /******************************************************************************
  * Tuning policy
  ******************************************************************************/
@@ -56,13 +42,13 @@ using namespace cub;
 template <
     int                             _BLOCK_THREADS,                         ///< Threads per thread block
     int                             _ITEMS_PER_THREAD,                      ///< Items per thread (per tile of input)
-    CacheLoadModifier               _ROW_OFFSETS_SEARCH_LOAD_MODIFIER,      ///< Cache load modifier for reading CSR row-offsets during search
-    CacheLoadModifier               _ROW_OFFSETS_LOAD_MODIFIER,             ///< Cache load modifier for reading CSR row-offsets
-    CacheLoadModifier               _COLUMN_INDICES_LOAD_MODIFIER,          ///< Cache load modifier for reading CSR column-indices
-    CacheLoadModifier               _VALUES_LOAD_MODIFIER,                  ///< Cache load modifier for reading CSR values
-    CacheLoadModifier               _VECTOR_VALUES_LOAD_MODIFIER,           ///< Cache load modifier for reading vector values
+    cub::CacheLoadModifier               _ROW_OFFSETS_SEARCH_LOAD_MODIFIER,      ///< Cache load modifier for reading CSR row-offsets during search
+    cub::CacheLoadModifier               _ROW_OFFSETS_LOAD_MODIFIER,             ///< Cache load modifier for reading CSR row-offsets
+    cub::CacheLoadModifier               _COLUMN_INDICES_LOAD_MODIFIER,          ///< Cache load modifier for reading CSR column-indices
+    cub::CacheLoadModifier               _VALUES_LOAD_MODIFIER,                  ///< Cache load modifier for reading CSR values
+    cub::CacheLoadModifier               _VECTOR_VALUES_LOAD_MODIFIER,           ///< Cache load modifier for reading vector values
     bool                            _DIRECT_LOAD_NONZEROS,                  ///< Whether to load nonzeros directly from global during sequential merging (vs. pre-staged through shared memory)
-    BlockScanAlgorithm              _SCAN_ALGORITHM>                        ///< The BlockScan algorithm to use
+    cub::BlockScanAlgorithm              _SCAN_ALGORITHM>                        ///< The BlockScan algorithm to use
 struct AgentUnarySpmvPolicy
 {
     enum
@@ -72,12 +58,12 @@ struct AgentUnarySpmvPolicy
         DIRECT_LOAD_NONZEROS                                            = _DIRECT_LOAD_NONZEROS,                ///< Whether to load nonzeros directly from global during sequential merging (pre-staged through shared memory)
     };
 
-    static const CacheLoadModifier  ROW_OFFSETS_SEARCH_LOAD_MODIFIER    = _ROW_OFFSETS_SEARCH_LOAD_MODIFIER;    ///< Cache load modifier for reading CSR row-offsets
-    static const CacheLoadModifier  ROW_OFFSETS_LOAD_MODIFIER           = _ROW_OFFSETS_LOAD_MODIFIER;           ///< Cache load modifier for reading CSR row-offsets
-    static const CacheLoadModifier  COLUMN_INDICES_LOAD_MODIFIER        = _COLUMN_INDICES_LOAD_MODIFIER;        ///< Cache load modifier for reading CSR column-indices
-    static const CacheLoadModifier  VALUES_LOAD_MODIFIER                = _VALUES_LOAD_MODIFIER;                ///< Cache load modifier for reading CSR values
-    static const CacheLoadModifier  VECTOR_VALUES_LOAD_MODIFIER         = _VECTOR_VALUES_LOAD_MODIFIER;         ///< Cache load modifier for reading vector values
-    static const BlockScanAlgorithm SCAN_ALGORITHM                      = _SCAN_ALGORITHM;                      ///< The BlockScan algorithm to use
+    static const cub::CacheLoadModifier  ROW_OFFSETS_SEARCH_LOAD_MODIFIER    = _ROW_OFFSETS_SEARCH_LOAD_MODIFIER;    ///< Cache load modifier for reading CSR row-offsets
+    static const cub::CacheLoadModifier  ROW_OFFSETS_LOAD_MODIFIER           = _ROW_OFFSETS_LOAD_MODIFIER;           ///< Cache load modifier for reading CSR row-offsets
+    static const cub::CacheLoadModifier  COLUMN_INDICES_LOAD_MODIFIER        = _COLUMN_INDICES_LOAD_MODIFIER;        ///< Cache load modifier for reading CSR column-indices
+    static const cub::CacheLoadModifier  VALUES_LOAD_MODIFIER                = _VALUES_LOAD_MODIFIER;                ///< Cache load modifier for reading CSR values
+    static const cub::CacheLoadModifier  VECTOR_VALUES_LOAD_MODIFIER         = _VECTOR_VALUES_LOAD_MODIFIER;         ///< Cache load modifier for reading vector values
+    static const cub::BlockScanAlgorithm SCAN_ALGORITHM                      = _SCAN_ALGORITHM;                      ///< The BlockScan algorithm to use
 
 };
 
@@ -109,8 +95,7 @@ struct UnarySpmvParams
 template <
     typename    AgentUnarySpmvPolicyT,           ///< Parameterized AgentUnarySpmvPolicy tuning policy type
     typename    ValueT,                     ///< Matrix and vector value type
-    typename    OffsetT,                    ///< Signed integer type for sequence offsets
-    int         PTX_ARCH = CUB_PTX_ARCH>    ///< PTX compute capability
+    typename    OffsetT>                    ///< Signed integer type for sequence offsets
 struct AgentUnarySpmv
 {
     //---------------------------------------------------------------------
@@ -126,69 +111,69 @@ struct AgentUnarySpmv
     };
 
     /// 2D merge path coordinate type
-    typedef typename CubVector<OffsetT, 2>::Type CoordinateT;
+    typedef typename cub::CubVector<OffsetT, 2>::Type CoordinateT;
 
     /// Input iterator wrapper types (for applying cache modifiers)
 
-    typedef CacheModifiedInputIterator<
+    typedef cub::CacheModifiedInputIterator<
             AgentUnarySpmvPolicyT::ROW_OFFSETS_SEARCH_LOAD_MODIFIER,
             OffsetT,
             OffsetT>
         RowOffsetsSearchIteratorT;
 
-    typedef CacheModifiedInputIterator<
+    typedef cub::CacheModifiedInputIterator<
             AgentUnarySpmvPolicyT::ROW_OFFSETS_LOAD_MODIFIER,
             OffsetT,
             OffsetT>
         RowOffsetsIteratorT;
 
-    typedef CacheModifiedInputIterator<
+    typedef cub::CacheModifiedInputIterator<
             AgentUnarySpmvPolicyT::COLUMN_INDICES_LOAD_MODIFIER,
             OffsetT,
             OffsetT>
         ColumnIndicesIteratorT;
 
-    typedef CacheModifiedInputIterator<
+    typedef cub::CacheModifiedInputIterator<
             AgentUnarySpmvPolicyT::VALUES_LOAD_MODIFIER,
             ValueT,
             OffsetT>
         ValueIteratorT;
 
-    typedef CacheModifiedInputIterator<
+    typedef cub::CacheModifiedInputIterator<
             AgentUnarySpmvPolicyT::VECTOR_VALUES_LOAD_MODIFIER,
             ValueT,
             OffsetT>
         VectorValueIteratorT;
 
     // Tuple type for scanning (pairs accumulated segment-value with segment-index)
-    typedef KeyValuePair<OffsetT, ValueT> KeyValuePairT;
+    typedef cub::KeyValuePair<OffsetT, ValueT> KeyValuePairT;
 
     // Reduce-value-by-segment scan operator
-    typedef ReduceByKeyOp<cub::Sum> ReduceBySegmentOpT;
+    typedef cub::ReduceByKeyOp<cub::Sum> ReduceBySegmentOpT;
 
     // BlockReduce specialization
-    typedef BlockReduce<
+    typedef cub::BlockReduce<
             ValueT,
             BLOCK_THREADS,
-            BLOCK_REDUCE_WARP_REDUCTIONS>
+            cub::BlockReduceAlgorithm::BLOCK_REDUCE_WARP_REDUCTIONS>
         BlockReduceT;
 
     // BlockScan specialization
-    typedef BlockScan<
+    typedef cub::BlockScan<
             KeyValuePairT,
             BLOCK_THREADS,
             AgentUnarySpmvPolicyT::SCAN_ALGORITHM>
         BlockScanT;
 
     // BlockScan specialization
-    typedef BlockScan<
+    typedef cub::BlockScan<
             ValueT,
             BLOCK_THREADS,
             AgentUnarySpmvPolicyT::SCAN_ALGORITHM>
         BlockPrefixSumT;
 
     // BlockExchange specialization
-    typedef BlockExchange<
+    typedef cub::BlockExchange<
             ValueT,
             BLOCK_THREADS,
             ITEMS_PER_THREAD>
@@ -201,7 +186,7 @@ struct AgentUnarySpmv
       // (NullType if loading values directly during merge)
       using MergeValueT =
         cub::detail::conditional_t<
-          AgentUnarySpmvPolicyT::DIRECT_LOAD_NONZEROS, NullType, ValueT>;
+          AgentUnarySpmvPolicyT::DIRECT_LOAD_NONZEROS, cub::NullType, ValueT>;
 
       OffsetT row_end_offset;
       MergeValueT nonzero;
@@ -233,7 +218,7 @@ struct AgentUnarySpmv
     };
 
     /// Temporary storage type (unionable)
-    struct TempStorage : Uninitialized<_TempStorage> {};
+    struct TempStorage : cub::Uninitialized<_TempStorage> {};
 
 
     //---------------------------------------------------------------------
@@ -280,7 +265,7 @@ struct AgentUnarySpmv
         int             tile_idx,
         CoordinateT     tile_start_coord,
         CoordinateT     tile_end_coord,
-        Int2Type<true>  is_direct_load)     ///< Marker type indicating whether to load nonzeros directly during path-discovery or beforehand in batch
+        cub::Int2Type<true>  is_direct_load)     ///< Marker type indicating whether to load nonzeros directly during path-discovery or beforehand in batch
     {
         int         tile_num_rows           = tile_end_coord.x - tile_start_coord.x;
         int         tile_num_nonzeros       = tile_end_coord.y - tile_start_coord.y;
@@ -295,10 +280,10 @@ struct AgentUnarySpmv
             s_tile_row_end_offsets[item] = wd_row_end_offsets[offset];
         }
 
-        CTA_SYNC();
+        cub::CTA_SYNC();
 
         // Search for the thread's starting coordinate within the merge tile
-        CountingInputIterator<OffsetT>  tile_nonzero_indices(tile_start_coord.y);
+        cub::CountingInputIterator<OffsetT>  tile_nonzero_indices(tile_start_coord.y);
         CoordinateT                     thread_start_coord;
 
         MergePathSearch(
@@ -309,7 +294,7 @@ struct AgentUnarySpmv
             tile_num_nonzeros,
             thread_start_coord);
 
-        CTA_SYNC();            // Perf-sync
+        cub::CTA_SYNC();            // Perf-sync
 
         // Compute the thread's merge path segment
         CoordinateT     thread_current_coord = thread_start_coord;
@@ -347,7 +332,7 @@ struct AgentUnarySpmv
             }
         }
 
-        CTA_SYNC();
+        cub::CTA_SYNC();
 
         // Block-wide reduce-value-by-segment
         KeyValuePairT       tile_carry;
@@ -395,7 +380,7 @@ struct AgentUnarySpmv
         int             tile_idx,
         CoordinateT     tile_start_coord,
         CoordinateT     tile_end_coord,
-        Int2Type<false> is_direct_load)     ///< Marker type indicating whether to load nonzeros directly during path-discovery or beforehand in batch
+        cub::Int2Type<false> is_direct_load)     ///< Marker type indicating whether to load nonzeros directly during path-discovery or beforehand in batch
     {
         int         tile_num_rows           = tile_end_coord.x - tile_start_coord.x;
         int         tile_num_nonzeros       = tile_end_coord.y - tile_start_coord.y;
@@ -460,10 +445,10 @@ struct AgentUnarySpmv
             s_tile_row_end_offsets[item] = wd_row_end_offsets[offset];
         }
 
-        CTA_SYNC();
+        cub::CTA_SYNC();
 
         // Search for the thread's starting coordinate within the merge tile
-        CountingInputIterator<OffsetT>  tile_nonzero_indices(tile_start_coord.y);
+        cub::CountingInputIterator<OffsetT>  tile_nonzero_indices(tile_start_coord.y);
         CoordinateT                     thread_start_coord;
 
         MergePathSearch(
@@ -474,7 +459,7 @@ struct AgentUnarySpmv
             tile_num_nonzeros,
             thread_start_coord);
 
-        CTA_SYNC();            // Perf-sync
+        cub::CTA_SYNC();            // Perf-sync
 
         // Compute the thread's merge path segment
         CoordinateT     thread_current_coord = thread_start_coord;
@@ -507,7 +492,7 @@ struct AgentUnarySpmv
             scan_segment[ITEM].key = thread_current_coord.x;
         }
 
-        CTA_SYNC();
+        cub::CTA_SYNC();
 
         // Block-wide reduce-value-by-segment
         KeyValuePairT       tile_carry;
@@ -528,7 +513,7 @@ struct AgentUnarySpmv
         if (tile_num_rows > 0)
         {
 
-            CTA_SYNC();
+            cub::CTA_SYNC();
 
             // Scan downsweep and scatter
             ValueT* s_partials = &temp_storage.aliasable.merge_items[0].nonzero;
@@ -555,7 +540,7 @@ struct AgentUnarySpmv
                 }
             }
 
-            CTA_SYNC();
+            cub::CTA_SYNC();
 
             #pragma unroll 1
             for (int item = threadIdx.x; item < tile_num_rows; item += BLOCK_THREADS)
@@ -590,7 +575,7 @@ struct AgentUnarySpmv
                 // Search our starting coordinates
                 OffsetT                         diagonal = (tile_idx + threadIdx.x) * TILE_ITEMS;
                 CoordinateT                     tile_coord;
-                CountingInputIterator<OffsetT>  nonzero_indices(0);
+                cub::CountingInputIterator<OffsetT>  nonzero_indices(0);
 
                 // Search the merge path
                 MergePathSearch(
@@ -609,7 +594,7 @@ struct AgentUnarySpmv
             }
         }
 
-        CTA_SYNC();
+        cub::CTA_SYNC();
 
         CoordinateT tile_start_coord     = temp_storage.tile_coords[0];
         CoordinateT tile_end_coord       = temp_storage.tile_coords[1];
@@ -619,7 +604,7 @@ struct AgentUnarySpmv
             tile_idx,
             tile_start_coord,
             tile_end_coord,
-            Int2Type<AgentUnarySpmvPolicyT::DIRECT_LOAD_NONZEROS>());
+            cub::Int2Type<AgentUnarySpmvPolicyT::DIRECT_LOAD_NONZEROS>());
 
         // Output the tile's carry-out
         if (threadIdx.x == 0)

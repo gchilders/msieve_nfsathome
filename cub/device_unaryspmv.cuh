@@ -33,11 +33,10 @@
 #include <stdio.h>
 #include <iterator>
 #include <limits>
+#include <cub/cub.cuh>
+// #include <thrust/system/cuda/detail/core/triple_chevron_launch.h>
 
 #include "dispatch_unaryspmv_orig.cuh"
-#include "cub/config.cuh"
-
-using namespace cub;
 
 struct DeviceUnarySpmv
 {
