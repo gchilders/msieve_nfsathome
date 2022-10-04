@@ -52,7 +52,7 @@ typedef struct {
 	gpu_info_t info[MAX_GPU];
 } gpu_config_t;
 
-char * cuGetErrorMessage(CUresult result);
+void cuGetErrorMessage(CUresult result, int line);
 
 void gpu_init(gpu_config_t *config);
 
@@ -60,8 +60,7 @@ void gpu_init(gpu_config_t *config);
 	{ 			 				\
 		CUresult status = func;				\
 		if (status != CUDA_SUCCESS) {			\
-			printf("error (line %d): %s\n", __LINE__,\
-				cuGetErrorMessage(status));	\
+			cuGetErrorMessage(status, __LINE__);	\
 			exit(-1);				\
 		}						\
 	}
