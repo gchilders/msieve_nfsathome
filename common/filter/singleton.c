@@ -123,6 +123,7 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
 	size_t header_words;
 	relation_ideal_t tmp;
 	relation_ideal_t *relation_array;
+	relation_ideal_t *r;
 	uint64 curr_word;
 	size_t num_relation_alloc;
 	uint32 *counts;
@@ -191,11 +192,7 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
 	relation_array = (relation_ideal_t *)xmalloc(
 					num_relation_alloc *
 					sizeof(relation_ideal_t));
-	filter->relation_ptr = (relation_ideal_t **) xmalloc(
-					num_relations * sizeof(relation_ideal_t *));
 	for (i = 0; i < num_relations; i++) {
-
-		relation_ideal_t *r;
 
 		/* make sure the relation array has room for the
 		   new relation. Be careful increasing the array
@@ -215,7 +212,6 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
 
 		r = (relation_ideal_t *)(
 			(uint32 *)relation_array + curr_word);
-		filter->relation_ptr[i] = r;
 		fread(r, sizeof(uint32), header_words, fp);
 
 		for (j = k = 0; j < r->ideal_count; j++) {
@@ -238,6 +234,15 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
 						relation_array, 
 						curr_word * 
 						sizeof(uint32));
+
+	/* store pointers to the relations in the array */
+	filter->relation_ptr = (relation_ideal_t **) xmalloc(
+						num_relations * sizeof(relation_ideal_t *));
+	r = filter->relation_array;
+	for (i = 0; i < num_relations; i++) {
+		filter->relation_ptr[i] = r;
+		r = next_relation_ptr(r);
+	}
 	free(counts);
 	fclose(fp);
 	mem_use = num_ideals * sizeof(uint32) +
