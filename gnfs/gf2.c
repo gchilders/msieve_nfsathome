@@ -592,6 +592,7 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 	uint32 deps_found;
 	uint64 *dependencies;
 	uint32 skip_matbuild = 0;
+	uint32 only_matbuild = 0;
 	uint32 cado_filter = 0;
 	time_t cpu_time = time(NULL);
 #ifdef HAVE_MPI
@@ -633,6 +634,10 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 		if (strstr(obj->nfs_args, "skip_matbuild=1")) {
 			logprintf(obj, "skipping matrix build\n");
 			skip_matbuild = 1;
+		}
+		if (strstr(obj->nfs_args, "only_matbuild=1")) {
+			logprintf(obj, "stopping after matrix build\n");
+			only_matbuild = 1;
 		}
 		if (strstr(obj->nfs_args, "cado_filter=1")) {
 			logprintf(obj, "assuming CADO-NFS filtering\n");
@@ -803,32 +808,34 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 #endif
 	}
 
-	/* read the matrix in; if configured for MPI, this reads
-	   in only the submatrix used by the current MPI process.
-	   Without MPI, this reads the whole matrix, ncols = max_ncols, 
-	   nrows = max_nrows, and start_row = start_col = 0.
-	
-	   Do not read in the relation numbers, the Lanczos code
-	   doesn't need them */
+	if (!only_matbuild) {
+		/* read the matrix in; if configured for MPI, this reads
+		in only the submatrix used by the current MPI process.
+		Without MPI, this reads the whole matrix, ncols = max_ncols, 
+		nrows = max_nrows, and start_row = start_col = 0.
+		
+		Do not read in the relation numbers, the Lanczos code
+		doesn't need them */
 
-	read_matrix(obj, &nrows, &max_nrows, &start_row,
-			&num_dense_rows, 
-			&ncols, &max_ncols, &start_col,
-			&cols, NULL, NULL);
-	logprintf(obj, "matrix starts at (%u, %u)\n", start_row, start_col);
-	count_matrix_nonzero(obj, nrows, num_dense_rows, ncols, cols);
+		read_matrix(obj, &nrows, &max_nrows, &start_row,
+				&num_dense_rows, 
+				&ncols, &max_ncols, &start_col,
+				&cols, NULL, NULL);
+		logprintf(obj, "matrix starts at (%u, %u)\n", start_row, start_col);
+		count_matrix_nonzero(obj, nrows, num_dense_rows, ncols, cols);
 
-	/* solve the linear system */
+		/* solve the linear system */
 
-	dependencies = block_lanczos(obj, 
-				nrows, max_nrows, start_row,
-				num_dense_rows,
-				ncols, max_ncols, start_col,
-				cols, &deps_found);
-	if (deps_found)
-		dump_dependencies(obj, dependencies, max_ncols);
-	free(dependencies);
-	free(cols);
+		dependencies = block_lanczos(obj, 
+					nrows, max_nrows, start_row,
+					num_dense_rows,
+					ncols, max_ncols, start_col,
+					cols, &deps_found);
+		if (deps_found)
+			dump_dependencies(obj, dependencies, max_ncols);
+		free(dependencies);
+		free(cols);
+	}
 
 #ifdef HAVE_MPI
 	MPI_TRY(MPI_Comm_free(&obj->mpi_la_grid))
