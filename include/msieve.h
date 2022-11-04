@@ -27,6 +27,10 @@ extern "C" {
 #include <mpi.h>
 #endif
 
+#ifdef HAVE_OMP
+#include <omp.h>
+#endif
+
 /* version info */
 
 #define MSIEVE_MAJOR_VERSION 1

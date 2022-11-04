@@ -167,6 +167,8 @@ void print_usage(char *progname) {
 		 " linear algebra options:\n"
 		 "   skip_matbuild=1  start the linear algebra but skip building\n"
 		 "                    the matrix (assumes it is built already)\n"
+		 "   only_matbuild=1  start the linear algebra but only build\n"
+		 "                    the matrix (stop before solving the matrix)\n"
 		 "   la_block=X       use a block size of X (512<=X<=65536)\n"
 		 "   la_superblock=X  use a superblock size of X\n"
 		 "   cado_filter=1    assume filtering used the CADO-NFS suite\n"
@@ -560,7 +562,7 @@ int main(int argc, char **argv) {
 		}
 		else {
 			if (isdigit(argv[i][0]) || argv[i][0] == '(' )
-				strncpy(buf, argv[i], sizeof(buf));
+				strncpy(buf, argv[i], sizeof(buf)-1);
 			i++;
 		}
 	}

@@ -164,12 +164,8 @@ uint32 factor_gnfs(msieve_obj *obj, mp_t *input_n,
 	if (obj->flags & MSIEVE_FLAG_NFS_LA)
 		nfs_solve_linear_system(obj, n);
 		
-	if (obj->flags & MSIEVE_FLAG_NFS_SQRT) {
-		if (obj->num_threads < 2)
-			factor_found = nfs_find_factors(obj, n, factor_list);
-		else
-			factor_found = nfs_find_factors_threaded(obj, n, factor_list);
-	}
+	if (obj->flags & MSIEVE_FLAG_NFS_SQRT)
+		factor_found = nfs_find_factors(obj, n, factor_list);
 
 finished:
 	mpz_poly_free(&rat_poly);
@@ -250,18 +246,26 @@ void eval_poly(mpz_t res, int64 a, uint32 b, mpz_poly_t *poly) {
 	/* Evaluate one polynomial at 'a' and 'b' */
 
 	uint32 d = poly->degree;
+	/* Make thread-safe */
+	mpz_t tmp1, tmp2;
 
-	int64_2gmp(a, poly->tmp1);
-	mpz_set_ui(poly->tmp2, b);
+	mpz_init(tmp1);
+	mpz_init(tmp2);
+
+	int64_2gmp(a, tmp1);
+	mpz_set_ui(tmp2, b);
 	mpz_set(res, poly->coeff[d]);
 
 	while (--d) {
-		mpz_mul(res, res, poly->tmp1);
-		mpz_addmul(res, poly->coeff[d], poly->tmp2);
-		mpz_mul_ui(poly->tmp2, poly->tmp2, b);
+		mpz_mul(res, res, tmp1);
+		mpz_addmul(res, poly->coeff[d], tmp2);
+		mpz_mul_ui(tmp2, tmp2, b);
 	}
-	mpz_mul(res, res, poly->tmp1);
-	mpz_addmul(res, poly->coeff[d], poly->tmp2);
+	mpz_mul(res, res, tmp1);
+	mpz_addmul(res, poly->coeff[d], tmp2);
+
+	mpz_clear(tmp1);
+	mpz_clear(tmp2);
 }
 
 /*------------------------------------------------------------------*/

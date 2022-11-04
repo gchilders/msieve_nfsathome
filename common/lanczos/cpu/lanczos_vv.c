@@ -51,6 +51,7 @@ void vv_xor(void * __restrict__ dest_in, void * __restrict__ src_in, uint32 n) {
 	v_t *dest = (v_t *)dest_in;
 	uint32 i;
 
+#pragma omp parallel for
 	for (i = 0; i < n; i++)
 		dest[i] = v_xor(dest[i], src[i]);
 }
@@ -60,6 +61,7 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 	v_t *v = (v_t *)v_in;
 	uint32 i;
 
+#pragma omp parallel for
 	for (i = 0; i < n; i++)
 		v[i] = v_and(v[i], mask);
 }
@@ -67,7 +69,7 @@ void vv_mask(void *v_in, v_t mask, uint32 n) {
 /*-------------------------------------------------------------------*/
 static void core_NxB_BxB_acc(const v_t *v, const v_t *c, v_t * __restrict__ y, uint32 n) {
 
-	uint32 i, j;
+	uint32 i;
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX) && defined(NDEBUG) && VWORDS == 1
 	i = 0;
@@ -144,10 +146,12 @@ static void core_NxB_BxB_acc(const v_t *v, const v_t *c, v_t * __restrict__ y, u
 		emms
 	}
 #else
+#pragma omp parallel for
 	for (i = 0; i < n; i++) {
 		#ifdef MANUAL_PREFETCH
 		PREFETCH(y+i+4);
 		#endif
+		uint32 j;
 		v_t vi = v[i];
 		v_t accum;
 		for (j = 0; j < VWORDS; j++) accum.w[j] = 0;
@@ -214,6 +218,7 @@ static void mul_NxB_BxB_precomp(v_t *c, v_t *x) {
 	uint32 i, j;
 	v_t acc[8 * VWORDS];
 
+#pragma omp parallel for
 	for (i = 0; i < 8 * VWORDS; i++)
 		acc[i] = c[i * 256] = v_zero;
 
@@ -246,64 +251,25 @@ void mul_NxB_BxB_acc(v_t *v, v_t *x, v_t *y, uint32 n) {
 }
 
 /*-------------------------------------------------------------------*/
-static void outer_thread_run(void *data, int thread_num)
-{
-	la_task_t *task = (la_task_t *)data;
-	packed_matrix_t *p = task->matrix;
-	cpudata_t *cpudata = (cpudata_t *)p->extra;
-	thread_data_t *t = cpudata->thread_data + task->task_num;
-
-	core_NxB_BxB_acc(t->x, t->b, t->y, t->vsize);
-}
-
 void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix, 
 			void *v_in, v_t *x,
 			void *y_in, uint32 n) {
 
-	cpudata_t *cpudata = (cpudata_t *)matrix->extra;
 	v_t *v = (v_t *)v_in;
 	v_t *y = (v_t *)y_in;
-	v_t c[8 * VWORDS * 256];
-	uint32 i;
-	uint32 vsize = n / matrix->num_threads;
-	uint32 off;
-	task_control_t task = {NULL, NULL, NULL, NULL};
-
-	mul_NxB_BxB_precomp(c, x);
-
-	for (i = off = 0; i < matrix->num_threads; i++, off += vsize) {
-
-		thread_data_t *t = cpudata->thread_data + i;
-
-		t->x = v + off;
-		t->b = c;
-		t->y = y + off;
-		if (i == matrix->num_threads - 1)
-			t->vsize = n - off;
-		else
-			t->vsize = vsize;
-	}
-
-	task.run = outer_thread_run;
-
-	for (i = 0; i < matrix->num_threads - 1; i++) {
-		task.data = cpudata->tasks + i;
-		threadpool_add_task(cpudata->threadpool, &task, 0);
-	}
-	outer_thread_run(cpudata->tasks + i, i);
-
-	if (i > 0)
-		threadpool_drain(cpudata->threadpool, 1);
+	
+	mul_NxB_BxB_acc(v, x, y, n);
 }
 
 /*-------------------------------------------------------------------*/
-static void core_BxN_NxB(const v_t *x, v_t * __restrict__ c, const v_t *y, const uint32 n) {
+static void core_BxN_NxB(const v_t *x, v_t *c, const v_t *y, const uint32 n) {
 
 	uint32 i, j;
 
-	// memset(c, 0, 8 * VWORDS * 256 * sizeof(v_t));
-	for (i = 0; i < 8 * VWORDS * 256; i++)
-		for (j = 0; j < VWORDS; j++) c[i].w[j] = 0;
+	memset(c, 0, 8 * VWORDS * 256 * sizeof(v_t));
+// #pragma omp parallel for
+//	for (i = 0; i < 8 * VWORDS * 256; i++)
+//		for (j = 0; j < VWORDS; j++) c[i].w[j] = 0;
 
 #if defined(GCC_ASM32A) && defined(HAS_MMX) && defined(NDEBUG) && VWORDS == 1
 	i = 0;
@@ -410,6 +376,7 @@ static void core_BxN_NxB(const v_t *x, v_t * __restrict__ c, const v_t *y, const
 	#define NXB_ACC(i) \
 		k = i*256 + ((xi.w[(i >> 3)] >> (8*(i & 7))) & 255); c[k] = v_xor(c[k], yi)
 
+// #pragma omp parallel for private(j) reduction(^:c[0:8 * VWORDS * 256])
 	for (i = 0; i < n; i++) {
 		v_t xi = x[i];
 		v_t yi = y[i];
@@ -434,15 +401,18 @@ static void mul_BxN_NxB_postproc(v_t *c, v_t *xy) {
 
 		v_t a[8 * VWORDS];
 
+// #pragma omp parallel for
 		for (j = 0; j < 8 * VWORDS; j++)
 			a[j] = v_zero;
 
+// #pragma omp parallel for private(k) reduction(^:a)
 		for (j = 0; j < 256; j++) {
 			if ((j >> i) & 1) {
 				for (k = 0; k < 8 * VWORDS; k++) { NXB_POST(k); }
 			}
 		}
 
+// #pragma omp parallel for
 		for (j = 0; j < 8 * VWORDS; j++)
 			xy[8 * j] = a[j];
 		xy++;
@@ -480,13 +450,9 @@ void mul_BxN_NxB_2(v_t *x, v_t *y, v_t *xy, uint32 n) {
 
 			int i, j, k;
 			uint64 c[16][256][2];
-			for (i = 0; i < 16; i++) {
-				for (j = 0; j < 256; j++)  {
-					c[i][j][0] = 0;
-					c[i][j][1] = 0;
-				}
-			}
+			memset(c, 0, 16 * 256 * 2 * sizeof(uint64));
 
+// #pragma omp parallel for private(j, k) reduction(^:c)
 			for (i = 0; i < n; i++) {
 				uint64 xi[2], yi[2];
 				xi[0] = x[i].w[w_x];
@@ -505,12 +471,9 @@ void mul_BxN_NxB_2(v_t *x, v_t *y, v_t *xy, uint32 n) {
 
 			for (i = 0; i < 8; i++) {
 				uint64 a[16][2];
+				memset(a, 0, 16 * 2 * sizeof(uint64));
 
-				for (j = 0; j < 16; j++) {
-					a[j][0] = 0;
-					a[j][1] = 0;
-				}
-
+// #pragma omp parallel for private(k) reduction(^:a)
 				for (j = 0; j < 256; j++) {
 					if ((j >> i) & 1) {
 						for (k = 0; k < 16; k++) { 
@@ -520,6 +483,7 @@ void mul_BxN_NxB_2(v_t *x, v_t *y, v_t *xy, uint32 n) {
 					}
 				}
 
+// #pragma omp parallel for 
 				for (j = 0; j < 16; j++) {
 					xy[64 * w_x + 8 * j + i].w[w_y] = a[j][0];
 					xy[64 * w_x + 8 * j + i].w[w_y + 1] = a[j][1];
@@ -530,70 +494,38 @@ void mul_BxN_NxB_2(v_t *x, v_t *y, v_t *xy, uint32 n) {
 }
 
 /*-------------------------------------------------------------------*/
-static void inner_thread_run(void *data, int thread_num)
-{
-	la_task_t *task = (la_task_t *)data;
-	packed_matrix_t *p = task->matrix;
-	cpudata_t *cpudata = (cpudata_t *)p->extra;
-	thread_data_t *t = cpudata->thread_data + task->task_num;
-
-#if VWORDS == 2 || VWORDS == 4 || VWORDS == 6 || VWORDS == 8
-	mul_BxN_NxB_2(t->x, t->y, t->tmp_b, t->vsize);
-#else
-	mul_BxN_NxB(t->x, t->y, t->tmp_b, t->vsize);
-#endif
-}
 
 void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 		   void *x_in, void *y_in,
 		   v_t *xy, uint32 n) {
 
-
-	cpudata_t *cpudata = (cpudata_t *)matrix->extra;
 	v_t *x = (v_t *)x_in;
 	v_t *y = (v_t *)y_in;
-	uint32 i;
-	uint32 vsize = n / matrix->num_threads;
-	uint32 off;
-	task_control_t task = {NULL, NULL, NULL, NULL};
-#ifdef HAVE_MPI
-	v_t xytmp[VBITS];
+	int i, threads, size;
+	v_t *xytmp;
+
+#ifdef HAVE_OMP
+	threads = omp_get_max_threads();
+#else 
+	threads = 1;
 #endif
+	xytmp = (v_t *) malloc(threads * VBITS * sizeof(v_t));
+	size = n / threads + 1;
 
-	for (i = off = 0; i < matrix->num_threads; i++, off += vsize) {
-		thread_data_t *t = cpudata->thread_data + i;
-
-		t->x = x + off;
-		t->y = y + off;
-
-		if (i == matrix->num_threads - 1)
-			t->vsize = n - off;
-		else
-			t->vsize = vsize;
+#pragma omp parallel for schedule(static, 1)
+	for (i = 0; i < threads; i++) {
+		uint32 my_n;
+		if (i == threads-1) my_n = n + size - threads * size;
+		else my_n = size;
+#if VWORDS == 2 || VWORDS == 4 || VWORDS == 6 || VWORDS == 8
+		mul_BxN_NxB_2(x + i * size, y + i * size, xytmp + i * VBITS, my_n);
+#else
+		mul_BxN_NxB(x + i * size, y + i * size, xytmp + i * VBITS, my_n);
+#endif
 	}
 
-	task.run = inner_thread_run;
-
-	for (i = 0; i < matrix->num_threads - 1; i++) {
-		task.data = cpudata->tasks + i;
-		threadpool_add_task(cpudata->threadpool, &task, 0);
-	}
-	inner_thread_run(cpudata->tasks + i, i);
-
-	/* All the scratch vectors used by threads get 
-	   xor-ed into the final xy vector */
-
-	vv_copy(xy, cpudata->thread_data[i].tmp_b, VBITS);
-
-	if (i > 0) {
-		threadpool_drain(cpudata->threadpool, 1);
-
-		for (i = 0; i < matrix->num_threads - 1; i++) {
-			thread_data_t *t = cpudata->thread_data + i;
-
-			vv_xor(xy, t->tmp_b, VBITS);
-		}
-	}
+	vv_clear(xy, VBITS);
+	for (i = 0; i < threads; i++) vv_xor(xy, xytmp + i * VBITS, VBITS);
 
 #ifdef HAVE_MPI
 	/* combine the results across an entire MPI row */
@@ -608,4 +540,5 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 			matrix->mpi_la_row_rank,
 			matrix->mpi_word, matrix->mpi_la_col_grid);    
 #endif
+	free(xytmp);
 }

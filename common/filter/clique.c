@@ -210,6 +210,7 @@ void check_relations_array(filter_t *filter, uint32 location) {
         num_ideals = filter->num_ideals;
 
         for (i = 0; i < num_relations; i++) {
+				if (curr_relation != filter->relation_ptr[i]) badrel = 1;
             	for (j = 0; j < curr_relation->ideal_count; j++) {
                 	ideal = curr_relation->ideal_list[j];
                 	if (ideal >= num_ideals) badrel = 1; 
@@ -238,7 +239,7 @@ void check_relations_array(filter_t *filter, uint32 location) {
 static void delete_relations(filter_t *filter,
 			uint64 *delete_array, uint32 num_delete) {
 
-	uint32 i, j;
+	uint32 i, j, new_rels;
 	uint32 num_relations = filter->num_relations;
 	relation_ideal_t *relation_array = filter->relation_array;
 	relation_ideal_t *curr_relation;
@@ -254,6 +255,7 @@ static void delete_relations(filter_t *filter,
 
 	curr_relation = relation_array;
 	old_relation = relation_array;
+	new_rels = 0;
 	for (i = j = 0; i < num_relations; i++) {
 		uint64 array_word = (uint64)((uint32 *)curr_relation -
 						(uint32 *)relation_array);
@@ -274,6 +276,7 @@ static void delete_relations(filter_t *filter,
 
 			uint8 curr_num_ideals = curr_relation->ideal_count;
 			uint32 k;
+			filter->relation_ptr[new_rels++] = old_relation;
 			old_relation->rel_index = curr_relation->rel_index;
 			old_relation->gf2_factors = curr_relation->gf2_factors;
 			old_relation->ideal_count = curr_num_ideals;
@@ -286,13 +289,8 @@ static void delete_relations(filter_t *filter,
 		curr_relation = next_relation;
 	}
 
-	/* trim the relation array */
-
-	filter->relation_array = (relation_ideal_t *)xrealloc(relation_array,
-				(size_t)(old_relation + 1 - relation_array) *
-				sizeof(relation_ideal_t));
 	filter->num_relations = num_relations - num_delete;
-        check_relations_array(filter, 1);
+	check_relations_array(filter, 1);
 }
 
 /*--------------------------------------------------------------------*/
@@ -305,6 +303,7 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 	uint32 i, j;
 	ideal_map_t *ideal_map;
 	relation_ideal_t *relation_array;
+	relation_ideal_t **relation_ptr;
 	relation_ideal_t *curr_relation;
 	uint32 num_relations;
 	uint32 num_ideals;
@@ -329,6 +328,7 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 	uint32 num_clique_ideals_alloc;
 
 	relation_array = filter->relation_array;
+	relation_ptr = filter->relation_ptr;
 	num_relations = filter->num_relations;
 	num_ideals = filter->num_ideals;
 
@@ -346,20 +346,22 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 
 	/* count the number of times each ideal occurs in relations */
 
-	curr_relation = relation_array;
+#pragma omp parallel for private(j, curr_relation)
 	for (i = 0; i < num_relations; i++) {
+		curr_relation = relation_ptr[i];
 		curr_relation->connected = 0;
 		for (j = 0; j < curr_relation->ideal_count; j++) {
 			uint32 ideal = curr_relation->ideal_list[j];
+#pragma omp atomic update
 			ideal_map[ideal].payload++;
 		}
-		curr_relation = next_relation_ptr(curr_relation);
 	}
 
 	/* mark all the ideals with small enough weight as 
 	   belonging to a clique, and set the head of their 
 	   linked list of relations to empty */
 
+#pragma omp parallel for
 	for (i = 0; i < num_ideals; i++) {
 		if (ideal_map[i].payload <= max_clique_relations) {
 			ideal_map[i].payload = 0;
@@ -368,16 +370,14 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 	}
 
 	/* for each relation */
-
-	curr_relation = relation_array;
+	
+// #pragma omp parallel for private(j, curr_relation)
 	for (i = 0; i < num_relations; i++) {
-
-		uint64 relation_array_word = 
+		uint64 relation_array_word;
+		curr_relation = relation_ptr[i];
+		relation_array_word = 
 				((uint32 *)curr_relation -
 				 (uint32 *)relation_array);
-
-		/* if (relation_array_word > (uint32)(-1))
-			break; */
 
 		/* for each ideal in the relation */
 
@@ -389,22 +389,22 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 
 			/* relation belongs in a clique because of this
 			   ideal; add it to the ideal's linked list */
-
-			if (num_reverse == num_reverse_alloc) {
-				num_reverse_alloc *= 2;
-				reverse_array = (ideal_relation_t *)xrealloc(
+// #pragma omp critical (add_relation)
+			{
+				if (num_reverse == num_reverse_alloc) {
+					num_reverse_alloc *= 2;
+					reverse_array = (ideal_relation_t *)xrealloc(
 						reverse_array,
 						num_reverse_alloc *
 						sizeof(ideal_relation_t));
-			}
-			reverse_array[num_reverse].relation_array_word =
+				}
+				reverse_array[num_reverse].relation_array_word =
 						relation_array_word;
-			reverse_array[num_reverse].next = 
+				reverse_array[num_reverse].next = 
 						ideal_map[ideal].payload;
-			ideal_map[ideal].payload = num_reverse++;
+				ideal_map[ideal].payload = num_reverse++;
+			}
 		}
-
-		curr_relation = next_relation_ptr(curr_relation);
 	}
 
 	num_clique = 0;

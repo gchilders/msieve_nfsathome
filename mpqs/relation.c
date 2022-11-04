@@ -801,10 +801,9 @@ void qs_filter_relations(sieve_conf_t *conf) {
 	relation_t *relation_list;
 
 	uint32 i, passes, start;
-	uint32 curr_a_idx, curr_poly_idx, curr_rel; 
+	uint32 curr_a_idx, curr_rel; 
 	uint32 curr_expected, curr_saved, curr_cycle; 
 	uint32 total_poly_a;
-	uint32 poly_saved;
 	uint32 cycle_bins[NUM_CYCLE_BINS+1] = {0};
 	char buf[LINE_BUF_SIZE];
 
@@ -877,9 +876,7 @@ void qs_filter_relations(sieve_conf_t *conf) {
 	curr_expected = 0;
 	curr_saved = 0;
 	curr_rel = (uint32)(-1);
-	curr_poly_idx = (uint32)(-1);
 	curr_a_idx = (uint32)(-1);
-	poly_saved = 0;
 	logprintf(obj, "attempting to read %u relations\n", num_relations);
 
 	/* Read in the relations and the polynomials they use

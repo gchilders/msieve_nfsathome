@@ -169,6 +169,7 @@ void msieve_run(msieve_obj *obj) {
 	mp_t n, reduced_n;
 	factor_list_t factor_list;
 	time_t start_time;
+	int32 omp_threads, omp_levels;
 
 	/* convert the input number to an mp_t */
 
@@ -179,6 +180,15 @@ void msieve_run(msieve_obj *obj) {
 		return;
 	}
 	n_string = mp_sprintf(&n, 10, obj->mp_sprintf_buf);
+
+#ifdef HAVE_OMP
+	omp_threads = obj->num_threads;
+	if (omp_threads < 1) omp_threads = 1;
+	omp_set_num_threads(omp_threads);
+	omp_levels = 0;
+	while (omp_threads > (1 << omp_levels)) omp_levels++;
+	omp_set_max_active_levels(omp_levels+1);
+#endif
 
 #ifdef HAVE_MPI
 	MPI_TRY(MPI_Comm_size(MPI_COMM_WORLD, (int *)&obj->mpi_size));
@@ -201,6 +211,10 @@ void msieve_run(msieve_obj *obj) {
 	logprintf(obj, "random seeds: %08x %08x\n", obj->seed1, obj->seed2);
 #ifdef HAVE_MPI
 	logprintf(obj, "MPI process %u of %u\n", obj->mpi_rank, obj->mpi_size);
+#endif
+#ifdef HAVE_OMP
+	if (omp_get_max_threads() > 1) 
+		logprintf(obj, "Using %d OpenMP threads\n", omp_get_max_threads());
 #endif
 	logprintf(obj, "factoring %s (%d digits)\n", 
 				n_string, strlen(n_string));

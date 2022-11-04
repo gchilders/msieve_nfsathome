@@ -38,19 +38,23 @@ static void filter_read_lp_file_1pass(msieve_obj *obj,
 
 	filter->relation_array = (relation_ideal_t *)xmalloc(
 					(size_t)filter->lp_file_size);
+	filter->relation_ptr = (relation_ideal_t **) xmalloc(
+					num_relations * sizeof(relation_ideal_t *));
 	fread(filter->relation_array, (size_t)1, 
 			(size_t)filter->lp_file_size, fp);
 
 	fclose(fp);
 	logprintf(obj, "memory use: %.1f MB\n", 
-			(double)filter->lp_file_size / 1048576);
-
+			((double)filter->lp_file_size + 
+			(double)num_relations * sizeof(relation_ideal_t *))/ 1048576);
+	
 	/* build a frequency table for the ideals */
 
 	counts = (uint32 *)xcalloc((size_t)num_ideals, sizeof(uint32));
 	r = filter->relation_array;
 	for (i = 0; i < num_relations; i++) {
 
+		filter->relation_ptr[i] = r;
 		for (j = 0; j < r->ideal_count; j++)
 			counts[r->ideal_list[j]]++;
 
@@ -79,7 +83,8 @@ static void filter_read_lp_file_1pass(msieve_obj *obj,
 		for (i = 0; i < num_relations; i++) {
 
 			uint32 ideal_count = r->ideal_count;
-
+			
+			filter->relation_ptr[i] = r_old;
 			r_next = next_relation_ptr(r);
 			r_old->rel_index = r->rel_index;
 			r_old->gf2_factors = r->gf2_factors;
@@ -118,6 +123,7 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
 	size_t header_words;
 	relation_ideal_t tmp;
 	relation_ideal_t *relation_array;
+	relation_ideal_t *r;
 	uint64 curr_word;
 	size_t num_relation_alloc;
 	uint32 *counts;
@@ -188,8 +194,6 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
 					sizeof(relation_ideal_t));
 	for (i = 0; i < num_relations; i++) {
 
-		relation_ideal_t *r;
-
 		/* make sure the relation array has room for the
 		   new relation. Be careful increasing the array
 		   size, since this is probably the largest array
@@ -230,6 +234,15 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
 						relation_array, 
 						curr_word * 
 						sizeof(uint32));
+
+	/* store pointers to the relations in the array */
+	filter->relation_ptr = (relation_ideal_t **) xmalloc(
+						num_relations * sizeof(relation_ideal_t *));
+	r = filter->relation_array;
+	for (i = 0; i < num_relations; i++) {
+		filter->relation_ptr[i] = r;
+		r = next_relation_ptr(r);
+	}
 	free(counts);
 	fclose(fp);
 	mem_use = num_ideals * sizeof(uint32) +
@@ -414,19 +427,21 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	uint32 i, j;
 	uint32 *freqtable;
 	relation_ideal_t *relation_array;
+	relation_ideal_t **relation_ptr;
 	relation_ideal_t *curr_relation;
 	relation_ideal_t *old_relation;
 	uint32 orig_num_ideals;
 	uint32 num_passes;
 	uint32 num_relations;
 	uint32 num_ideals;
-	uint32 new_num_relations;
+	uint32 orig_num_relations, new_num_relations;
 
 	logprintf(obj, "commencing in-memory singleton removal\n");
 
 	num_relations = filter->num_relations;
 	orig_num_ideals = num_ideals = filter->num_ideals;
 	relation_array = filter->relation_array;
+	relation_ptr = filter->relation_ptr;
 	freqtable = (uint32 *)xcalloc((size_t)num_ideals, sizeof(uint32));
 
 	/* count the number of times each ideal occurs. Note
@@ -434,13 +449,15 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	   don't need a hashtable to store the counts, just an
 	   ordinary random-access array (i.e. a perfect hashtable) */
 
-	curr_relation = relation_array;
+#pragma omp parallel for private(j)
 	for (i = 0; i < num_relations; i++) {
-		for (j = 0; j < curr_relation->ideal_count; j++) {
-			uint32 ideal = curr_relation->ideal_list[j];
+		relation_ideal_t *my_relation = filter->relation_ptr[i];
+		my_relation->connected = 0;
+		for (j = 0; j < my_relation->ideal_count; j++) {
+			uint32 ideal = my_relation->ideal_list[j];
+#pragma omp atomic update
 			freqtable[ideal]++;
 		}
-		curr_relation = next_relation_ptr(curr_relation);
 	}
 
 	logprintf(obj, "begin with %u relations and %u unique ideals\n", 
@@ -449,65 +466,80 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	/* while singletons were found */
 
 	num_passes = 0;
-	new_num_relations = num_relations;
+	orig_num_relations = new_num_relations = num_relations;
 	do {
 		num_relations = new_num_relations;
 		new_num_relations = 0;
-		curr_relation = relation_array;
-		old_relation = relation_array;
 
-		for (i = 0; i < num_relations; i++) {
-			uint32 curr_num_ideals = curr_relation->ideal_count;
+#pragma omp parallel for private(j) reduction(+:new_num_relations) 
+		for (i = 0; i < orig_num_relations; i++) {
+			relation_ideal_t *my_relation = relation_ptr[i];
+			uint32 curr_num_ideals = my_relation->ideal_count;
 			uint32 ideal;
-			relation_ideal_t *next_relation;
 
-			/* the ideal count in curr_relation may get
-			   overwritten when writing old_relation, so
-			   cache the count and point to the next
-			   relation now */
+			/* check if relation is already marked for deletion */
 
-			next_relation = next_relation_ptr(curr_relation);
-
-			/* check the count of each ideal */
-
-			for (j = 0; j < curr_num_ideals; j++) {
-				ideal = curr_relation->ideal_list[j];
-				if (freqtable[ideal] <= 1)
-					break;
-			}
-
-			if (j < curr_num_ideals) {
-
-				/* relation is a singleton; decrement the
-				   count of each of its ideals and skip it */
+			if (my_relation->connected == 0) {
+			
+				/* check the count of each ideal */
 
 				for (j = 0; j < curr_num_ideals; j++) {
-					ideal = curr_relation->ideal_list[j];
-					freqtable[ideal]--;
+					ideal = my_relation->ideal_list[j];
+					if (freqtable[ideal] <= 1) break;
 				}
-			}
-			else {
-				/* relation survived this pass; append it to
-				   the list of survivors */
 
-				old_relation->rel_index = 
-						curr_relation->rel_index;
-				old_relation->gf2_factors = 
-						curr_relation->gf2_factors;
-				old_relation->ideal_count = curr_num_ideals;
-				for (j = 0; j < curr_num_ideals; j++) {
-					old_relation->ideal_list[j] =
-						curr_relation->ideal_list[j];
+				if (j < curr_num_ideals) {
+
+					/* relation is a singleton; decrement the
+				   	count of each of its ideals and skip it */
+
+					for (j = 0; j < curr_num_ideals; j++) {
+						ideal = my_relation->ideal_list[j];
+#pragma omp atomic update
+						freqtable[ideal]--;
+					}
+
+					my_relation->connected = 1;
 				}
-				new_num_relations++;
-				old_relation = next_relation_ptr(old_relation);
+				else new_num_relations++;
 			}
-
-			curr_relation = next_relation;
 		}
 
 		num_passes++;
 	} while (new_num_relations != num_relations);
+
+	/* Now remove the relations that were marked for deletion */
+
+	curr_relation = old_relation = relation_array;
+	new_num_relations = 0;
+	for (i = 0; i < orig_num_relations; i++) {
+		relation_ideal_t *next_relation;
+
+		/* the ideal count in curr_relation may get
+			overwritten when writing old_relation, so
+			cache the count and point to the next
+			relation now */
+
+		next_relation = next_relation_ptr(curr_relation);
+
+		if (curr_relation->connected == 0) {
+			filter->relation_ptr[new_num_relations] = old_relation;
+			old_relation->rel_index = 
+					curr_relation->rel_index;
+			old_relation->gf2_factors = 
+					curr_relation->gf2_factors;
+			old_relation->ideal_count = 
+					curr_relation->ideal_count;
+			for (j = 0; j < curr_relation->ideal_count; j++) {
+				old_relation->ideal_list[j] =
+					curr_relation->ideal_list[j];
+			}
+			new_num_relations++;
+			old_relation = next_relation_ptr(old_relation);
+		}
+
+		curr_relation = next_relation;
+	}
 
 	/* find the ideal that occurs in the most
 	   relations, and renumber the ideals to ignore
@@ -530,18 +562,32 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	filter->max_ideal_weight = j;
 	filter->num_relations = num_relations;
 	filter->num_ideals = num_ideals;
-	filter->relation_array = relation_array = 
-			(relation_ideal_t *)xrealloc(relation_array,
-				(curr_relation - relation_array + 1) *
-				sizeof(relation_ideal_t));
 
-	curr_relation = relation_array;
+#pragma omp parallel for private(j)
 	for (i = 0; i < num_relations; i++) {
-		for (j = 0; j < curr_relation->ideal_count; j++) {
-			uint32 ideal = curr_relation->ideal_list[j];
-			curr_relation->ideal_list[j] = freqtable[ideal];
+		relation_ideal_t *my_relation = filter->relation_ptr[i];
+		for (j = 0; j < my_relation->ideal_count; j++) {
+			uint32 ideal = my_relation->ideal_list[j];
+			my_relation->ideal_list[j] = freqtable[ideal];
 		}
-		curr_relation = next_relation_ptr(curr_relation);
 	}
+	
 	free(freqtable);
+	
+	filter->relation_array = 
+			(relation_ideal_t *)xrealloc(relation_array,
+				(old_relation - relation_array + 1) *
+				sizeof(relation_ideal_t));
+	filter->relation_ptr = 
+			(relation_ideal_t **)xrealloc(relation_ptr,
+				num_relations * sizeof(relation_ideal_t *));
+
+	if (filter->relation_array != relation_array) {
+		/* the realloc moved the relation array */
+		curr_relation = filter->relation_array;
+		for (i = 0; i < num_relations; i++) {
+			filter->relation_ptr[i] = curr_relation;
+			curr_relation = next_relation_ptr(curr_relation);
+		}
+	}
 }

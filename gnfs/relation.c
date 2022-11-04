@@ -85,7 +85,7 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	/* note that only the polynomials within the factor
 	   base need to be initialized */
 
-	uint32 i; 
+	uint32 i, colons; 
 	uint64 p, btmp;
 	int64 a, atmp;
 	uint32 b;
@@ -96,6 +96,15 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	uint32 num_factors_a;
 	uint32 array_size = 0;
 	uint8 *factors = r->factors;
+
+	/* Make thread-safe */
+	mpz_t tmp1, tmp2, tmp3;
+
+	/* Count the number of colons in the relation */
+	colons = 0;
+	for (tmp = buf; *tmp != '\0'; tmp++) {
+		if (*tmp == ':') colons++;
+	}
 
 	/* read the relation coordinates */
 
@@ -109,6 +118,8 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	b = (uint32)btmp;
 	if (btmp != (uint64)b)
 		return -99; /* cannot use large b */
+	if ((b != 0) && (colons != 2)) 
+		return -97; /* bad relation */
 
 	num_factors_r = 0;
 	num_factors_a = 0;
@@ -172,6 +183,7 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	}
 
 	/* read the rational factors (possibly an empty list) */
+	mpz_inits(tmp1, tmp2, tmp3, NULL);
 
 	if (isxdigit(tmp[1])) {
 		do {
@@ -180,14 +192,17 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 			if (test_primality && 
 			    p > RELATION_TF_BOUND && 
 			    p < ((uint64)1 << 32) &&
-	    		    !mp_is_prime_1((uint32)p))
+	    		    !mp_is_prime_1((uint32)p)) {
+				mpz_clears(tmp1, tmp2, tmp3, NULL);
 				return -98;
+			}
 
 			if (p > 1 && divide_factor_out(polyval, p, 
 						factors, &array_size,
 						&num_factors_r, compress,
-						rpoly->tmp1, rpoly->tmp2,
-						rpoly->tmp3)) {
+						tmp1, tmp2,
+						tmp3)) {
+				mpz_clears(tmp1, tmp2, tmp3, NULL);
 				return -8;
 			}
 			tmp = next_field;
@@ -197,8 +212,10 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 		tmp++;
 	}
 
-	if (tmp[0] != ':')
+	if (tmp[0] != ':') {
+		mpz_clears(tmp1, tmp2, tmp3, NULL);
 		return -9;
+	}
 
 	/* if there are rational factors still to be accounted
 	   for, assume they are small and find them by trial division */
@@ -209,20 +226,32 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 		p += prime_delta[i];
 		if (divide_factor_out(polyval, p, factors, 
 				&array_size, &num_factors_r, 
-				compress, rpoly->tmp1, 
-				rpoly->tmp2, rpoly->tmp3)) {
+				compress, tmp1, 
+				tmp2, tmp3)) {
+			mpz_clears(tmp1, tmp2, tmp3, NULL);
 			return -10;
 		}
 	}
 
-	if (mpz_cmp_ui(polyval, 1) != 0)
-		return -11;
+	if (mpz_cmp_ui(polyval, 1) != 0) {
+		if(mpz_probab_prime_p(polyval, 10)) {
+			p = mpz_get_ui(polyval);
+			array_size = compress_p(factors, p, array_size);
+			num_factors_r++;
+		}
+		else {
+			mpz_clears(tmp1, tmp2, tmp3, NULL);
+			return -11;
+		}
+	}
 
 	/* read the algebraic factors */
 
 	eval_poly(polyval, a, b, apoly);
-	if (mpz_cmp_ui(polyval, 0) == 0)
+	if (mpz_cmp_ui(polyval, 0) == 0) {
+		mpz_clears(tmp1, tmp2, tmp3, NULL);
 		return -12;
+	}
 	mpz_abs(polyval, polyval);
 
 	if (isxdigit(tmp[1])) {
@@ -232,14 +261,17 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 			if (test_primality &&
 			    p > RELATION_TF_BOUND && 
 			    p < ((uint64)1 << 32) &&
-	    		    !mp_is_prime_1((uint32)p))
+	    		    !mp_is_prime_1((uint32)p)) {
+				mpz_clears(tmp1, tmp2, tmp3, NULL);
 				return -98;
+			}
 
 			if (p > 1 && divide_factor_out(polyval, p, 
 						factors, &array_size,
 						&num_factors_a, compress,
-						apoly->tmp1, apoly->tmp2,
-						apoly->tmp3)) {
+						tmp1, tmp2,
+						tmp3)) {
+				mpz_clears(tmp1, tmp2, tmp3, NULL);
 				return -13;
 			}
 			tmp = next_field;
@@ -255,15 +287,26 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 		p += prime_delta[i];
 		if (divide_factor_out(polyval, p, factors, 
 				&array_size, &num_factors_a, 
-				compress, apoly->tmp1,
-				apoly->tmp2, apoly->tmp3)) {
+				compress, tmp1,
+				tmp2, tmp3)) {
+			mpz_clears(tmp1, tmp2, tmp3, NULL);
 			return -14;
 		}
 	}
 
-	if (mpz_cmp_ui(polyval, 1) != 0)
-		return -15;
-	
+	mpz_clears(tmp1, tmp2, tmp3, NULL);
+
+	if (mpz_cmp_ui(polyval, 1) != 0) {
+		if(mpz_probab_prime_p(polyval, 10)) {
+			p = mpz_get_ui(polyval);
+			array_size = compress_p(factors, p, array_size);
+			num_factors_a++;
+		}
+		else {
+			return -15;
+		}
+	}
+
 	r->num_factors_r = num_factors_r;
 	r->num_factors_a = num_factors_a;
 	*array_size_out = array_size;
@@ -448,13 +491,15 @@ static void remap_relation_numbers(msieve_obj *obj,
 				la_col_t *cycle_list, 
 				uint32 num_relations,
 				relation_t *rlist) {
-	uint32 i, j;
+	uint32 i;
 
 	/* walk through the list of cycles and convert
 	   each occurence of a line number in the savefile
 	   to an offset in the relation array */
 
+#pragma omp parallel for
 	for (i = 0; i < num_cycles; i++) {
+		uint32 j;
 		la_col_t *c = cycle_list + i;
 
 		for (j = 0; j < c->cycle.num_relations; j++) {
@@ -508,7 +553,7 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 				uint32 compress,
 				uint32 dependency) {
 	uint32 i, j;
-	char buf[LINE_BUF_SIZE];
+	char *buf;
 	relation_t *rlist;
 	savefile_t *savefile = &obj->savefile;
 
@@ -517,12 +562,28 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 	uint32 *relidx_list;
 	relcount_t *entry;
 
-	uint8 tmp_factors[COMPRESSED_P_MAX_SIZE];
-	uint32 factor_size;
-	relation_t tmp_relation;
-	mpz_t scratch;
+	uint32 *my_curr_relation;
+	uint32 curr_relation;
+	uint32 *tmp_factor_size;
+	relation_t *tmp_relation;
+	mpz_t *scratch;
 
-	tmp_relation.factors = tmp_factors;
+	uint32 batch = 1024 * obj->num_threads;
+	uint32 num_relations_read;
+
+	if (batch < 1) batch = 1;
+
+	/* per thread variables */
+	my_curr_relation = (uint32 *)malloc(batch * sizeof(uint32));
+	buf = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
+	scratch = (mpz_t *)malloc(batch * sizeof(mpz_t));
+	tmp_factor_size = (uint32 *)malloc(batch * sizeof(uint32));
+	tmp_relation = (relation_t *)malloc(batch * sizeof(relation_t));
+
+	for (i = 0; i < batch; i++) {
+		tmp_relation[i].factors = (uint8 *)malloc(COMPRESSED_P_MAX_SIZE * sizeof(uint8));
+		mpz_init(scratch[i]);
+	}
 
 	hashtable_init(&unique_relidx, 
 			(uint32)WORDS_IN(relcount_t), 
@@ -580,301 +641,80 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 
 	rlist = (relation_t *)xmalloc(num_unique_relidx * sizeof(relation_t));
 
-	i = (uint32)(-1);
+	curr_relation = (uint32)(-1);
 	j = 0;
-	savefile_read_line(buf, sizeof(buf), savefile);
-	mpz_init(scratch);
-	while (!savefile_eof(savefile) && j < num_unique_relidx) {
-		
-		int32 status;
-
-		if (buf[0] != '-' && !isdigit(buf[0])) {
-
-			/* no relation at this line */
-
-			savefile_read_line(buf, sizeof(buf), savefile);
-			continue;
+	
+	do {
+		num_relations_read = 0;
+		for(i = 0; i < batch; i++) {
+			char *buf_i = buf + i * LINE_BUF_SIZE;
+			savefile_read_line(buf_i, 
+					LINE_BUF_SIZE * sizeof(char), savefile);
+			if (savefile_eof(savefile)) break;
+			if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
+				/* no relation on this line */
+				i--;
+				continue;
+			}
+			if (++curr_relation < relidx_list[j + num_relations_read]) {
+				/* relation not needed */
+				i--;
+				continue;
+			}
+			num_relations_read++;
+			my_curr_relation[i] = curr_relation;
+			if (j + num_relations_read == num_unique_relidx) break;
 		}
-		if (++i < relidx_list[j]) {
 
-			/* relation not needed */
+#pragma omp parallel for
+		for (i = 0; i < num_relations_read; i++) {
+			int32 status;
+			char *buf_i = buf + i * LINE_BUF_SIZE;
+			status = nfs_read_relation(buf_i, fb, &tmp_relation[i], 
+						&tmp_factor_size[i], compress,
+						scratch[i], 0);
+			if (status) {
+				/* at this point, if the relation couldn't be
+			       read then the filtering stage should have
+			       found that out and skipped it */
 
-			savefile_read_line(buf, sizeof(buf), savefile);
-			continue;
+				logprintf(obj, "error: relation %u corrupt\n", my_curr_relation[i]);
+				exit(-1);
+			}
 		}
 
-		status = nfs_read_relation(buf, fb, &tmp_relation, 
-						&factor_size, compress,
-						scratch, 0);
-		if (status) {
-			/* at this point, if the relation couldn't be
-			   read then the filtering stage should have
-			   found that out and skipped it */
-
-			logprintf(obj, "error: relation %u corrupt\n", i);
-			exit(-1);
-		}
-		else {
+		for (i = 0; i < num_relations_read; i++) {
 			/* save the relation */
 
 			relation_t *r = rlist + j++;
 
-			*r = tmp_relation;
-			r->rel_index = i;
-			r->factors = (uint8 *)xmalloc(factor_size *
+			*r = tmp_relation[i];
+			r->rel_index = my_curr_relation[i];
+			r->factors = (uint8 *)xmalloc(tmp_factor_size[i] *
 							sizeof(uint8));
-			memcpy(r->factors, tmp_relation.factors,
-					factor_size * sizeof(uint8));
+			memcpy(r->factors, tmp_relation[i].factors,
+					tmp_factor_size[i] * sizeof(uint8));
 		}
-
-		savefile_read_line(buf, sizeof(buf), savefile);
-	}
+	} while (num_relations_read == batch && j < num_unique_relidx);
 
 	num_unique_relidx = *num_relations_out = j;
 	logprintf(obj, "read %u relations\n", j);
 	savefile_close(savefile);
 	hashtable_free(&unique_relidx);
 	*rlist_out = rlist;
-	mpz_clear(scratch);
-}
 
-/*------------------------------------------------------------------
+	/* free per thread variables */
 
-Modification to msieve from FaaS
-
-Struct: relcount_thread_t
-
-This is a modified version of relcount_t. It allows for the storage
-of a dependency flag. If the bit is set, then the relation belongs
-to the dependency in question. This allows for the relations file to
-be read in one pass, and have all of the relations copied to the 
-appropriate dependencies.
-
-Used in nfs_get_cycle_relations_threaded() mainly.
-
--------------------------------------------------------------------*/
-
-typedef struct {
-	uint32 relidx;
-	uint64 dep_flags;
-} relcount_thread_t;
-
-/*------------------------------------------------------------------
-
-Modification to msieve from FaaS
-
-Method: compare_relcount_thread()
-
-This is a comparator that is used in the quicksort method. This
-allows for the sorting of all of the relcount_thread_t structs 
-based on their relidx.
-
-Used in nfs_get_cycle_relations_threaded()
-
--------------------------------------------------------------------*/
-
-int compare_relcount_thread (const void * a, const void * b) {
-	return compare_uint32(&(((relcount_thread_t *) a)->relidx), 
-				&(((relcount_thread_t *) b)->relidx));
-}
-
-/*------------------------------------------------------------------
-
-Modification to msieve from FaaS
-
-Method: nfs_get_cycle_relations_threaded()
-
-This is a modified version of nfs_get_cycle_relations() that enables the 
-threading of the square root stage. 
-
-The key modification is that it creates lists of relations for each of 
-the dependencies in one pass of the .dat relation file. By creating all
-of the dependency relations objects in one go, this allows us to save on 
-file IO time and to create threads for multiple dependencies at the same time.
-
--------------------------------------------------------------------*/
-
-static void nfs_get_cycle_relations_threaded(msieve_obj *obj, 
-				factor_base_t *fb, la_dep_t *dep_cycle_list,
-				relation_lists_t **dep_rel_list_out,
-				uint32 dep_lower,
-				uint32 dep_upper) {
-	uint32 i, j, k;
-	char buf[LINE_BUF_SIZE];
-	relation_lists_t *dep_rel_list;
-	savefile_t *savefile = &obj->savefile;
-
-	hashtable_t unique_relidx;
-	uint32 num_unique_relidx;
-	relcount_thread_t *relidx_list;
-	relcount_thread_t *entry;
-
-	uint8 tmp_factors[COMPRESSED_P_MAX_SIZE];
-	uint32 factor_size;
-	relation_t tmp_relation;
-	mpz_t scratch;
-
-	tmp_relation.factors = tmp_factors;
-
-	hashtable_init(&unique_relidx, 
-			(uint32)WORDS_IN(relcount_thread_t), 
-			(uint32)1);
-
-	/* Fill the hashtable using the relation ids for each dependency obtained
-	in read_cycles_threaded(). If the relation has already been added, simply 
-	toggle the bit in relcount_thread_t belonging to the struct. 
-
-	Doing this also neatly "squeezes" out the relations that occurs an 
-	even number of times.
-	(author: not entirely sure why "squeezing" is necessary, but the same 
-	 operation is performed in nfs_get_cycle_relations(), so I figured it 
-	 should be included) */
-
-	for (i = dep_lower; i <= dep_upper; i++) {
-		la_dep_t *dep = dep_cycle_list + i - dep_lower;
-		for (j = 0; j < dep->num_cycles; j++) {
-			la_col_t *c = dep->column + j;
-			uint32 num_relations = c->cycle.num_relations;
-			uint32 *list = c->cycle.list;
-
-			for (k = 0; k < num_relations; k++) {
-				uint32 already_seen;
-				entry = (relcount_thread_t *)hashtable_find(
-							&unique_relidx, list + k, 
-							NULL, &already_seen);
-				if (!already_seen)
-					entry->dep_flags = 1 << (i - 1);
-				else
-					entry->dep_flags ^= 1 << (i - 1);
-			}
-		}
-	}
-
-	/* Convert the internal list of hashtable entries into
-	   a list of relcount_thread_t. Discard all relcount_thread_t where the
-	   dependency flag is 0 (it has been squeezed out from all deps) */
-
-	hashtable_close(&unique_relidx);
-	num_unique_relidx = hashtable_get_num(&unique_relidx);
-	entry = (relcount_thread_t *)hashtable_get_first(&unique_relidx);
-	relidx_list = (relcount_thread_t *)unique_relidx.match_array;
-
-	for (i = j = 0; i < num_unique_relidx; i++) {
-		if (entry->dep_flags != 0)
-			relidx_list[j++] = *entry;
-
-		entry = (relcount_thread_t *)hashtable_get_next(
-					&unique_relidx, entry);
-	}
-	num_unique_relidx = j;
-
-	/* sort the list in order of increasing relation number */
-	qsort(relidx_list, (size_t)num_unique_relidx, 
-		sizeof(relcount_thread_t), compare_relcount_thread);
-
-	logprintf(obj, "Sqrt: cycles contain %u unique relations\n", 
-				num_unique_relidx);
-
-	savefile_open(savefile, SAVEFILE_READ);
-
-	/* assign space for relation lists for each dependency */
-	dep_rel_list = (relation_lists_t *)xcalloc((size_t)(dep_upper 
-		                                                - dep_lower + 1), 
-											   sizeof(relation_lists_t));
-
-	for (i = dep_lower; i <= dep_upper; i++) {
-		relation_lists_t *rlists;
-
-		rlists = dep_rel_list + i - dep_lower;
-		rlists->rlist = (relation_t *)xcalloc((size_t) num_unique_relidx,
-											  sizeof(relation_t));
-		rlists->dep_no = i;
-		rlists->num_relations = 0;
+	for (i = 0; i < batch; i++) {
+		free(tmp_relation[i].factors);
+		mpz_clear(scratch[i]);
 	}
 	
-	/* read the list of relations */
-
-	i = (uint32)(-1);
-	j = 0;
-	savefile_read_line(buf, sizeof(buf), savefile);
-	mpz_init(scratch);
-	while (!savefile_eof(savefile) && j < num_unique_relidx) {
-		
-		int32 status;
-
-		if (buf[0] != '-' && !isdigit(buf[0])) {
-
-			/* no relation at this line */
-
-			savefile_read_line(buf, sizeof(buf), savefile);
-			continue;
-		}
-		if (++i < relidx_list[j].relidx) {
-
-			/* relation not needed */
-
-			savefile_read_line(buf, sizeof(buf), savefile);
-			continue;
-		}
-
-		status = nfs_read_relation(buf, fb, &tmp_relation, 
-						&factor_size, 0,
-						scratch, 0);
-		if (status) {
-			/* at this point, if the relation couldn't be
-			   read then the filtering stage should have
-			   found that out and skipped it */
-
-			logprintf(obj, "error: relation %u corrupt\n", i);
-			exit(-1);
-		}
-		else {
-
-			/* Iterate through all of the dependencies. 
-			   Save the relation if it matches the dependency */
-			for (k = dep_lower; k <= dep_upper; k++) {
-				if (relidx_list[j].dep_flags & (1 << (k - 1))) {
-					relation_lists_t *rlists;
-					relation_t *r;
-
-					rlists = dep_rel_list + k - dep_lower;
-					r = rlists->rlist + rlists->num_relations;
-
-					*r = tmp_relation;
-					r->rel_index = i;
-					r->factors = (uint8 *)xmalloc(factor_size *
-							sizeof(uint8));
-					memcpy(r->factors, tmp_relation.factors,
-							factor_size * sizeof(uint8));
-
-					rlists->num_relations++;
-				}
-			}
-			j++;
-		}
-
-		savefile_read_line(buf, sizeof(buf), savefile);
-	}
-
-	num_unique_relidx = j;
-	logprintf(obj, "Sqrt: read %u relations in total\n", j);
-
-	/* Reallocate memory for each dependency, as no dependency is likely to
-	   have each relation in it */
-	for (i = dep_lower; i <= dep_upper; i++) {
-		relation_lists_t *rlists;
-
-		rlists = dep_rel_list + i - dep_lower;
-		rlists->rlist = (relation_t *)xrealloc(rlists->rlist,
-					(size_t) (rlists->num_relations * sizeof(relation_t)));
-		logprintf(obj, "Sqrt: Dependency %u has %u relations\n", i, 
-			      rlists->num_relations);
-	}
-
-	savefile_close(savefile);
-	hashtable_free(&unique_relidx);
-	*dep_rel_list_out = dep_rel_list;
-	mpz_clear(scratch);
+	free(my_curr_relation);
+	free(scratch);
+	free(tmp_factor_size);
+	free(tmp_relation);
+	free(buf);
 }
 
 /*--------------------------------------------------------------------*/
@@ -945,60 +785,6 @@ void nfs_read_cycles(msieve_obj *obj,
 	else {
 		free_cycle_list(cycle_list, num_cycles);
 	}
-}
-
-/*------------------------------------------------------------------
-
-Modification to msieve from FaaS
-
-Method: nfs_read_cycles_threaded()
-
-This is a modified version of nfs_read_cycles() that enables the 
-threading of the square root stage. 
-
-Using the modified read_cycles_threaded() and 
-nfs_get_cycle_relations_threaded(), it allows us to create lists of 
-relations for each of the dependencies in one pass of the .cyc cycle 
-file and the .dat relation file. 
-
-By creating all of the dependency relations objects in one go, 
-this allows us to save on file IO time and to create threads for 
-multiple dependencies at the same time.
-
--------------------------------------------------------------------*/
-
-void nfs_read_cycles_threaded(msieve_obj *obj, 
-			factor_base_t *fb,
-			relation_lists_t **rlists,
-			uint32 *dep_lower, 
-			uint32 *dep_upper) {
-
-	int i;
-	la_dep_t *dep_cycle_list = NULL;
-	relation_lists_t *dep_rel_list = NULL;
-
-	/* read the raw list of relation numbers for each cycle and dependency */
-	read_cycles_threaded(obj, &dep_cycle_list, dep_lower, dep_upper);
-
-	if (dep_cycle_list == NULL) {
-		*rlists = NULL;
-		return;
-	}
-
-	/* now read the list of relations needed by the
-	   list of cycles */
-	nfs_get_cycle_relations_threaded(obj, fb, dep_cycle_list, 
-				&dep_rel_list, *dep_lower, *dep_upper);
-
-	/* need to free dep_cycle_list */
-
-	for (i = *dep_lower; i <= *dep_upper; i++) {
-		la_dep_t *dep = dep_cycle_list + i - *dep_lower;
-		free_cycle_list(dep->column, dep->num_cycles);
-	}
-	free(dep_cycle_list);
-	
-	*rlists = dep_rel_list;
 }
 
 /*--------------------------------------------------------------------*/

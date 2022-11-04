@@ -60,6 +60,7 @@ static INLINE relation_ideal_t *next_relation_ptr(relation_ideal_t *r) {
 
 typedef struct {
 	relation_ideal_t *relation_array;  /* relations after singleton phase */
+	relation_ideal_t **relation_ptr; /* pointer to relations in relation_array */
 	uint32 num_relations;       /* current number of relations */
 	uint32 num_ideals;          /* current number of unique large ideals */
 	uint32 filtmin_r;           /* min. value a rational ideal needs 

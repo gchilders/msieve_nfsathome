@@ -22,8 +22,6 @@
                 }                                                       \
         }
 
-using namespace cub;
-
 typedef unsigned int uint32;
 
 struct spmv_engine

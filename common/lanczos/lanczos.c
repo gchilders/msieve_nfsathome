@@ -14,7 +14,7 @@ $Id$
 
 #include "lanczos.h"
 
-#define DEFAULT_DUMP_INTERVAL 30*VBITS
+#define DEFAULT_DUMP_INTERVAL 300*VBITS
 
 #ifdef HAVE_MPI
 	#define MPI_NODE_0_START if (obj->mpi_la_row_rank + \
@@ -947,13 +947,13 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 	    obj->flags & (MSIEVE_FLAG_USE_LOGFILE |
 	    		  MSIEVE_FLAG_LOG_TO_STDOUT)) {
 		if (max_n > 1000000)
-			report_interval = 200;
+			report_interval = 1000;
 		else if (max_n > 500000)
-			report_interval = 500;
+			report_interval = 2500;
 		else if (max_n > 100000)
-			report_interval = 2000;
+			report_interval = 10000;
 		else
-			report_interval = 8000;
+			report_interval = 30000;
 		first_dim_solved = dim_solved;
 		next_report = dim_solved + report_interval;
 	}
@@ -1249,6 +1249,12 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 				dump_interval = MAX(dump_interval,
 						   DEFAULT_DUMP_INTERVAL + 1);
 
+				/* adjust check interval to check about
+				   every minute or 10000 dimensions */
+
+				check_interval = 10000 * (dump_interval / 600000);
+				check_interval = MAX(check_interval, 10000);
+
 				/* make the dump interval a multiple of
 				   the check interval. If this is not done,
 				   eventually we will perform a check and
@@ -1264,13 +1270,17 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 						dump_interval %
 						check_interval;
 
-				logprintf(obj, "checkpointing every %u "
-					   "dimensions\n", dump_interval);
+				logprintf(obj, "checking every %u dimensions, checkpointing every %u "
+					   "dimensions\n", check_interval, dump_interval);
 				MPI_NODE_0_END
 #ifdef HAVE_MPI
+				MPI_TRY(MPI_Bcast(&check_interval, 1, 
+						MPI_INT, 0, obj->mpi_la_grid))
 				MPI_TRY(MPI_Bcast(&dump_interval, 1, 
 						MPI_INT, 0, obj->mpi_la_grid))
 #endif
+				next_check = ((dim_solved + 6 * VBITS) / 
+						check_interval + 1) * check_interval;
 				next_dump = ((dim_solved + 6 * VBITS) / 
 						dump_interval + 1) * dump_interval;
 				continue;

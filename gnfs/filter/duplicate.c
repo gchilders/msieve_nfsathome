@@ -252,16 +252,17 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	FILE *bad_relation_fp;
 	FILE *collision_fp;
 	uint32 curr_relation;
-	char buf[LINE_BUF_SIZE];
+	uint32 *my_curr_relation;
+	char *buf;
 	uint32 num_relations;
 	uint32 num_collisions;
 	uint32 num_skipped_b;
 	uint32 num_composite;
+	uint32 num_malformed;
 	uint8 *hashtable;
-	uint32 blob[2];
 	uint32 log2_hashtable1_size;
 	double rel_size = estimate_rel_size(savefile);
-	mpz_t scratch;
+	mpz_t *scratch;
 
 	uint8 *free_relation_bits;
 	uint32 *free_relations;
@@ -271,11 +272,27 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	uint32 *prime_bins;
 	double bin_max;
 
-	uint8 tmp_factors[COMPRESSED_P_MAX_SIZE];
-	uint32 array_size;
-	relation_t tmp_rel;
+	uint32 *array_size;
+	relation_t *tmp_rel;
 
-	tmp_rel.factors = tmp_factors;
+	uint32 batch = 1024 * obj->num_threads;
+	uint32 num_relations_read;
+	int32 *status;
+
+	if (batch < 1) batch = 1;
+
+	/* per thread variables */
+	my_curr_relation = (uint32 *)malloc(batch * sizeof(uint32));
+	buf = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
+	scratch = (mpz_t *)malloc(batch * sizeof(mpz_t));
+	array_size = (uint32 *)malloc(batch * sizeof(uint32));
+	tmp_rel = (relation_t *)malloc(batch * sizeof(relation_t));
+	status = (int32 *)malloc(batch * sizeof(int32));
+
+	for (i = 0; i < batch; i++) {
+		tmp_rel[i].factors = (uint8 *)malloc(COMPRESSED_P_MAX_SIZE * sizeof(uint8));
+		mpz_init(scratch[i]);
+	}
 
 	logprintf(obj, "commencing duplicate removal, pass 1\n");
 
@@ -337,130 +354,142 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	num_collisions = 0;
 	num_skipped_b = 0;
 	num_composite = 0;
-	mpz_init(scratch);
-	savefile_read_line(buf, sizeof(buf), savefile);
-	while (!savefile_eof(savefile)) {
-
-		int32 status;
-		uint32 hashval;
-
-		if (buf[0] != '-' && !isdigit(buf[0])) {
-
-			/* no relation on this line */
-
-			savefile_read_line(buf, sizeof(buf), savefile);
-			continue;
+	num_malformed = 0;
+	
+	do {
+		num_relations_read = 0;
+		for(i = 0; i < batch; i++) {
+			char *buf_i = buf + i * LINE_BUF_SIZE;
+			savefile_read_line(buf_i, 
+					LINE_BUF_SIZE * sizeof(char), savefile);
+			if (savefile_eof(savefile)) break;
+			if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
+				/* no relation on this line */
+				i--;
+				continue;
+			} 
+			num_relations_read++;
+			my_curr_relation[i] = curr_relation + i + 1;
 		}
 
 		/* read and verify the relation */
 
-		curr_relation++;
-		if (max_relations && curr_relation >= max_relations)
-			break;
-
-		status = nfs_read_relation(buf, fb, &tmp_rel, 
-					&array_size, 1, scratch, 1);
-		if (status != 0) {
-
-			/* save the line number of bad relations (hopefully
-			   there are very few of them) */
-
-			fwrite(&curr_relation, (size_t)1, 
-					sizeof(uint32), bad_relation_fp);
-			if (status == -99)
-				num_skipped_b++;
-			else if (status == -98)
-				num_composite++;
-			else
-			    logprintf(obj, "error %d reading relation %u\n",
-					status, curr_relation);
-			savefile_read_line(buf, sizeof(buf), savefile);
-			continue;
+		curr_relation += num_relations_read;
+		if (max_relations && curr_relation >= max_relations) {
+			uint32 max_exceeded = curr_relation - max_relations;
+			curr_relation -= max_exceeded;
+			num_relations_read -= max_exceeded;
 		}
 
-		if (curr_relation > 0 && (curr_relation % 10000000 == 0)) {
-			printf("read %uM relations\n", curr_relation / 1000000);
-		} /* there are no more errors -6/-11 to see progress */
-
-		/* relation is good; find the value to which it
-		   hashes. Note that only the bottom 35 bits of 'a'
-		   and the bottom 29 bits of 'b' figure into the hash,
-		   so that spurious hash collisions are possible
-		   (though highly unlikely) */
-
-		num_relations++;
-		blob[0] = (uint32)tmp_rel.a;
-		blob[1] = ((tmp_rel.a >> 32) & 0x1f) |
-			  (tmp_rel.b << 5);
-
-		hashval = (HASH1(blob[0]) ^ HASH2(blob[1])) >>
-			   (32 - log2_hashtable1_size);
-
-		/* save the hash bucket if there's a collision. We
-		   don't need to save any more collisions to this bucket,
-		   but future duplicates could cause the same bucket to
-		   be saved more than once. We can cut the number of
-		   redundant bucket reports in half by resetting the
-		   bit to zero */
-
-		if (hashtable[hashval / 8] & hashmask[hashval % 8]) {
-			fwrite(&hashval, (size_t)1, 
-					sizeof(uint32), collision_fp);
-			num_collisions++;
-			hashtable[hashval / 8] &= ~hashmask[hashval % 8];
-		}
-		else {
-			hashtable[hashval / 8] |= hashmask[hashval % 8];
+#pragma omp parallel for
+		for (i = 0; i < num_relations_read; i++) {
+			char *buf_i = buf + i * LINE_BUF_SIZE;
+			status[i] = nfs_read_relation(buf_i, fb, &tmp_rel[i], 
+					&array_size[i], 1, scratch[i], 1);
 		}
 
-		if (tmp_rel.b == 0) {
-			/* remember any free relations that are found */
+		for (i = 0; i < num_relations_read; i++) {
+			uint32 hashval;
+			uint32 blob[2];
 
-			if (num_free_relations == num_free_relations_alloc) {
-				num_free_relations_alloc *= 2;
-				free_relations = (uint32 *)xrealloc(
-						free_relations,
-						num_free_relations_alloc *
-						sizeof(uint32));
+			if (my_curr_relation[i] > 0 && (my_curr_relation[i] % 10000000 == 0)) {
+				printf("read %uM relations\n", curr_relation / 1000000);
 			}
-			free_relations[num_free_relations++] =
-						(uint32)(tmp_rel.a);
-		}
-		else {
-			uint32 num_r = tmp_rel.num_factors_r;
-			uint32 num_a = tmp_rel.num_factors_a;
+			if (status[i] != 0) {
 
-			for (i = array_size = 0; i < num_r + num_a; i++) {
-				uint64 p = decompress_p(tmp_rel.factors, 
-							&array_size);
+				/* save the line number of bad relations (hopefully
+			   		there are very few of them) */
 
-				/* add the factors of tmp_rel to the 
-				   counts of (32-bit) primes */
-		   
-				if (p >= ((uint64)1 << 32))
-					continue;
+				fwrite(&my_curr_relation[i], (size_t)1, 
+					sizeof(uint32), bad_relation_fp);
+				if (status[i] == -99)
+					num_skipped_b++;
+				else if (status[i] == -98)
+					num_composite++;
+				else if (status[i] == -97)
+					num_malformed++;
+				else
+			   	 logprintf(obj, "error %d reading relation %u\n",
+						status[i], my_curr_relation[i]);
+			} else {
 
-				prime_bins[p / BIN_SIZE]++;
+				/* relation is good; find the value to which it
+				hashes. Note that only the bottom 35 bits of 'a'
+				and the bottom 29 bits of 'b' figure into the hash,
+				so that spurious hash collisions are possible
+				(though highly unlikely) */
 
-				/* schedule the adding of a free relation
-				   for each algebraic factor */
+				num_relations++;
+				blob[0] = (uint32)tmp_rel[i].a;
+				blob[1] = ((tmp_rel[i].a >> 32) & 0x1f) |
+					(tmp_rel[i].b << 5);
+
+				hashval = (HASH1(blob[0]) ^ HASH2(blob[1])) >>
+					(32 - log2_hashtable1_size);
+
+				/* save the hash bucket if there's a collision. We
+				don't need to save any more collisions to this bucket,
+				but future duplicates could cause the same bucket to
+				be saved more than once. We can cut the number of
+				redundant bucket reports in half by resetting the
+				bit to zero */
+
+				if (hashtable[hashval / 8] & hashmask[hashval % 8]) {
+					fwrite(&hashval, (size_t)1, 
+							sizeof(uint32), collision_fp);
+					num_collisions++;
+					hashtable[hashval / 8] &= ~hashmask[hashval % 8];
+				}
+				else {
+					hashtable[hashval / 8] |= hashmask[hashval % 8];
+				}
+
+				if (tmp_rel[i].b == 0) {
+					/* remember any free relations that are found */
+
+					if (num_free_relations == num_free_relations_alloc) {
+						num_free_relations_alloc *= 2;
+						free_relations = (uint32 *)xrealloc(
+								free_relations,
+								num_free_relations_alloc *
+								sizeof(uint32));
+					}
+					free_relations[num_free_relations++] =
+								(uint32)(tmp_rel[i].a);
+				}
+				else {
+					uint32 num_r = tmp_rel[i].num_factors_r;
+					uint32 num_a = tmp_rel[i].num_factors_a;
+					uint32 j;
+
+					for (j = array_size[i] = 0; j < num_r + num_a; j++) {
+						uint64 p = decompress_p(tmp_rel[i].factors, 
+									&array_size[i]);
+
+						/* add the factors of tmp_rel to the 
+						counts of (32-bit) primes */
 				
-				if (i >= num_r &&
-				    p > MAX_PACKED_PRIME &&
-				    p < FREE_RELATION_LIMIT) {
-					p = p / 2;
-					free_relation_bits[p / 8] |= 
-							hashmask[p % 8];
+						if (p >= ((uint64)1 << 32))
+							continue;
+
+						prime_bins[p / BIN_SIZE]++;
+
+						/* schedule the adding of a free relation
+						for each algebraic factor */
+						
+						if (j >= num_r &&
+							p > MAX_PACKED_PRIME &&
+							p < FREE_RELATION_LIMIT) {
+							p = p / 2;
+							free_relation_bits[p / 8] |= 
+									hashmask[p % 8];
+						}
+					}
 				}
 			}
 		}
+	} while (num_relations_read == batch);
 
-		/* get the next line */
-
-		savefile_read_line(buf, sizeof(buf), savefile);
-	}
-
-	mpz_clear(scratch);
 	free(hashtable);
 	savefile_close(savefile);
 	fclose(bad_relation_fp);
@@ -472,6 +501,9 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	if (num_composite > 0)
 		logprintf(obj, "skipped %d relations with composite factors\n",
 				num_composite);
+	if (num_malformed > 0)
+		logprintf(obj, "skipped %d malformed relations\n",
+				num_malformed);
 	logprintf(obj, "found %u hash collisions in %u relations\n", 
 				num_collisions, num_relations);
 
@@ -494,7 +526,20 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	}
 	free(free_relations);
 	free(free_relation_bits);
+	
+	/* free per thread variables */
 
+	for (i = 0; i < batch; i++) {
+		free(tmp_rel[i].factors);
+		mpz_clear(scratch[i]);
+	}
+	
+	free(my_curr_relation);
+	free(scratch);
+	free(array_size);
+	free(tmp_rel);
+	free(status);
+	
 	if (num_collisions == 0) {
 
 		/* no duplicates; no second pass is necessary */
@@ -514,6 +559,8 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 					log2_hashtable1_size,
 					max_relations);
 	}
+
+	free(buf);
 
 	/* the large prime cutoff for the rest of the filtering
 	   process should be chosen here. We don't want the bound
