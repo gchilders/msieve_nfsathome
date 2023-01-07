@@ -132,7 +132,6 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 		int64 a;
 		uint32 b;
 		char *next_field;
-		uint64 blob[2];
 
 		if (buf[0] != '-' && !isdigit(buf[0])) {
 
@@ -164,12 +163,8 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 		b = strtoul(next_field + 1, NULL, 10);
 		key[0] = (uint32)a;
 		key[1] = ((a >> 32) & 0x1f) | (b << 5);
-		blob[0] = a;
-		blob[1] = (uint64)b;
 
-		/* hashval = (HASH1(key[0]) ^ HASH2(key[1])) >>
-				(32 - log2_hashtable1_size); */
-		hashval = (rrxmrrxmsx_0(blob[0]) ^ rrxmrrxmsx_0(blob[1])) >>
+		hashval = (rrxmrrxmsx_0(a) ^ rrxmrrxmsx_0((uint64)b)) >>
                                         (64 - log2_hashtable1_size);
 
 		if (bit_table[hashval/8] & hashmask[hashval % 8]) {
@@ -343,14 +338,14 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 			num_rels = get_file_size(name_gz) / 0.55 / rel_size;
 		} else 
 #endif /* get_file_size( ) will now do the same internally */
-			num_rels = get_file_size(savefile->name) / rel_size;
+		num_rels = get_file_size(savefile->name) / rel_size;
 		log2_hashtable1_size = log(num_rels * 10.0) / M_LN2 + 0.5;
 	}
 	if (log2_hashtable1_size < 25)
 		log2_hashtable1_size = 25;
 	if (log2_hashtable1_size > 63)
 	 	log2_hashtable1_size = 63;
-	printf("log2_hashtable1_size = %u\n", log2_hashtable1_size);
+	/* printf("log2_hashtable1_size = %u\n", log2_hashtable1_size); */
 	hashtable = (uint8 *)xcalloc((uint64)1 << 
 				(log2_hashtable1_size - 3), sizeof(uint8));
 	prime_bins = (uint32 *)xcalloc((size_t)1 << (32 - LOG2_BIN_SIZE),
@@ -440,14 +435,8 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 				blob[0] = tmp_rel[i].a;
 				blob[1] = (uint64)tmp_rel[i].b;
 
-				/* hashval = (HASH1(blob[0]) ^ HASH2(blob[1])) %
-					((uint64)1 << log2_hashtable1_size);
-				
-				hashval = rrxmrrxmsx_0(blob[0] ^ (blob[1] << 32)) >>
-					(64 - log2_hashtable1_size); */
 				hashval = (rrxmrrxmsx_0(blob[0]) ^ rrxmrrxmsx_0(blob[1])) >>
                                         (64 - log2_hashtable1_size);
-
 
 				/* save the hash bucket if there's a collision. We
 				don't need to save any more collisions to this bucket,
