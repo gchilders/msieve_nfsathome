@@ -50,6 +50,18 @@ $Id$
 static const uint8 hashmask[] = {0x01, 0x02, 0x04, 0x08,
 				 0x10, 0x20, 0x40, 0x80};
 
+static inline uint64 ror64(uint64 v, int r) {
+    return (v >> r) | (v << (64 - r));
+}
+
+static uint64 rrxmrrxmsx_0(uint64 v) {
+    v ^= ror64(v, 25) ^ ror64(v, 50);
+    v *= 0xA24BAED4963EE407UL;
+    v ^= ror64(v, 24) ^ ror64(v, 49);
+    v *= 0x9FB21C651E98DF25UL;
+    return v ^ v >> 28;
+}
+
 static uint32 purge_duplicates_pass2(msieve_obj *obj,
 				uint32 log2_hashtable1_size,
 				uint32 max_relations) {
@@ -58,7 +70,7 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 	FILE *bad_relation_fp;
 	FILE *collision_fp;
 	FILE *out_fp;
-	uint32 i;
+	uint64 i;
 	char buf[LINE_BUF_SIZE];
 	uint32 num_duplicates;
 	uint32 num_relations;
@@ -79,11 +91,11 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 		exit(-1);
 	}
 	bit_table = (uint8 *)xcalloc(
-			(size_t)1 << (log2_hashtable1_size - 3), 
+			(uint64)1 << (log2_hashtable1_size - 3), 
 			sizeof(uint8));
 
-	while (fread(&i, (size_t)1, sizeof(uint32), collision_fp) != 0) {
-		if (i < ((uint32)1 << log2_hashtable1_size)) {
+	while (fread(&i, (size_t)1, sizeof(uint64), collision_fp) != 0) {
+		if (i < ((uint64)1 << log2_hashtable1_size)) {
 			bit_table[i / 8] |= 1 << (i % 8);
 		}
 	}
@@ -116,10 +128,11 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 
 	while (!savefile_eof(savefile)) {
 		
-		uint32 hashval;
+		uint64 hashval;
 		int64 a;
 		uint32 b;
 		char *next_field;
+		uint64 blob[2];
 
 		if (buf[0] != '-' && !isdigit(buf[0])) {
 
@@ -151,9 +164,13 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 		b = strtoul(next_field + 1, NULL, 10);
 		key[0] = (uint32)a;
 		key[1] = ((a >> 32) & 0x1f) | (b << 5);
+		blob[0] = a;
+		blob[1] = ((a >> 32) & 0x1f) | (b << 5);
 
-		hashval = (HASH1(key[0]) ^ HASH2(key[1])) >>
-				(32 - log2_hashtable1_size);
+		/* hashval = (HASH1(key[0]) ^ HASH2(key[1])) >>
+				(32 - log2_hashtable1_size); */
+		hashval = rrxmrrxmsx_0(blob[0] | (blob[1] << 32)) %
+					((uint64)1 << log2_hashtable1_size);
 
 		if (bit_table[hashval/8] & hashmask[hashval % 8]) {
 
@@ -192,7 +209,7 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 	logprintf(obj, "found %u duplicates and %u unique relations\n", 
 				num_duplicates, num_relations);
 	logprintf(obj, "memory use: %.1f MB\n", 
-			(double)((1 << (log2_hashtable1_size-3)) +
+			(double)(((uint64)1 << (log2_hashtable1_size-3)) +
 			hashtable_sizeof(&duplicates)) / 1048576);
 
 	/* clean up and finish */
@@ -331,10 +348,12 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	}
 	if (log2_hashtable1_size < 25)
 		log2_hashtable1_size = 25;
-	if (log2_hashtable1_size > 31)
-		log2_hashtable1_size = 31;
-
-	hashtable = (uint8 *)xcalloc((size_t)1 << 
+	/* Allow to hashtable to grow with data size 
+	 if (log2_hashtable1_size > 31)
+	 	log2_hashtable1_size = 31;
+	*/
+	printf("log2_hashtable1_size = %u\n", log2_hashtable1_size);
+	hashtable = (uint8 *)xcalloc((uint64)1 << 
 				(log2_hashtable1_size - 3), sizeof(uint8));
 	prime_bins = (uint32 *)xcalloc((size_t)1 << (32 - LOG2_BIN_SIZE),
 					sizeof(uint32));
@@ -389,8 +408,8 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 		}
 
 		for (i = 0; i < num_relations_read; i++) {
-			uint32 hashval;
-			uint32 blob[2];
+			uint64 hashval;
+			uint64 blob[2];
 
 			if (my_curr_relation[i] > 0 && (my_curr_relation[i] % 10000000 == 0)) {
 				printf("read %uM relations\n", curr_relation / 1000000);
@@ -420,12 +439,15 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 				(though highly unlikely) */
 
 				num_relations++;
-				blob[0] = (uint32)tmp_rel[i].a;
+				blob[0] = tmp_rel[i].a;
 				blob[1] = ((tmp_rel[i].a >> 32) & 0x1f) |
 					(tmp_rel[i].b << 5);
 
-				hashval = (HASH1(blob[0]) ^ HASH2(blob[1])) >>
-					(32 - log2_hashtable1_size);
+				/* hashval = (HASH1(blob[0]) ^ HASH2(blob[1])) %
+					((uint64)1 << log2_hashtable1_size);
+				*/
+				hashval = rrxmrrxmsx_0(blob[0] | (blob[1] << 32)) %
+					((uint64)1 << log2_hashtable1_size);
 
 				/* save the hash bucket if there's a collision. We
 				don't need to save any more collisions to this bucket,
@@ -436,7 +458,7 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 
 				if (hashtable[hashval / 8] & hashmask[hashval % 8]) {
 					fwrite(&hashval, (size_t)1, 
-							sizeof(uint32), collision_fp);
+							sizeof(uint64), collision_fp);
 					num_collisions++;
 					hashtable[hashval / 8] &= ~hashmask[hashval % 8];
 				}
