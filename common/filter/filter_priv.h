@@ -39,12 +39,12 @@ typedef struct {
    linked list of relations that use that ideal */
 
 typedef struct {
-	uint64 payload : 32;	/* offset in list of ideal_relation_t
+	uint32 payload;	/* offset in list of ideal_relation_t
 				   structures where the linked list of
 				   ideal_relation_t's for this ideal starts */
-	uint64 clique : 1;      /* nonzero if this ideal can participate in
+	uint8 clique;      /* nonzero if this ideal can participate in
 				   a clique */
-	uint64 connected : 1;   /* nonzero if this ideal has already been
+	uint8 connected;   /* nonzero if this ideal has already been
 				   added to a clique under construction */
 } ideal_map_t;
 
