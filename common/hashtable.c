@@ -82,7 +82,8 @@ void *hashtable_find(hashtable_t *h, void *blob,
 	   for hashtable matches */
 	
 	if (h->match_array_size + 1 >= h->match_array_alloc) {
-		h->match_array_alloc *= 2;
+		if (h->match_array_alloc <= (UINT32_MAX - 1)/2) h->match_array_alloc *= 2;
+		else h->match_array_alloc = UINT32_MAX;
 		match_array = h->match_array = (uint32 *)xrealloc(
 						h->match_array,
 						sizeof(uint32) *
