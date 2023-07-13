@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -34,51 +34,36 @@
 #pragma once
 
 #include "../thread/thread_operators.cuh"
-#include "../util_namespace.cuh"
+#include "../detail/type_traits.cuh"
+#include "../config.cuh"
 
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
+CUB_NAMESPACE_BEGIN
 
-/// CUB namespace
-namespace cub {
-
-/**
- * \addtogroup UtilModule
- * @{
- */
+/// Internal namespace (to prevent ADL mishaps between static functions when mixing different CUB installations)
+namespace internal {
 
 /**
- * \name Sequential reduction over statically-sized array types
- * @{
+ * Sequential reduction over statically-sized array types
  */
-
-
 template <
     int         LENGTH,
     typename    T,
-    typename    ReductionOp>
-__device__ __forceinline__ T ThreadReduce(
+    typename    ReductionOp,
+    typename    PrefixT,
+    typename    AccumT = detail::accumulator_t<ReductionOp, PrefixT, T>> 
+__device__ __forceinline__ AccumT ThreadReduce(
     T*                  input,                  ///< [in] Input array
     ReductionOp         reduction_op,           ///< [in] Binary reduction operator
-    T                   prefix,                 ///< [in] Prefix to seed reduction with
+    PrefixT             prefix,                 ///< [in] Prefix to seed reduction with
     Int2Type<LENGTH>    /*length*/)
 {
-    T addend = *input;
-    prefix = reduction_op(prefix, addend);
+    AccumT retval = prefix;
 
-    return ThreadReduce(input + 1, reduction_op, prefix, Int2Type<LENGTH - 1>());
-}
+    #pragma unroll
+    for (int i = 0; i < LENGTH; ++i)
+        retval = reduction_op(retval, input[i]);
 
-template <
-    typename    T,
-    typename    ReductionOp>
-__device__ __forceinline__ T ThreadReduce(
-    T*                  /*input*/,              ///< [in] Input array
-    ReductionOp         /*reduction_op*/,       ///< [in] Binary reduction operator
-    T                   prefix,                 ///< [in] Prefix to seed reduction with
-    Int2Type<0>         /*length*/)
-{
-    return prefix;
+    return retval;
 }
 
 
@@ -92,11 +77,13 @@ __device__ __forceinline__ T ThreadReduce(
 template <
     int         LENGTH,
     typename    T,
-    typename    ReductionOp>
-__device__ __forceinline__ T ThreadReduce(
+    typename    ReductionOp,
+    typename    PrefixT,
+    typename    AccumT = detail::accumulator_t<ReductionOp, PrefixT, T>> 
+__device__ __forceinline__ AccumT ThreadReduce(
     T*          input,                  ///< [in] Input array
     ReductionOp reduction_op,           ///< [in] Binary reduction operator
-    T           prefix)                 ///< [in] Prefix to seed reduction with
+    PrefixT     prefix)                 ///< [in] Prefix to seed reduction with
 {
     return ThreadReduce(input, reduction_op, prefix, Int2Type<LENGTH>());
 }
@@ -132,11 +119,13 @@ __device__ __forceinline__ T ThreadReduce(
 template <
     int         LENGTH,
     typename    T,
-    typename    ReductionOp>
-__device__ __forceinline__ T ThreadReduce(
+    typename    ReductionOp,
+    typename    PrefixT,
+    typename    AccumT = detail::accumulator_t<ReductionOp, PrefixT, T>> 
+__device__ __forceinline__ AccumT ThreadReduce(
     T           (&input)[LENGTH],       ///< [in] Input array
     ReductionOp reduction_op,           ///< [in] Binary reduction operator
-    T           prefix)                 ///< [in] Prefix to seed reduction with
+    PrefixT     prefix)                 ///< [in] Prefix to seed reduction with
 {
     return ThreadReduce(input, reduction_op, prefix, Int2Type<LENGTH>());
 }
@@ -161,9 +150,5 @@ __device__ __forceinline__ T ThreadReduce(
 }
 
 
-//@}  end member group
-
-/** @} */       // end group UtilModule
-
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
+}               // internal namespace
+CUB_NAMESPACE_END

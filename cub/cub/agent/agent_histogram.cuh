@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -37,15 +37,11 @@
 
 #include "../util_type.cuh"
 #include "../block/block_load.cuh"
+#include "../config.cuh"
 #include "../grid/grid_queue.cuh"
 #include "../iterator/cache_modified_input_iterator.cuh"
-#include "../util_namespace.cuh"
 
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
-namespace cub {
+CUB_NAMESPACE_BEGIN
 
 
 /******************************************************************************
@@ -80,9 +76,9 @@ struct AgentHistogramPolicy
     {
         BLOCK_THREADS           = _BLOCK_THREADS,                   ///< Threads per thread block
         PIXELS_PER_THREAD       = _PIXELS_PER_THREAD,               ///< Pixels per thread (per tile of input)
-        IS_RLE_COMPRESS            = _RLE_COMPRESS,                    ///< Whether to perform localized RLE to compress samples before histogramming
+        IS_RLE_COMPRESS         = _RLE_COMPRESS,                    ///< Whether to perform localized RLE to compress samples before histogramming
         MEM_PREFERENCE          = _MEM_PREFERENCE,                  ///< Whether to prefer privatized shared-memory bins (versus privatized global-memory bins)
-        IS_WORK_STEALING           = _WORK_STEALING,                   ///< Whether to dequeue tiles from a global work queue
+        IS_WORK_STEALING        = _WORK_STEALING,                   ///< Whether to dequeue tiles from a global work queue
     };
 
     static const BlockLoadAlgorithm     LOAD_ALGORITHM          = _LOAD_ALGORITHM;          ///< The BlockLoad algorithm to use
@@ -107,7 +103,7 @@ template <
     typename    PrivatizedDecodeOpT,            ///< The transform operator type for determining privatized counter indices from samples, one for each channel
     typename    OutputDecodeOpT,                ///< The transform operator type for determining output bin-ids from privatized counter indices, one for each channel
     typename    OffsetT,                        ///< Signed integer type for global offsets
-    int         PTX_ARCH = CUB_PTX_ARCH>        ///< PTX compute capability
+    int         LEGACY_PTX_ARCH = 0>            ///< PTX compute capability (unused)
 struct AgentHistogram
 {
     //---------------------------------------------------------------------
@@ -115,13 +111,13 @@ struct AgentHistogram
     //---------------------------------------------------------------------
 
     /// The sample type of the input iterator
-    typedef typename std::iterator_traits<SampleIteratorT>::value_type SampleT;
+    using SampleT = cub::detail::value_t<SampleIteratorT>;
 
     /// The pixel type of SampleT
-    typedef typename CubVector<SampleT, NUM_CHANNELS>::Type PixelT;
+    using PixelT = typename CubVector<SampleT, NUM_CHANNELS>::Type;
 
     /// The quad type of SampleT
-    typedef typename CubVector<SampleT, 4>::Type QuadT;
+    using QuadT = typename CubVector<SampleT, 4>::Type;
 
     /// Constants
     enum
@@ -149,10 +145,12 @@ struct AgentHistogram
 
 
     /// Input iterator wrapper type (for applying cache modifier)
-    typedef typename If<IsPointer<SampleIteratorT>::VALUE,
-            CacheModifiedInputIterator<LOAD_MODIFIER, SampleT, OffsetT>,     // Wrap the native input pointer with CacheModifiedInputIterator
-            SampleIteratorT>::Type                                           // Directly use the supplied input iterator type
-        WrappedSampleIteratorT;
+    // Wrap the native input pointer with CacheModifiedInputIterator
+    // or directly use the supplied input iterator type
+    using WrappedSampleIteratorT = cub::detail::conditional_t<
+      std::is_pointer<SampleIteratorT>::value,
+      CacheModifiedInputIterator<LOAD_MODIFIER, SampleT, OffsetT>,
+      SampleIteratorT>;
 
     /// Pixel input iterator type (for applying cache modifier)
     typedef CacheModifiedInputIterator<LOAD_MODIFIER, PixelT, OffsetT>
@@ -193,12 +191,14 @@ struct AgentHistogram
 
         int tile_idx;
 
-        union
+        // Aliasable storage layout
+        union Aliasable
         {
             typename BlockLoadSampleT::TempStorage sample_load;     // Smem needed for loading a tile of samples
             typename BlockLoadPixelT::TempStorage pixel_load;       // Smem needed for loading a tile of pixels
             typename BlockLoadQuadT::TempStorage quad_load;         // Smem needed for loading a tile of quads
-        };
+
+        } aliasable;
     };
 
 
@@ -305,7 +305,7 @@ struct AgentHistogram
                 CounterT    count       = privatized_histograms[CHANNEL][privatized_bin];
                 bool        is_valid    = count > 0;
 
-                output_decode_op[CHANNEL].BinSelect<LOAD_MODIFIER>((SampleT) privatized_bin, output_bin, is_valid);
+                output_decode_op[CHANNEL].template BinSelect<LOAD_MODIFIER>((SampleT) privatized_bin, output_bin, is_valid);
 
                 if (output_bin >= 0)
                 {
@@ -346,7 +346,6 @@ struct AgentHistogram
         CounterT*           privatized_histograms[NUM_ACTIVE_CHANNELS],
         Int2Type<true>      is_rle_compress)
     {
-
         #pragma unroll
         for (int CHANNEL = 0; CHANNEL < NUM_ACTIVE_CHANNELS; ++CHANNEL)
         {
@@ -357,7 +356,7 @@ struct AgentHistogram
             for (int PIXEL = 0; PIXEL < PIXELS_PER_THREAD; ++PIXEL)
             {
                 bins[PIXEL] = -1;
-                privatized_decode_op[CHANNEL].BinSelect<LOAD_MODIFIER>(samples[PIXEL][CHANNEL], bins[PIXEL], is_valid[PIXEL]);
+                privatized_decode_op[CHANNEL].template BinSelect<LOAD_MODIFIER>(samples[PIXEL][CHANNEL], bins[PIXEL], is_valid[PIXEL]);
             }
 
             CounterT accumulator = 1;
@@ -365,18 +364,16 @@ struct AgentHistogram
             #pragma unroll
             for (int PIXEL = 0; PIXEL < PIXELS_PER_THREAD - 1; ++PIXEL)
             {
-                if (bins[PIXEL] == bins[PIXEL + 1])
-                {
-                     accumulator++;
-                }
-                else
+                if (bins[PIXEL] != bins[PIXEL + 1])
                 {
                     if (bins[PIXEL] >= 0)
                         atomicAdd(privatized_histograms[CHANNEL] + bins[PIXEL], accumulator);
 
-                     accumulator = 1;
+                     accumulator = 0;
                 }
+                accumulator++;
             }
+
             // Last pixel
             if (bins[PIXELS_PER_THREAD - 1] >= 0)
                 atomicAdd(privatized_histograms[CHANNEL] + bins[PIXELS_PER_THREAD - 1], accumulator);
@@ -398,7 +395,7 @@ struct AgentHistogram
             for (int CHANNEL = 0; CHANNEL < NUM_ACTIVE_CHANNELS; ++CHANNEL)
             {
                 int bin = -1;
-                privatized_decode_op[CHANNEL].BinSelect<LOAD_MODIFIER>(samples[PIXEL][CHANNEL], bin, is_valid[PIXEL]);
+                privatized_decode_op[CHANNEL].template BinSelect<LOAD_MODIFIER>(samples[PIXEL][CHANNEL], bin, is_valid[PIXEL]);
                 if (bin >= 0)
                     atomicAdd(privatized_histograms[CHANNEL] + bin, 1);
             }
@@ -451,7 +448,7 @@ struct AgentHistogram
         WrappedPixelIteratorT d_wrapped_pixels((PixelT*) (d_native_samples + block_offset));
 
         // Load using a wrapped pixel iterator
-        BlockLoadPixelT(temp_storage.pixel_load).Load(
+        BlockLoadPixelT(temp_storage.aliasable.pixel_load).Load(
             d_wrapped_pixels,
             reinterpret_cast<AliasedPixels&>(samples));
     }
@@ -468,7 +465,7 @@ struct AgentHistogram
         WrappedQuadIteratorT d_wrapped_quads((QuadT*) (d_native_samples + block_offset));
 
         // Load using a wrapped quad iterator
-        BlockLoadQuadT(temp_storage.quad_load).Load(
+        BlockLoadQuadT(temp_storage.aliasable.quad_load).Load(
             d_wrapped_quads,
             reinterpret_cast<AliasedQuads&>(samples));
     }
@@ -495,7 +492,7 @@ struct AgentHistogram
         typedef SampleT AliasedSamples[SAMPLES_PER_THREAD];
 
         // Load using sample iterator
-        BlockLoadSampleT(temp_storage.sample_load).Load(
+        BlockLoadSampleT(temp_storage.aliasable.sample_load).Load(
             d_wrapped_samples + block_offset,
             reinterpret_cast<AliasedSamples&>(samples));
     }
@@ -515,7 +512,7 @@ struct AgentHistogram
         int valid_pixels = valid_samples / NUM_CHANNELS;
 
         // Load using a wrapped pixel iterator
-        BlockLoadPixelT(temp_storage.pixel_load).Load(
+        BlockLoadPixelT(temp_storage.aliasable.pixel_load).Load(
             d_wrapped_pixels,
             reinterpret_cast<AliasedPixels&>(samples),
             valid_pixels);
@@ -531,7 +528,7 @@ struct AgentHistogram
     {
         typedef SampleT AliasedSamples[SAMPLES_PER_THREAD];
 
-        BlockLoadSampleT(temp_storage.sample_load).Load(
+        BlockLoadSampleT(temp_storage.aliasable.sample_load).Load(
             d_wrapped_samples + block_offset,
             reinterpret_cast<AliasedSamples&>(samples),
             valid_samples);
@@ -565,15 +562,10 @@ struct AgentHistogram
             is_valid[PIXEL] = IS_FULL_TILE || (((threadIdx.x * PIXELS_PER_THREAD + PIXEL) * NUM_CHANNELS) < valid_samples);
 
         // Accumulate samples
-#if CUB_PTX_ARCH >= 120
         if (prefer_smem)
             AccumulateSmemPixels(samples, is_valid);
         else
             AccumulateGmemPixels(samples, is_valid);
-#else
-        AccumulateGmemPixels(samples, is_valid);
-#endif
-
     }
 
 
@@ -703,12 +695,12 @@ struct AgentHistogram
     :
         temp_storage(temp_storage.Alias()),
         d_wrapped_samples(d_samples),
+        d_native_samples(NativePointer(d_wrapped_samples)),
         num_output_bins(num_output_bins),
         num_privatized_bins(num_privatized_bins),
         d_output_histograms(d_output_histograms),
-        privatized_decode_op(privatized_decode_op),
         output_decode_op(output_decode_op),
-        d_native_samples(NativePointer(d_wrapped_samples)),
+        privatized_decode_op(privatized_decode_op),
         prefer_smem((MEM_PREFERENCE == SMEM) ?
             true :                              // prefer smem privatized histograms
             (MEM_PREFERENCE == GMEM) ?
@@ -734,15 +726,20 @@ struct AgentHistogram
         GridQueue<int>      tile_queue)                 ///< Queue descriptor for assigning tiles of work to thread blocks
     {
         // Check whether all row starting offsets are quad-aligned (in single-channel) or pixel-aligned (in multi-channel)
-        size_t  row_bytes           = sizeof(SampleT) * row_stride_samples;
-        size_t  offset_mask         = size_t(d_native_samples) | row_bytes;
-        int     quad_mask           = sizeof(SampleT) * 4 - 1;
+        int     quad_mask           = AlignBytes<QuadT>::ALIGN_BYTES - 1;
         int     pixel_mask          = AlignBytes<PixelT>::ALIGN_BYTES - 1;
-        bool    quad_aligned_rows   = (NUM_CHANNELS == 1) && ((offset_mask & quad_mask) == 0);
-        bool    pixel_aligned_rows  = (NUM_CHANNELS > 1) && ((offset_mask & pixel_mask) == 0);
+        size_t  row_bytes           = sizeof(SampleT) * row_stride_samples;
+
+        bool quad_aligned_rows      = (NUM_CHANNELS == 1) && (SAMPLES_PER_THREAD % 4 == 0) &&     // Single channel
+                                        ((size_t(d_native_samples) & quad_mask) == 0) &&        // ptr is quad-aligned
+                                        ((num_rows == 1) || ((row_bytes & quad_mask) == 0));    // number of row-samples is a multiple of the alignment of the quad
+
+        bool pixel_aligned_rows     = (NUM_CHANNELS > 1) &&                                     // Multi channel
+                                        ((size_t(d_native_samples) & pixel_mask) == 0) &&       // ptr is pixel-aligned
+                                        ((row_bytes & pixel_mask) == 0);                        // number of row-samples is a multiple of the alignment of the pixel
 
         // Whether rows are aligned and can be vectorized
-        if (quad_aligned_rows || pixel_aligned_rows)
+        if ((d_native_samples != NULL) && (quad_aligned_rows || pixel_aligned_rows))
             ConsumeTiles<true>(num_row_pixels, num_rows, row_stride_samples, tiles_per_row, tile_queue, Int2Type<IS_WORK_STEALING>());
         else
             ConsumeTiles<false>(num_row_pixels, num_rows, row_stride_samples, tiles_per_row, tile_queue, Int2Type<IS_WORK_STEALING>());
@@ -775,9 +772,4 @@ struct AgentHistogram
 
 };
 
-
-
-
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
-
+CUB_NAMESPACE_END

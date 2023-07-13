@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -36,16 +36,12 @@
 #include "specializations/block_reduce_raking.cuh"
 #include "specializations/block_reduce_raking_commutative_only.cuh"
 #include "specializations/block_reduce_warp_reductions.cuh"
+#include "../config.cuh"
 #include "../util_ptx.cuh"
 #include "../util_type.cuh"
 #include "../thread/thread_operators.cuh"
-#include "../util_namespace.cuh"
 
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
-namespace cub {
+CUB_NAMESPACE_BEGIN
 
 
 
@@ -55,7 +51,7 @@ namespace cub {
 
 /**
  * BlockReduceAlgorithm enumerates alternative algorithms for parallel
- * reduction across a CUDA threadblock.
+ * reduction across a CUDA thread block.
  */
 enum BlockReduceAlgorithm
 {
@@ -76,7 +72,7 @@ enum BlockReduceAlgorithm
      *
      * \par
      * \image html block_reduce.png
-     * <div class="centercaption">\p BLOCK_REDUCE_RAKING data flow for a hypothetical 16-thread threadblock and 4-thread raking warp.</div>
+     * <div class="centercaption">\p BLOCK_REDUCE_RAKING data flow for a hypothetical 16-thread thread block and 4-thread raking warp.</div>
      *
      * \par Performance Considerations
      * - This variant performs less communication than BLOCK_REDUCE_RAKING_NON_COMMUTATIVE
@@ -106,7 +102,7 @@ enum BlockReduceAlgorithm
      *
      * \par
      * \image html block_reduce.png
-     * <div class="centercaption">\p BLOCK_REDUCE_RAKING data flow for a hypothetical 16-thread threadblock and 4-thread raking warp.</div>
+     * <div class="centercaption">\p BLOCK_REDUCE_RAKING data flow for a hypothetical 16-thread thread block and 4-thread raking warp.</div>
      *
      * \par Performance Considerations
      * - This variant performs more communication than BLOCK_REDUCE_RAKING
@@ -137,7 +133,7 @@ enum BlockReduceAlgorithm
      *
      * \par
      * \image html block_scan_warpscans.png
-     * <div class="centercaption">\p BLOCK_REDUCE_WARP_REDUCTIONS data flow for a hypothetical 16-thread threadblock and 4-thread raking warp.</div>
+     * <div class="centercaption">\p BLOCK_REDUCE_WARP_REDUCTIONS data flow for a hypothetical 16-thread thread block and 4-thread raking warp.</div>
      *
      * \par Performance Considerations
      * - This variant applies more reduction operators than BLOCK_REDUCE_RAKING
@@ -162,7 +158,7 @@ enum BlockReduceAlgorithm
  * \tparam ALGORITHM        <b>[optional]</b> cub::BlockReduceAlgorithm enumerator specifying the underlying algorithm to use (default: cub::BLOCK_REDUCE_WARP_REDUCTIONS)
  * \tparam BLOCK_DIM_Y      <b>[optional]</b> The thread block length in threads along the Y dimension (default: 1)
  * \tparam BLOCK_DIM_Z      <b>[optional]</b> The thread block length in threads along the Z dimension (default: 1)
- * \tparam PTX_ARCH         <b>[optional]</b> \ptxversion
+ * \tparam LEGACY_PTX_ARCH  <b>[optional]</b> Unused.
  *
  * \par Overview
  * - A <a href="http://en.wikipedia.org/wiki/Reduce_(higher-order_function)"><em>reduction</em></a> (or <em>fold</em>)
@@ -195,7 +191,7 @@ enum BlockReduceAlgorithm
  *
  * __global__ void ExampleKernel(...)
  * {
- *     // Specialize BlockReduce for a 1D block of 128 threads on type int
+ *     // Specialize BlockReduce for a 1D block of 128 threads of type int
  *     typedef cub::BlockReduce<int, 128> BlockReduce;
  *
  *     // Allocate shared memory for BlockReduce
@@ -210,6 +206,11 @@ enum BlockReduceAlgorithm
  *
  * \endcode
  *
+ * \par Re-using dynamically allocating shared memory
+ * The following example under the examples/block folder illustrates usage of
+ * dynamically shared memory with BlockReduce and how to re-purpose
+ * the same memory region:
+ * <a href="../../examples/block/example_block_reduce_dyn_smem.cu">example_block_reduce_dyn_smem.cu</a>
  */
 template <
     typename                T,
@@ -217,7 +218,7 @@ template <
     BlockReduceAlgorithm    ALGORITHM       = BLOCK_REDUCE_WARP_REDUCTIONS,
     int                     BLOCK_DIM_Y     = 1,
     int                     BLOCK_DIM_Z     = 1,
-    int                     PTX_ARCH        = CUB_PTX_ARCH>
+    int                     LEGACY_PTX_ARCH = 0>
 class BlockReduce
 {
 private:
@@ -233,16 +234,17 @@ private:
         BLOCK_THREADS = BLOCK_DIM_X * BLOCK_DIM_Y * BLOCK_DIM_Z,
     };
 
-    typedef BlockReduceWarpReductions<T, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z, PTX_ARCH>           WarpReductions;
-    typedef BlockReduceRakingCommutativeOnly<T, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z, PTX_ARCH>    RakingCommutativeOnly;
-    typedef BlockReduceRaking<T, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z, PTX_ARCH>                   Raking;
+    typedef BlockReduceWarpReductions<T, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z>           WarpReductions;
+    typedef BlockReduceRakingCommutativeOnly<T, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z>    RakingCommutativeOnly;
+    typedef BlockReduceRaking<T, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z>                   Raking;
 
     /// Internal specialization type
-    typedef typename If<(ALGORITHM == BLOCK_REDUCE_WARP_REDUCTIONS),
-        WarpReductions,
-        typename If<(ALGORITHM == BLOCK_REDUCE_RAKING_COMMUTATIVE_ONLY),
-            RakingCommutativeOnly,
-            Raking>::Type>::Type InternalBlockReduce;     // BlockReduceRaking
+    using InternalBlockReduce = cub::detail::conditional_t<
+      ALGORITHM == BLOCK_REDUCE_WARP_REDUCTIONS,
+      WarpReductions,
+      cub::detail::conditional_t<ALGORITHM == BLOCK_REDUCE_RAKING_COMMUTATIVE_ONLY,
+                                 RakingCommutativeOnly,
+                                 Raking>>; // BlockReduceRaking
 
     /// Shared memory storage layout type for BlockReduce
     typedef typename InternalBlockReduce::TempStorage _TempStorage;
@@ -327,7 +329,7 @@ public:
      *
      * __global__ void ExampleKernel(...)
      * {
-     *     // Specialize BlockReduce for a 1D block of 128 threads on type int
+     *     // Specialize BlockReduce for a 1D block of 128 threads of type int
      *     typedef cub::BlockReduce<int, 128> BlockReduce;
      *
      *     // Allocate shared memory for BlockReduce
@@ -371,7 +373,7 @@ public:
      *
      * __global__ void ExampleKernel(...)
      * {
-     *     // Specialize BlockReduce for a 1D block of 128 threads on type int
+     *     // Specialize BlockReduce for a 1D block of 128 threads of type int
      *     typedef cub::BlockReduce<int, 128> BlockReduce;
      *
      *     // Allocate shared memory for BlockReduce
@@ -397,7 +399,7 @@ public:
         ReductionOp     reduction_op)                   ///< [in] Binary reduction functor 
     {
         // Reduce partials
-        T partial = ThreadReduce(inputs, reduction_op);
+        T partial = internal::ThreadReduce(inputs, reduction_op);
         return Reduce(partial, reduction_op);
     }
 
@@ -419,7 +421,7 @@ public:
      *
      * __global__ void ExampleKernel(int num_valid, ...)
      * {
-     *     // Specialize BlockReduce for a 1D block of 128 threads on type int
+     *     // Specialize BlockReduce for a 1D block of 128 threads of type int
      *     typedef cub::BlockReduce<int, 128> BlockReduce;
      *
      *     // Allocate shared memory for BlockReduce
@@ -478,7 +480,7 @@ public:
      *
      * __global__ void ExampleKernel(...)
      * {
-     *     // Specialize BlockReduce for a 1D block of 128 threads on type int
+     *     // Specialize BlockReduce for a 1D block of 128 threads of type int
      *     typedef cub::BlockReduce<int, 128> BlockReduce;
      *
      *     // Allocate shared memory for BlockReduce
@@ -518,7 +520,7 @@ public:
      *
      * __global__ void ExampleKernel(...)
      * {
-     *     // Specialize BlockReduce for a 1D block of 128 threads on type int
+     *     // Specialize BlockReduce for a 1D block of 128 threads of type int
      *     typedef cub::BlockReduce<int, 128> BlockReduce;
      *
      *     // Allocate shared memory for BlockReduce
@@ -540,7 +542,7 @@ public:
         T   (&inputs)[ITEMS_PER_THREAD])    ///< [in] Calling thread's input segment
     {
         // Reduce partials
-        T partial = ThreadReduce(inputs, cub::Sum());
+        T partial = internal::ThreadReduce(inputs, cub::Sum());
         return Sum(partial);
     }
 
@@ -562,7 +564,7 @@ public:
      *
      * __global__ void ExampleKernel(int num_valid, ...)
      * {
-     *     // Specialize BlockReduce for a 1D block of 128 threads on type int
+     *     // Specialize BlockReduce for a 1D block of 128 threads of type int
      *     typedef cub::BlockReduce<int, 128> BlockReduce;
      *
      *     // Allocate shared memory for BlockReduce
@@ -602,6 +604,5 @@ public:
  * \example example_block_reduce.cu
  */
 
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
+CUB_NAMESPACE_END
 

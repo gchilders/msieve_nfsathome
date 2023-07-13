@@ -1,7 +1,7 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
- * 
+ * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *     * Redistributions of source code must retain the above copyright
@@ -12,7 +12,7 @@
  *     * Neither the name of the NVIDIA CORPORATION nor the
  *       names of its contributors may be used to endorse or promote products
  *       derived from this software without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
  * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -33,17 +33,11 @@
 
 #pragma once
 
-#include <cuda.h>
+#include <cub/config.cuh>
+#include <cub/util_ptx.cuh>
+#include <cub/util_type.cuh>
 
-#include "../util_ptx.cuh"
-#include "../util_type.cuh"
-#include "../util_namespace.cuh"
-
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
-namespace cub {
+CUB_NAMESPACE_BEGIN
 
 /**
  * \addtogroup UtilIo
@@ -263,18 +257,10 @@ struct IterateThreadStore<MAX, MAX>
 /**
  * Define ThreadStore specializations for the various Cache load modifiers
  */
-#if CUB_PTX_ARCH >= 200
-    _CUB_STORE_ALL(STORE_WB, wb)
-    _CUB_STORE_ALL(STORE_CG, cg)
-    _CUB_STORE_ALL(STORE_CS, cs)
-    _CUB_STORE_ALL(STORE_WT, wt)
-#else
-    _CUB_STORE_ALL(STORE_WB, global)
-    _CUB_STORE_ALL(STORE_CG, global)
-    _CUB_STORE_ALL(STORE_CS, global)
-    _CUB_STORE_ALL(STORE_WT, volatile.global)
-#endif
-
+_CUB_STORE_ALL(STORE_WB, wb)
+_CUB_STORE_ALL(STORE_CG, cg)
+_CUB_STORE_ALL(STORE_CS, cs)
+_CUB_STORE_ALL(STORE_WT, wt)
 
 // Macro cleanup
 #undef _CUB_STORE_ALL
@@ -336,12 +322,12 @@ __device__ __forceinline__ void ThreadStoreVolatilePtr(
     Int2Type<false>             /*is_primitive*/)
 {
     // Create a temporary using shuffle-words, then store using volatile-words
-    typedef typename UnitWord<T>::VolatileWord  VolatileWord;  
+    typedef typename UnitWord<T>::VolatileWord  VolatileWord;
     typedef typename UnitWord<T>::ShuffleWord   ShuffleWord;
 
     const int VOLATILE_MULTIPLE = sizeof(T) / sizeof(VolatileWord);
     const int SHUFFLE_MULTIPLE  = sizeof(T) / sizeof(ShuffleWord);
-    
+
     VolatileWord words[VOLATILE_MULTIPLE];
 
     #pragma unroll
@@ -379,12 +365,12 @@ __device__ __forceinline__ void ThreadStore(
     Int2Type<true>              /*is_pointer*/)
 {
     // Create a temporary using shuffle-words, then store using device-words
-    typedef typename UnitWord<T>::DeviceWord    DeviceWord;  
+    typedef typename UnitWord<T>::DeviceWord    DeviceWord;
     typedef typename UnitWord<T>::ShuffleWord   ShuffleWord;
 
     const int DEVICE_MULTIPLE   = sizeof(T) / sizeof(DeviceWord);
     const int SHUFFLE_MULTIPLE  = sizeof(T) / sizeof(ShuffleWord);
-    
+
     DeviceWord words[DEVICE_MULTIPLE];
 
     #pragma unroll
@@ -407,7 +393,7 @@ __device__ __forceinline__ void ThreadStore(OutputIteratorT itr, T val)
         itr,
         val,
         Int2Type<MODIFIER>(),
-        Int2Type<IsPointer<OutputIteratorT>::VALUE>());
+        Int2Type<std::is_pointer<OutputIteratorT>::value>());
 }
 
 
@@ -418,5 +404,4 @@ __device__ __forceinline__ void ThreadStore(OutputIteratorT itr, T val)
 /** @} */       // end group UtilIo
 
 
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
+CUB_NAMESPACE_END

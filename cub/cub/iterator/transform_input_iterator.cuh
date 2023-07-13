@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -38,8 +38,8 @@
 
 #include "../thread/thread_load.cuh"
 #include "../thread/thread_store.cuh"
+#include "../config.cuh"
 #include "../util_device.cuh"
-#include "../util_namespace.cuh"
 
 #if (THRUST_VERSION >= 100700)
     // This iterator is compatible with Thrust API 1.7 and newer
@@ -48,11 +48,7 @@
 #endif // THRUST_VERSION
 
 
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
-namespace cub {
+CUB_NAMESPACE_BEGIN
 
 /**
  * \addtogroup UtilIterator
@@ -85,7 +81,7 @@ namespace cub {
  * {
  *     __host__ __device__ __forceinline__
  *     double operator()(const int &a) const {
- *         return double(a * 2);
+ *         return double(a * 3);
  *     }
  * };
  *
@@ -127,9 +123,9 @@ public:
 
 #if (THRUST_VERSION >= 100700)
     // Use Thrust's iterator categories so we can use these iterators in Thrust 1.7 (or newer) methods
-    typedef typename thrust::detail::iterator_facade_category<
-        thrust::any_system_tag,
-        thrust::random_access_traversal_tag,
+    typedef typename THRUST_NS_QUALIFIER::detail::iterator_facade_category<
+        THRUST_NS_QUALIFIER::any_system_tag,
+        THRUST_NS_QUALIFIER::random_access_traversal_tag,
         value_type,
         reference
       >::type iterator_category;                                        ///< The iterator category
@@ -219,12 +215,6 @@ public:
         return conversion_op(input_itr[n]);
     }
 
-    /// Structure dereference
-    __host__ __device__ __forceinline__ pointer operator->()
-    {
-        return &conversion_op(*input_itr);
-    }
-
     /// Equal to
     __host__ __device__ __forceinline__ bool operator==(const self_type& rhs)
     {
@@ -238,7 +228,7 @@ public:
     }
 
     /// ostream operator
-    friend std::ostream& operator<<(std::ostream& os, const self_type& itr)
+    friend std::ostream& operator<<(std::ostream& os, const self_type& /* itr */)
     {
         return os;
     }
@@ -248,5 +238,4 @@ public:
 
 /** @} */       // end group UtilIterator
 
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
+CUB_NAMESPACE_END

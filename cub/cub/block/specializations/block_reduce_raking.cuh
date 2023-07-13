@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -36,14 +36,10 @@
 #include "../../block/block_raking_layout.cuh"
 #include "../../warp/warp_reduce.cuh"
 #include "../../thread/thread_reduce.cuh"
+#include "../../config.cuh"
 #include "../../util_ptx.cuh"
-#include "../../util_namespace.cuh"
 
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
-namespace cub {
+CUB_NAMESPACE_BEGIN
 
 
 /**
@@ -55,16 +51,16 @@ namespace cub {
  * honor the relative ordering of items and partial reductions when applying the
  * reduction operator.
  *
- * Compared to the implementation of BlockReduceRaking (which does not support
- * non-commutative operators), this implementation requires a few extra
- * rounds of inter-thread communication.
+ * Compared to the implementation of BlockReduceRakingCommutativeOnly (which
+ * does not support non-commutative operators), this implementation requires a
+ * few extra rounds of inter-thread communication.
  */
 template <
     typename    T,              ///< Data type being reduced
     int         BLOCK_DIM_X,    ///< The thread block length in threads along the X dimension
     int         BLOCK_DIM_Y,    ///< The thread block length in threads along the Y dimension
     int         BLOCK_DIM_Z,    ///< The thread block length in threads along the Z dimension
-    int         PTX_ARCH>       ///< The PTX compute capability for which to to specialize this collective
+    int         LEGACY_PTX_ARCH = 0> ///< The PTX compute capability for which to to specialize this collective
 struct BlockReduceRaking
 {
     /// Constants
@@ -75,10 +71,10 @@ struct BlockReduceRaking
     };
 
     /// Layout type for padded thread block raking grid
-    typedef BlockRakingLayout<T, BLOCK_THREADS, PTX_ARCH> BlockRakingLayout;
+    typedef BlockRakingLayout<T, BLOCK_THREADS> BlockRakingLayout;
 
     ///  WarpReduce utility type
-    typedef typename WarpReduce<T, BlockRakingLayout::RAKING_THREADS, PTX_ARCH>::InternalWarpReduce WarpReduce;
+    typedef typename WarpReduce<T, BlockRakingLayout::RAKING_THREADS>::InternalWarpReduce WarpReduce;
 
     /// Constants
     enum
@@ -90,7 +86,7 @@ struct BlockReduceRaking
         SEGMENT_LENGTH = BlockRakingLayout::SEGMENT_LENGTH,
 
         /// Cooperative work can be entirely warp synchronous
-        WARP_SYNCHRONOUS = (RAKING_THREADS == BLOCK_THREADS),
+        WARP_SYNCHRONOUS = (int(RAKING_THREADS) == int(BLOCK_THREADS)),
 
         /// Whether or not warp-synchronous reduction should be unguarded (i.e., the warp-reduction elements is a power of two
         WARP_SYNCHRONOUS_UNGUARDED = PowerOfTwo<RAKING_THREADS>::VALUE,
@@ -105,7 +101,7 @@ struct BlockReduceRaking
     union _TempStorage
     {
         typename WarpReduce::TempStorage            warp_storage;        ///< Storage for warp-synchronous reduction
-        typename BlockRakingLayout::TempStorage     raking_grid;         ///< Padded threadblock raking grid
+        typename BlockRakingLayout::TempStorage     raking_grid;         ///< Padded thread block raking grid
     };
 
 
@@ -157,7 +153,7 @@ struct BlockReduceRaking
 
 
 
-    /// Computes a threadblock-wide reduction using the specified reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
+    /// Computes a thread block-wide reduction using the specified reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
     template <
         bool                IS_FULL_TILE,
         typename            ReductionOp>
@@ -169,7 +165,7 @@ struct BlockReduceRaking
         if (WARP_SYNCHRONOUS)
         {
             // Short-circuit directly to warp synchronous reduction (unguarded if active threads is a power-of-two)
-            partial = WarpReduce(temp_storage.warp_storage).template Reduce<IS_FULL_TILE, SEGMENT_LENGTH>(
+            partial = WarpReduce(temp_storage.warp_storage).template Reduce<IS_FULL_TILE>(
                 partial,
                 num_valid,
                 reduction_op);
@@ -190,9 +186,13 @@ struct BlockReduceRaking
 
                 partial = RakingReduction<IS_FULL_TILE>(reduction_op, raking_segment, partial, num_valid, Int2Type<1>());
 
-                partial = WarpReduce(temp_storage.warp_storage).template Reduce<IS_FULL_TILE && RAKING_UNGUARDED, SEGMENT_LENGTH>(
+                int valid_raking_threads = (IS_FULL_TILE) ?
+                    RAKING_THREADS :
+                    (num_valid + SEGMENT_LENGTH - 1) / SEGMENT_LENGTH;
+
+                partial = WarpReduce(temp_storage.warp_storage).template Reduce<IS_FULL_TILE && RAKING_UNGUARDED>(
                     partial,
-                    num_valid,
+                    valid_raking_threads,
                     reduction_op);
 
             }
@@ -202,7 +202,7 @@ struct BlockReduceRaking
     }
 
 
-    /// Computes a threadblock-wide reduction using addition (+) as the reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
+    /// Computes a thread block-wide reduction using addition (+) as the reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
     template <bool IS_FULL_TILE>
     __device__ __forceinline__ T Sum(
         T                   partial,            ///< [in] Calling thread's input partial reductions
@@ -217,6 +217,5 @@ struct BlockReduceRaking
 
 };
 
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
+CUB_NAMESPACE_END
 

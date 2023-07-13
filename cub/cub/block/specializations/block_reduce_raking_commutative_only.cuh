@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -36,14 +36,10 @@
 #include "block_reduce_raking.cuh"
 #include "../../warp/warp_reduce.cuh"
 #include "../../thread/thread_reduce.cuh"
+#include "../../config.cuh"
 #include "../../util_ptx.cuh"
-#include "../../util_namespace.cuh"
 
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
-namespace cub {
+CUB_NAMESPACE_BEGIN
 
 
 /**
@@ -54,7 +50,7 @@ template <
     int         BLOCK_DIM_X,    ///< The thread block length in threads along the X dimension
     int         BLOCK_DIM_Y,    ///< The thread block length in threads along the Y dimension
     int         BLOCK_DIM_Z,    ///< The thread block length in threads along the Z dimension
-    int         PTX_ARCH>       ///< The PTX compute capability for which to to specialize this collective
+    int         LEGACY_PTX_ARCH = 0> ///< The PTX compute capability for which to to specialize this collective
 struct BlockReduceRakingCommutativeOnly
 {
     /// Constants
@@ -65,13 +61,13 @@ struct BlockReduceRakingCommutativeOnly
     };
 
     // The fall-back implementation to use when BLOCK_THREADS is not a multiple of the warp size or not all threads have valid values
-    typedef BlockReduceRaking<T, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z, PTX_ARCH> FallBack;
+    typedef BlockReduceRaking<T, BLOCK_DIM_X, BLOCK_DIM_Y, BLOCK_DIM_Z> FallBack;
 
     /// Constants
     enum
     {
         /// Number of warp threads
-        WARP_THREADS = CUB_WARP_THREADS(PTX_ARCH),
+        WARP_THREADS = CUB_WARP_THREADS(0),
 
         /// Whether or not to use fall-back
         USE_FALLBACK = ((BLOCK_THREADS % WARP_THREADS != 0) || (BLOCK_THREADS <= WARP_THREADS)),
@@ -87,23 +83,21 @@ struct BlockReduceRakingCommutativeOnly
     };
 
     ///  WarpReduce utility type
-    typedef WarpReduce<T, RAKING_THREADS, PTX_ARCH> WarpReduce;
+    typedef WarpReduce<T, RAKING_THREADS> WarpReduce;
 
     /// Layout type for padded thread block raking grid
-    typedef BlockRakingLayout<T, SHARING_THREADS, PTX_ARCH> BlockRakingLayout;
+    typedef BlockRakingLayout<T, SHARING_THREADS> BlockRakingLayout;
 
     /// Shared memory storage layout type
-    struct _TempStorage
+    union _TempStorage
     {
-        union
+        struct DefaultStorage
         {
-            struct
-            {
-                typename WarpReduce::TempStorage        warp_storage;        ///< Storage for warp-synchronous reduction
-                typename BlockRakingLayout::TempStorage raking_grid;         ///< Padded threadblock raking grid
-            };
-            typename FallBack::TempStorage              fallback_storage;    ///< Fall-back storage for non-commutative block scan
-        };
+            typename WarpReduce::TempStorage        warp_storage;        ///< Storage for warp-synchronous reduction
+            typename BlockRakingLayout::TempStorage raking_grid;         ///< Padded thread block raking grid
+        } default_storage;
+
+        typename FallBack::TempStorage              fallback_storage;    ///< Fall-back storage for non-commutative block scan
     };
 
 
@@ -125,7 +119,7 @@ struct BlockReduceRakingCommutativeOnly
     {}
 
 
-    /// Computes a threadblock-wide reduction using addition (+) as the reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
+    /// Computes a thread block-wide reduction using addition (+) as the reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
     template <bool FULL_TILE>
     __device__ __forceinline__ T Sum(
         T                   partial,            ///< [in] Calling thread's input partial reductions
@@ -139,7 +133,7 @@ struct BlockReduceRakingCommutativeOnly
         {
             // Place partial into shared memory grid
             if (linear_tid >= RAKING_THREADS)
-                *BlockRakingLayout::PlacementPtr(temp_storage.raking_grid, linear_tid - RAKING_THREADS) = partial;
+                *BlockRakingLayout::PlacementPtr(temp_storage.default_storage.raking_grid, linear_tid - RAKING_THREADS) = partial;
 
             CTA_SYNC();
 
@@ -147,11 +141,11 @@ struct BlockReduceRakingCommutativeOnly
             if (linear_tid < RAKING_THREADS)
             {
                 // Raking reduction in grid
-                T *raking_segment = BlockRakingLayout::RakingPtr(temp_storage.raking_grid, linear_tid);
-                partial = ThreadReduce<SEGMENT_LENGTH>(raking_segment, cub::Sum(), partial);
+                T *raking_segment = BlockRakingLayout::RakingPtr(temp_storage.default_storage.raking_grid, linear_tid);
+                partial = internal::ThreadReduce<SEGMENT_LENGTH>(raking_segment, cub::Sum(), partial);
 
                 // Warpscan
-                partial = WarpReduce(temp_storage.warp_storage).Sum(partial);
+                partial = WarpReduce(temp_storage.default_storage.warp_storage).Sum(partial);
             }
         }
 
@@ -159,7 +153,7 @@ struct BlockReduceRakingCommutativeOnly
     }
 
 
-    /// Computes a threadblock-wide reduction using the specified reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
+    /// Computes a thread block-wide reduction using the specified reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
     template <
         bool                FULL_TILE,
         typename            ReductionOp>
@@ -176,7 +170,7 @@ struct BlockReduceRakingCommutativeOnly
         {
             // Place partial into shared memory grid
             if (linear_tid >= RAKING_THREADS)
-                *BlockRakingLayout::PlacementPtr(temp_storage.raking_grid, linear_tid - RAKING_THREADS) = partial;
+                *BlockRakingLayout::PlacementPtr(temp_storage.default_storage.raking_grid, linear_tid - RAKING_THREADS) = partial;
 
             CTA_SYNC();
 
@@ -184,11 +178,11 @@ struct BlockReduceRakingCommutativeOnly
             if (linear_tid < RAKING_THREADS)
             {
                 // Raking reduction in grid
-                T *raking_segment = BlockRakingLayout::RakingPtr(temp_storage.raking_grid, linear_tid);
-                partial = ThreadReduce<SEGMENT_LENGTH>(raking_segment, reduction_op, partial);
+                T *raking_segment = BlockRakingLayout::RakingPtr(temp_storage.default_storage.raking_grid, linear_tid);
+                partial = internal::ThreadReduce<SEGMENT_LENGTH>(raking_segment, reduction_op, partial);
 
                 // Warpscan
-                partial = WarpReduce(temp_storage.warp_storage).Reduce(partial, reduction_op);
+                partial = WarpReduce(temp_storage.default_storage.warp_storage).Reduce(partial, reduction_op);
             }
         }
 
@@ -197,6 +191,5 @@ struct BlockReduceRakingCommutativeOnly
 
 };
 
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
+CUB_NAMESPACE_END
 

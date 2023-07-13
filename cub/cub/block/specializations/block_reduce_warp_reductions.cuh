@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2011, Duane Merrill.  All rights reserved.
- * Copyright (c) 2011-2016, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2011-2018, NVIDIA CORPORATION.  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -28,32 +28,28 @@
 
 /**
  * \file
- * cub::BlockReduceWarpReductions provides variants of warp-reduction-based parallel reduction across a CUDA threadblock.  Supports non-commutative reduction operators.
+ * cub::BlockReduceWarpReductions provides variants of warp-reduction-based parallel reduction across a CUDA thread block.  Supports non-commutative reduction operators.
  */
 
 #pragma once
 
-#include "../../warp/warp_reduce.cuh"
-#include "../../util_ptx.cuh"
-#include "../../util_arch.cuh"
-#include "../../util_namespace.cuh"
+#include <cub/config.cuh>
+#include <cub/detail/uninitialized_copy.cuh>
+#include <cub/util_ptx.cuh>
+#include <cub/warp/warp_reduce.cuh>
 
-/// Optional outer namespace(s)
-CUB_NS_PREFIX
-
-/// CUB namespace
-namespace cub {
+CUB_NAMESPACE_BEGIN
 
 
 /**
- * \brief BlockReduceWarpReductions provides variants of warp-reduction-based parallel reduction across a CUDA threadblock.  Supports non-commutative reduction operators.
+ * \brief BlockReduceWarpReductions provides variants of warp-reduction-based parallel reduction across a CUDA thread block.  Supports non-commutative reduction operators.
  */
 template <
     typename    T,              ///< Data type being reduced
     int         BLOCK_DIM_X,    ///< The thread block length in threads along the X dimension
     int         BLOCK_DIM_Y,    ///< The thread block length in threads along the Y dimension
     int         BLOCK_DIM_Z,    ///< The thread block length in threads along the Z dimension
-    int         PTX_ARCH>       ///< The PTX compute capability for which to to specialize this collective
+    int         LEGACY_PTX_ARCH = 0> ///< The PTX compute capability for which to to specialize this collective
 struct BlockReduceWarpReductions
 {
     /// Constants
@@ -63,7 +59,7 @@ struct BlockReduceWarpReductions
         BLOCK_THREADS = BLOCK_DIM_X * BLOCK_DIM_Y * BLOCK_DIM_Z,
 
         /// Number of warp threads
-        WARP_THREADS = CUB_WARP_THREADS(PTX_ARCH),
+        WARP_THREADS = CUB_WARP_THREADS(0),
 
         /// Number of active warps
         WARPS = (BLOCK_THREADS + WARP_THREADS - 1) / WARP_THREADS,
@@ -71,21 +67,21 @@ struct BlockReduceWarpReductions
         /// The logical warp size for warp reductions
         LOGICAL_WARP_SIZE = CUB_MIN(BLOCK_THREADS, WARP_THREADS),
 
-        /// Whether or not the logical warp size evenly divides the threadblock size
+        /// Whether or not the logical warp size evenly divides the thread block size
         EVEN_WARP_MULTIPLE = (BLOCK_THREADS % LOGICAL_WARP_SIZE == 0)
     };
 
 
     ///  WarpReduce utility type
-    typedef typename WarpReduce<T, LOGICAL_WARP_SIZE, PTX_ARCH>::InternalWarpReduce WarpReduce;
+    typedef typename WarpReduce<T, LOGICAL_WARP_SIZE>::InternalWarpReduce WarpReduce;
 
 
     /// Shared memory storage layout type
     struct _TempStorage
     {
-        typename WarpReduce::TempStorage    warp_reduce[WARPS];                ///< Buffer for warp-synchronous scan
+        typename WarpReduce::TempStorage    warp_reduce[WARPS];         ///< Buffer for warp-synchronous scan
         T                                   warp_aggregates[WARPS];     ///< Shared totals from each warp-synchronous scan
-        T                                   block_prefix;               ///< Shared prefix for the entire threadblock
+        T                                   block_prefix;               ///< Shared prefix for the entire thread block
     };
 
     /// Alias wrapper allowing storage to be unioned
@@ -94,9 +90,9 @@ struct BlockReduceWarpReductions
 
     // Thread fields
     _TempStorage &temp_storage;
-    unsigned int linear_tid;
-    unsigned int warp_id;
-    unsigned int lane_id;
+    int linear_tid;
+    int warp_id;
+    int lane_id;
 
 
     /// Constructor
@@ -148,7 +144,8 @@ struct BlockReduceWarpReductions
         // Share lane aggregates
         if (lane_id == 0)
         {
-            temp_storage.warp_aggregates[warp_id] = warp_aggregate;
+          detail::uninitialized_copy(temp_storage.warp_aggregates + warp_id,
+                                     warp_aggregate);
         }
 
         CTA_SYNC();
@@ -163,22 +160,20 @@ struct BlockReduceWarpReductions
     }
 
 
-    /// Computes a threadblock-wide reduction using addition (+) as the reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
+    /// Computes a thread block-wide reduction using addition (+) as the reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
     template <bool FULL_TILE>
     __device__ __forceinline__ T Sum(
         T                   input,          ///< [in] Calling thread's input partial reductions
         int                 num_valid)      ///< [in] Number of valid elements (may be less than BLOCK_THREADS)
     {
-        cub::Sum        reduction_op;
-        unsigned int    warp_offset = warp_id * LOGICAL_WARP_SIZE;
-        unsigned int    warp_num_valid = (FULL_TILE && EVEN_WARP_MULTIPLE) ?
+        cub::Sum    reduction_op;
+        int         warp_offset = (warp_id * LOGICAL_WARP_SIZE);
+        int         warp_num_valid = ((FULL_TILE && EVEN_WARP_MULTIPLE) || (warp_offset + LOGICAL_WARP_SIZE <= num_valid)) ?
                             LOGICAL_WARP_SIZE :
-                            (warp_offset < num_valid) ?
-                                num_valid - warp_offset :
-                                0;
+                            num_valid - warp_offset;
 
         // Warp reduction in every warp
-        T warp_aggregate = WarpReduce(temp_storage.warp_reduce[warp_id]).template Reduce<(FULL_TILE && EVEN_WARP_MULTIPLE), 1>(
+        T warp_aggregate = WarpReduce(temp_storage.warp_reduce[warp_id]).template Reduce<(FULL_TILE && EVEN_WARP_MULTIPLE)>(
             input,
             warp_num_valid,
             cub::Sum());
@@ -188,7 +183,7 @@ struct BlockReduceWarpReductions
     }
 
 
-    /// Computes a threadblock-wide reduction using the specified reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
+    /// Computes a thread block-wide reduction using the specified reduction operator. The first num_valid threads each contribute one reduction partial.  The return value is only valid for thread<sub>0</sub>.
     template <
         bool                FULL_TILE,
         typename            ReductionOp>
@@ -197,15 +192,13 @@ struct BlockReduceWarpReductions
         int                 num_valid,          ///< [in] Number of valid elements (may be less than BLOCK_THREADS)
         ReductionOp         reduction_op)       ///< [in] Binary reduction operator
     {
-        unsigned int    warp_offset = warp_id * LOGICAL_WARP_SIZE;
-        unsigned int    warp_num_valid = (FULL_TILE && EVEN_WARP_MULTIPLE) ?
+        int         warp_offset = warp_id * LOGICAL_WARP_SIZE;
+        int         warp_num_valid = ((FULL_TILE && EVEN_WARP_MULTIPLE) || (warp_offset + LOGICAL_WARP_SIZE <= num_valid)) ?
                             LOGICAL_WARP_SIZE :
-                            (warp_offset < static_cast<unsigned int>(num_valid)) ?
-                                num_valid - warp_offset :
-                                0;
+                            num_valid - warp_offset;
 
         // Warp reduction in every warp
-        T warp_aggregate = WarpReduce(temp_storage.warp_reduce[warp_id]).template Reduce<(FULL_TILE && EVEN_WARP_MULTIPLE), 1>(
+        T warp_aggregate = WarpReduce(temp_storage.warp_reduce[warp_id]).template Reduce<(FULL_TILE && EVEN_WARP_MULTIPLE)>(
             input,
             warp_num_valid,
             reduction_op);
@@ -217,6 +210,5 @@ struct BlockReduceWarpReductions
 };
 
 
-}               // CUB namespace
-CUB_NS_POSTFIX  // Optional outer namespace(s)
+CUB_NAMESPACE_END
 
