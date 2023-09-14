@@ -20,6 +20,7 @@ Vesrion 1.54:
 	- Updated CUB version
 	- Added a fix that avoids a crash when linking to GMP 6.2.0 
 		(thanks bsquared)
+	- Added a fix in the singleton removal (thanks NyanCat/gchilders)
 	- Changed the default NFS filtering target density to 90
 
 Version 1.53: 11/11/16
