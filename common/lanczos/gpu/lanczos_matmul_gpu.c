@@ -721,7 +721,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 
 	/* load kernels */
 
-	CUDA_TRY(cuModuleLoad(&d->gpu_module, "lanczos_kernel.ptx"))
+	CUDA_TRY(cuModuleLoad(&d->gpu_module, "lanczos_kernel.fatbin"))
 
 	d->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
 				sizeof(gpu_launch_t));

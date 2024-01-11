@@ -1059,7 +1059,7 @@ gpu_thread_data_init(void *data, int threadid)
 			d->gpu_info->device_handle))
 
 	/* load GPU kernels */
-	CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core.ptx"))
+	CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core.fatbin"))
 
 	t->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
 				sizeof(gpu_launch_t));

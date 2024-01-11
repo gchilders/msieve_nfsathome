@@ -181,7 +181,7 @@ ifdef CUDA
 	COMMON_SRCS += $(COMMON_GPU_SRCS)
 	COMMON_HDR += $(COMMON_GPU_HDR)
 	GPU_OBJS += \
-		lanczos_kernel.ptx
+		lanczos_kernel.fatbin
 else
 	COMMON_SRCS += $(COMMON_NOGPU_SRCS)
 	COMMON_HDR += $(COMMON_NOGPU_HDR)
@@ -217,7 +217,7 @@ QS_OBJS = \
 #---------------------------------- GPU file lists -------------------------
 
 GPU_OBJS += \
-	stage1_core.ptx \
+	stage1_core.fatbin \
 	cub/built
 
 #---------------------------------- NFS file lists -------------------------
@@ -323,7 +323,7 @@ all: $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(GPU_OBJS)
 clean:
 	cd cub && make clean WIN=$(WIN) WIN64=$(WIN64) && cd ..
 	rm -f msieve msieve.exe libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
-		$(COMMON_GPU_OBJS) $(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) *.ptx
+		$(COMMON_GPU_OBJS) $(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) *.fatbin
 
 #----------------------------------------- build rules ----------------------
 
@@ -354,11 +354,11 @@ mpqs/sieve_core_generic_64k.qo: mpqs/sieve_core.c $(COMMON_HDR) $(QS_HDR)
 
 # GPU build rules
 
-stage1_core.ptx: $(NFS_GPU_HDR)
-	$(NVCC) -arch sm_$(SM) -ptx -o $@ $<
+stage1_core.fatbin: $(NFS_GPU_HDR)
+	$(NVCC) -arch sm_$(SM) -fatbin -o $@ $<
 
-lanczos_kernel.ptx: $(COMMON_GPU_HDR)
-	$(NVCC) -arch sm_$(SM) -ptx -DVBITS=$(VBITS) -o $@ $<
+lanczos_kernel.fatbin: $(COMMON_GPU_HDR)
+	$(NVCC) -arch sm_$(SM) -fatbin -DVBITS=$(VBITS) -o $@ $<
 
 cub/built:
 	cd cub && make WIN=$(WIN) WIN64=$(WIN64) VBITS=$(VBITS) sm=$(SM)0 && cd ..
