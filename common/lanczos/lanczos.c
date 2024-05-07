@@ -957,6 +957,8 @@ static v_t * block_lanczos_core(msieve_obj *obj,
 	logprintf(obj, "memory use: %.1f MB\n", (double)
 			(packed_matrix_sizeof(packed_matrix)) / 1048576);
 
+	logprintf(obj, "VBITS = %d\n", VBITS);
+
 	/* initialize */
 
 	*num_deps_found = 0;
