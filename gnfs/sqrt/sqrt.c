@@ -115,13 +115,9 @@ static uint32 rat_square_root(relation_t *rlist, uint32 num_relations,
 	hashtable_t h;
 	uint32 already_seen;
 	uint32 array_size;
-	mpz_t base, exponent, tmp;
 	uint32 status = 0;
 	rat_prime_t *curr;
-
-	mpz_init(base);
-	mpz_init(exponent);
-	mpz_init(tmp);
+	rat_prime_t **curr_array;
 
 	/* count up the number of times each prime factor in
 	   rlist occurs */
@@ -148,30 +144,57 @@ static uint32 rat_square_root(relation_t *rlist, uint32 num_relations,
 
 	mpz_set_ui(sqrt_r, 1);
 	num_primes = hashtable_get_num(&h);
+	curr_array = (rat_prime_t **) malloc(num_primes * sizeof(rat_prime_t *));
 	curr = hashtable_get_first(&h);
 
 	for (i = 0; i < num_primes; i++) {
-		uint64 p = curr->p;
-		uint64 count = curr->count;
-
-		if (count % 2) {
-			status = 1;
-			break;
-		}
-		if (p > 0 && count > 0) {
-			uint64_2gmp(p, base);
-			uint64_2gmp(count / 2, exponent);
-			mpz_powm(tmp, base, exponent, n);
-			mpz_mul(sqrt_r, sqrt_r, tmp);
-			mpz_tdiv_r(sqrt_r, sqrt_r, n);
-		}
+		curr_array[i] = curr;
 		curr = hashtable_get_next(&h, curr);
 	}
 
+#pragma omp parallel
+	{
+		mpz_t base, exponent, tmp, sqrt_r_local;
+		mpz_init(base);
+		mpz_init(exponent);
+		mpz_init(tmp);
+		mpz_init_set_ui(sqrt_r_local, 1);
+
+#pragma omp for
+		for (i = 0; i < num_primes; i++) {
+			uint64 p = curr_array[i]->p;
+			uint64 count = curr_array[i]->count;
+
+			if (count % 2) {
+#pragma omp critical
+				{
+					status = 1;
+				}
+				continue;
+			}
+			if (p > 0 && count > 0) {
+				uint64_2gmp(p, base);
+				uint64_2gmp(count / 2, exponent);
+				mpz_powm(tmp, base, exponent, n);
+				mpz_mul(sqrt_r_local, sqrt_r_local, tmp);
+				mpz_tdiv_r(sqrt_r_local, sqrt_r_local, n);
+			}
+		}
+
+#pragma omp critical
+		{
+			mpz_mul(sqrt_r, sqrt_r, sqrt_r_local);
+			mpz_tdiv_r(sqrt_r, sqrt_r, n);
+		}
+	
+		mpz_clear(base);
+		mpz_clear(exponent);
+		mpz_clear(tmp);
+		mpz_clear(sqrt_r_local);
+	}
+
+	free(curr_array);
 	hashtable_free(&h);
-	mpz_clear(base);
-	mpz_clear(exponent);
-	mpz_clear(tmp);
 	return status;
 }
 
