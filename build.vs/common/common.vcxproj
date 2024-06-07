@@ -140,7 +140,7 @@
     <ClCompile>
       <Optimization>Full</Optimization>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
-      <AdditionalIncludeDirectories>.\;..\;..\..\include;..\..\aprcl;..\..\zlib;..\..\..\pthreads;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.\;..\;..\..\include;..\..\aprcl;..\..\..\zlib;..\..\..\pthreads;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <PrecompiledHeader>
       </PrecompiledHeader>
@@ -197,7 +197,6 @@
     <ClInclude Include="..\..\..\gmp-ecm\ecm.h" />
     <ClInclude Include="..\..\..\mpir\lib\x64\Release\gmp.h" />
     <ClInclude Include="..\..\..\pthreads\config.h" />
-    <ClInclude Include="..\..\..\pthreads\pthread.h" />
     <ClInclude Include="..\..\aprcl\jacobi_sum32.h" />
     <ClInclude Include="..\..\aprcl\mpz_aprcl32.h" />
     <ClInclude Include="..\..\common\filter\merge_util.h" />
