@@ -1119,7 +1119,10 @@ gpu_thread_data_init(void *data, int threadid)
 			CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm52.ptx"))
 	}
 	else if (d->gpu_info->compute_version_major == 6) {
-		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm61.ptx"))
+		if (d->gpu_info->compute_version_minor < 1)
+			CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm60.ptx"))
+		else
+			CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm61.ptx"))
 	}
 	else if (d->gpu_info->compute_version_major == 7) {
 		if (d->gpu_info->compute_version_minor < 5)
@@ -1128,7 +1131,12 @@ gpu_thread_data_init(void *data, int threadid)
 			CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm75.ptx"))
 	}
 	else if (d->gpu_info->compute_version_major >= 8) {
-		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm86.ptx"))
+		if (d->gpu_info->compute_version_minor < 6)
+			CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm80.ptx"))
+		else if (d->gpu_info->compute_version_minor < 9)
+			CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm86.ptx"))
+		else
+     		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core_sm89.ptx"))
 	}
 	else
 	{
