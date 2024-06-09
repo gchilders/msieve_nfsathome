@@ -126,7 +126,7 @@
       <CodeGeneration>compute_30,sm_30;compute_35,sm_35;compute_50,sm_50;compute_60,sm_60</CodeGeneration>
       <NvccCompilation>compile</NvccCompilation>
       <TargetMachinePlatform>64</TargetMachinePlatform>
-      <Include>..\..\cub</Include>
+      <Include>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\include\cub</Include>
     </CudaCompile>
     <PostBuildEvent>
       <Command>..\out_copy_rename "$(TargetPath)" ..\..\bin\$(IntDir)cub $(TargetName).dll
@@ -185,7 +185,7 @@
     <CudaCompile>
       <NvccCompilation>compile</NvccCompilation>
       <CodeGeneration>compute_75,sm_75</CodeGeneration>
-      <Include>..\..\cub</Include>
+      <Include>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\include\cub</Include>
       <Runtime>MT</Runtime>
     </CudaCompile>
     <PostBuildEvent>
