@@ -675,6 +675,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	gpudata_t *d;
 	gpu_config_t gpu_config;
 	gpu_info_t *gpu_info;
+	CUresult status;
 
 	/* select card, save info struct */
 
@@ -721,7 +722,11 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 
 	/* load kernels */
 
-	CUDA_TRY(cuModuleLoad(&d->gpu_module, "lanczos_kernel.fatbin"))
+	status = cuModuleLoad(&d->gpu_module, "lanczos_kernel.ptx");				\
+	if (status != CUDA_SUCCESS) {
+		printf("Error loading ptx. Trying fatbin.\n");
+		CUDA_TRY(cuModuleLoad(&d->gpu_module, "lanczos_kernel.fatbin"))
+	}
 
 	d->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
 				sizeof(gpu_launch_t));

@@ -1048,6 +1048,7 @@ gpu_thread_data_init(void *data, int threadid)
 	uint32 i, j;
 	device_data_t *d = (device_data_t *)data;
 	device_thread_data_t *t = d->threads + threadid;
+	CUresult status;
 
 	/* every thread needs its own context; making all
 	   threads share the same context causes problems
@@ -1059,7 +1060,11 @@ gpu_thread_data_init(void *data, int threadid)
 			d->gpu_info->device_handle))
 
 	/* load GPU kernels */
-	CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core.fatbin"))
+	status = cuModuleLoad(&t->gpu_module, "stage1_core.ptx");				\
+	if (status != CUDA_SUCCESS) {
+		printf("Error loading ptx. Trying fatbin.\n");
+		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core.fatbin"))
+	}
 
 	t->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
 				sizeof(gpu_launch_t));
