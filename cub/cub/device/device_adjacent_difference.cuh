@@ -32,7 +32,7 @@
 #include "dispatch/dispatch_adjacent_difference.cuh"
 
 #include <thrust/detail/integer_traits.h>
-#include <thrust/detail/cstdint.h>
+#include <cstdint>
 
 
 CUB_NAMESPACE_BEGIN
@@ -116,7 +116,7 @@ private:
   {
     const auto uint64_threshold = static_cast<std::size_t>(
       THRUST_NS_QUALIFIER::detail::integer_traits<
-        THRUST_NS_QUALIFIER::detail::int32_t>::const_max);
+        std::int32_t>::const_max);
 
     if (num_items <= uint64_threshold)
     {
