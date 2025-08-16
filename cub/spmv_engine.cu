@@ -181,8 +181,10 @@ static void spmv_autotune(SpmvEngine* eng, const uint32_t* d_rowptr, int num_row
     eng->warp_items = warp_items;
     eng->tuned = true;
 
+#ifdef SPMV_DEBUG
     printf("[spmv] tuned: TPB=%d warp_items=%d (mean=%.1f p90=%u p99=%u max=%u empties=%.1f%%)\n",
            TPB, warp_items, mean, p90, p99, max_row, 100.0 * empty_frac);
+#endif
 }
 
 #if defined(_WIN32) || defined (_WIN64)
@@ -202,20 +204,16 @@ SPMV_API void* spmv_engine_init(int* vbits) {
 
 SPMV_API void spmv_engine_free(void* e) { delete reinterpret_cast<SpmvEngine*>(e); }
 
-SPMV_API void spmv_engine_run(void* e, spmv_data_t* spmvd) {
+SPMV_API void spmv_engine_run(void* e, spmv_data_t* spmv_data) {
     SpmvEngine* eng = reinterpret_cast<SpmvEngine*>(e);
 
-    const uint32_t* rowptr = reinterpret_cast<const uint32_t*>(spmvd->row_entries);
-    const uint32_t* colidx = reinterpret_cast<const uint32_t*>(spmvd->col_entries);
-    const v_t* x           = reinterpret_cast<const v_t*>(spmvd->vector_in);
-    v_t* y                 = reinterpret_cast<v_t*>(spmvd->vector_out);
-    const int num_rows     = spmvd->num_rows;
+    const uint32_t* rowptr = reinterpret_cast<const uint32_t*>(spmv_data->row_entries);
+    const uint32_t* colidx = reinterpret_cast<const uint32_t*>(spmv_data->col_entries);
+    const v_t* x           = reinterpret_cast<const v_t*>(spmv_data->vector_in);
+    v_t* y                 = reinterpret_cast<v_t*>(spmv_data->vector_out);
+    const int num_rows     = spmv_data->num_rows;
+    const uint32_t total_nnz = spmv_data->num_col_entries;
     if (num_rows <= 0) return;
-
-    uint32_t total_nnz = 0;
-    cudaMemcpy(&total_nnz, rowptr + num_rows, sizeof(uint32_t), cudaMemcpyDeviceToHost);
-    if (total_nnz != spmvd->num_col_entries) printf("huh?\n");
-    // no longer using v_zero, num_cols
 
     // Tune once (reads rowptr to host, negligible vs SpMV execution)
     if (!eng->tuned) spmv_autotune(eng, rowptr, num_rows);
@@ -250,11 +248,9 @@ SPMV_API void spmv_engine_run(void* e, spmv_data_t* spmvd) {
         }
     }
 
-#ifdef SPMV_CHECK_ERRORS
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         printf("SpMV launch failed: %s\n", cudaGetErrorString(err));
+        exit(-1);
     }
-#endif
 }
-

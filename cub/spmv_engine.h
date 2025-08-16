@@ -14,8 +14,7 @@ extern "C"
 
 typedef struct {
 	int num_rows;
-	int num_cols;
-	int num_col_entries;
+	uint32_t num_col_entries;
 	CUdeviceptr vector_in;    /* v_t */
 	CUdeviceptr vector_out;    /* v_t */
 	CUdeviceptr col_entries;    /* uint32 */
