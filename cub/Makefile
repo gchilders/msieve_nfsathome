@@ -11,7 +11,7 @@ ifeq ($(WIN64),1)
 else
 	NVCCFLAGS += -m32
 endif
-	NVCCFLAGS += -Xptxas -v -Xcudafe -\# -shared -Xcompiler /fp:strict 
+	NVCCFLAGS += -Xptxas -v -Xcudafe -\# -shared -Xcompiler /fp:strict
 else
 	NVCC = "$(shell which nvcc)"
 	CUDA_ROOT = $(shell dirname $(NVCC))/../
@@ -107,8 +107,8 @@ clean :
 	rm -f  *.dll *.so *.lib *.exp built
 
 $(LIBNAME).$(EXT) : $(DEPS)
-	$(NVCC) $(SM_TARGETS) $(SM_DEF) -o $@ sort_engine.cu $(NVCCFLAGS) $(INC) -O3 -DTHRUST_IGNORE_CUB_VERSION_CHECK -DCUB_PROVIDE_LEGACY_ARCH_MACROS
+	$(NVCC) $(SM_TARGETS) $(SM_DEF) -o $@ sort_engine.cu $(NVCCFLAGS) $(INC) -O3
 
 $(LIBNAME2).$(EXT) : $(DEPS)
-	$(NVCC) $(SM_TARGETS) $(SM_DEF) -o $@ spmv_engine.cu $(NVCCFLAGS) -DVBITS=$(VBITS) $(INC) -O3 -DTHRUST_IGNORE_CUB_VERSION_CHECK -DCUB_PROVIDE_LEGACY_ARCH_MACROS
+	$(NVCC) $(SM_TARGETS) $(SM_DEF) -o $@ spmv_engine.cu $(NVCCFLAGS) -DVBITS=$(VBITS) $(INC) -O3
 
