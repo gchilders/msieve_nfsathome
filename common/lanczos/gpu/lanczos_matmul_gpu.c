@@ -134,7 +134,7 @@ static void copy_dense(packed_matrix_t *p)
 			CUDA_TRY(cuMemcpy(d->dense_blocks[i],
 				(CUdeviceptr) tmp,
 				ncols * sizeof(v_t)))
-			CUDA_TRY(cuMemAdvise(d->dense_blocks[i],
+			CUDA_TRY(my_cuMemAdvise(d->dense_blocks[i],
 				ncols * sizeof(v_t),
 				CU_MEM_ADVISE_SET_READ_MOSTLY,
 				d->gpu_info->device_handle))
@@ -421,7 +421,7 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 		CUDA_TRY(cuMemcpy(b->col_entries,
 				(CUdeviceptr) col_entries,
 				num_entries * sizeof(uint32)))
-		CUDA_TRY(cuMemAdvise(b->col_entries,
+		CUDA_TRY(my_cuMemAdvise(b->col_entries,
 				num_entries * sizeof(uint32),
 				CU_MEM_ADVISE_SET_READ_MOSTLY,
 				d->gpu_info->device_handle))
@@ -432,7 +432,7 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 		CUDA_TRY(cuMemcpy(b->row_entries,
 				(CUdeviceptr) row_entries,
 				(num_rows + 1) * sizeof(uint32)))
-		CUDA_TRY(cuMemAdvise(b->row_entries,
+		CUDA_TRY(my_cuMemAdvise(b->row_entries,
 				(num_rows + 1) * sizeof(uint32),
 				CU_MEM_ADVISE_SET_READ_MOSTLY,
 				d->gpu_info->device_handle))
@@ -694,7 +694,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 
 	/* initialize context */
 
-	CUDA_TRY(cuCtxCreate(&d->gpu_context,
+	CUDA_TRY(my_cuCtxCreate(&d->gpu_context,
 			CU_CTX_SCHED_BLOCKING_SYNC,
 			d->gpu_info->device_handle))
 
@@ -807,10 +807,10 @@ static void mul_packed_gpu(packed_matrix_t *p,
 		spmv_data_t spmv_data;
 
 		if (d->use_cudamanaged == 2) {
-			CUDA_TRY(cuMemPrefetchAsync(blk->col_entries,
+			CUDA_TRY(my_cuMemPrefetchAsync(blk->col_entries,
 				blk->num_col_entries * sizeof(uint32),
 				d->gpu_info->device_handle, 0))
-			CUDA_TRY(cuMemPrefetchAsync(blk->row_entries,
+			CUDA_TRY(my_cuMemPrefetchAsync(blk->row_entries,
 				(blk->num_rows + 1) * sizeof(uint32),
 				d->gpu_info->device_handle, 0))
 		}
@@ -830,7 +830,7 @@ static void mul_packed_gpu(packed_matrix_t *p,
 
 	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++) {
 		if (d->use_cudamanaged == 2) {
-			CUDA_TRY(cuMemPrefetchAsync(d->dense_blocks[i],
+			CUDA_TRY(my_cuMemPrefetchAsync(d->dense_blocks[i],
 				p->ncols * sizeof(v_t),
 				d->gpu_info->device_handle, 0))
 		}
@@ -861,10 +861,10 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 		spmv_data_t spmv_data;
 
 		if (d->use_cudamanaged == 2) {
-			CUDA_TRY(cuMemPrefetchAsync(blk->col_entries,
+			CUDA_TRY(my_cuMemPrefetchAsync(blk->col_entries,
 				blk->num_col_entries * sizeof(uint32),
 				d->gpu_info->device_handle, 0))
-			CUDA_TRY(cuMemPrefetchAsync(blk->row_entries,
+			CUDA_TRY(my_cuMemPrefetchAsync(blk->row_entries,
 				(blk->num_rows + 1) * sizeof(uint32),
 				d->gpu_info->device_handle, 0))
 		}
@@ -884,7 +884,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 
 	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++) {
 		if (d->use_cudamanaged == 2) {
-			CUDA_TRY(cuMemPrefetchAsync(d->dense_blocks[i],
+			CUDA_TRY(my_cuMemPrefetchAsync(d->dense_blocks[i],
 				p->ncols * sizeof(v_t),
 				d->gpu_info->device_handle, 0))
 		}

@@ -1055,7 +1055,7 @@ gpu_thread_data_init(void *data, int threadid)
 	   with the sort engine, because apparently it
 	   changes the GPU cache size on the fly */
 
-	CUDA_TRY(cuCtxCreate(&t->gpu_context, 
+	CUDA_TRY(my_cuCtxCreate(&t->gpu_context, 
 			CU_CTX_SCHED_BLOCKING_SYNC,
 			d->gpu_info->device_handle))
 
