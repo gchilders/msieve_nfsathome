@@ -475,7 +475,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 					num_trans_block_rows_alloc *
 					sizeof(block_row_t));
 
-	uint32 num_entries_alloc = 8190;
+	uint32 num_entries_alloc = 10000;
 	entry_idx_t *entries = (entry_idx_t *)xmalloc(
 					num_entries_alloc *
 					sizeof(entry_idx_t));
@@ -735,13 +735,13 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 
 	/* Set preferred nonzeros per matrix block */
 
-	p->block_nnz = 2000000000;
+	p->block_nnz = 1750000000;
 	if (obj->nfs_args != NULL) {
 		const char *tmp;
 		tmp = strstr(obj->nfs_args, "block_nnz=");
 		if (tmp != NULL) p->block_nnz = (uint32)atoi(tmp + 10);
 		if (p->block_nnz < 100000) p->block_nnz = 100000;
-		if (p->block_nnz > 2000000000) p->block_nnz = 2000000000; 
+		if (p->block_nnz > 1750000000) p->block_nnz = 1750000000; 
 	}
 	printf("Nonzeros per block: %u\n", p->block_nnz);
 
