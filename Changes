@@ -16,6 +16,7 @@ Vesrion 1.54:
 	- Add support for more modern Visual Studio and CUDA versions 
 		(thanks Brian Gladman)
 	- Made the maximum merge weight configurable (thanks Lionel Debroux)
+	- Fix typo in dd_precision_is_ieee (thanks Ben Buhrow)
 	- Updated the makefile to build GPU code for more recent GPUs
 	- Updated CUB version
 	- Added a fix that avoids a crash when linking to GMP 6.2.0 

@@ -75,7 +75,7 @@ static INLINE uint32 dd_precision_is_ieee(void) {
 #elif defined(GCC_ASM32X) || defined(GCC_ASM64X)
 	dd_precision_t prec;
 	ASM_G volatile ("fnstcw %0":"=m"(prec));
-	return ((prec & ~0x0300) == 0x0200) ? 1 : 0;
+	return ((prec & 0x0300) == 0x0200) ? 1 : 0;
 #else
 	return 1;
 #endif
