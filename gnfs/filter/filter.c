@@ -296,6 +296,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	uint64 max_relations = 0;
 	uint32 filter_bound = 0;
 	double target_density = 0;
+	double target_densities[16];
+	uint32 num_densities = 0;
 	uint32 max_weight = 20;
 	char lp_filename[256];
 
@@ -349,9 +351,36 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 		tmp = strstr(obj->nfs_args, "target_density=");
 		if (tmp != NULL) {
-			target_density = strtod(tmp + 15, NULL);
-			logprintf(obj, "setting target matrix density to %.1f\n",
-					target_density);
+			const char *p = tmp + 15;
+			char *endptr;
+			uint32 di, dj;
+			while (num_densities < 16) {
+				double d = strtod(p, &endptr);
+				if (endptr == p) break;
+				target_densities[num_densities++] = d;
+				if (*endptr != ',') break;
+				p = endptr + 1;
+			}
+			/* sort numerically (insertion sort) */
+			for (di = 1; di < num_densities; di++) {
+				double key = target_densities[di];
+				dj = di;
+				while (dj > 0 && target_densities[dj-1] > key) {
+					target_densities[dj] = target_densities[dj-1];
+					dj--;
+				}
+				target_densities[dj] = key;
+			}
+			if (num_densities == 1) {
+				target_density = target_densities[0];
+				logprintf(obj, "setting target matrix density to %.1f\n",
+						target_density);
+			} else {
+				logprintf(obj, "setting %u target densities:", num_densities);
+				for (di = 0; di < num_densities; di++)
+					logprintf(obj, " %.0f", target_densities[di]);
+				logprintf(obj, "\n");
+			}
 		}
 
 		tmp = strstr(obj->nfs_args, "max_weight=");
@@ -378,13 +407,16 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 			const char *tmp0 = tmp - 1;
 			while (tmp0 > obj->nfs_args && isdigit(tmp0[-1]))
 				tmp0--;
-			max_relations = strtoull(tmp + 1, NULL, 10);
-			filter_bound = strtoul(tmp0, NULL, 10);
+			/* skip if this comma is inside a target_density= value */
+			if (tmp0 == obj->nfs_args || tmp0[-1] != '=') {
+				max_relations = strtoull(tmp + 1, NULL, 10);
+				filter_bound = strtoul(tmp0, NULL, 10);
 
-			logprintf(obj, "setting max relations to %" PRIu64 "\n",
-					max_relations);
-			logprintf(obj, "setting large prime bound to %u\n",
-					filter_bound);
+				logprintf(obj, "setting max relations to %" PRIu64 "\n",
+						max_relations);
+				logprintf(obj, "setting large prime bound to %u\n",
+						filter_bound);
+			}
 		}
 	}
 
@@ -450,6 +482,12 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 	nfs_write_lp_file(obj, &fb, &filter, max_relations, 0);
 	nfs_compact_lp_file(obj, &filter, ram_size);
+	/* save filter state before initial LP read for multi-density small path */
+	{
+	uint32 pre_read_nr = filter.num_relations;
+	uint32 pre_read_ni = filter.num_ideals;
+	uint32 pre_read_te = filter.target_excess;
+
 	filter_read_lp_file(obj, &filter, 0);
 
 	if (savefile_size < ram_size / 2) {
@@ -458,10 +496,44 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 		   Depending on how much memory the machine has, really
 		   big datasets may get to do this */
 
-		if ((relations_needed = do_merge(obj, &filter,
-						&merge, target_density,
-						ckpt_path)) > 0)
+		if (num_densities <= 1) {
+			if ((relations_needed = do_merge(obj, &filter,
+							&merge, target_density,
+							ckpt_path)) > 0)
+				goto finished;
+		}
+		else {
+			uint32 d;
+			char dsuffix[32];
+			for (d = 0; d < num_densities; d++) {
+				if (d > 0) {
+					free(filter.relation_array);
+					free(filter.relation_ptr);
+					filter.relation_array = NULL;
+					filter.relation_ptr = NULL;
+					filter.num_relations = pre_read_nr;
+					filter.num_ideals    = pre_read_ni;
+					filter.target_excess = pre_read_te;
+					filter_read_lp_file(obj, &filter, 0);
+				}
+				memset(&merge, 0, sizeof(merge));
+				if ((relations_needed = do_merge(obj, &filter,
+							&merge, target_densities[d], NULL)) > 0) {
+					if (d == 0) goto finished;
+					break;
+				}
+				filter_postproc_relsets(obj, &merge);
+				sprintf(dsuffix, ".%d", (int)(target_densities[d] + 0.5));
+				filter_dump_relsets(obj, &merge, dsuffix);
+				filter_free_relsets(&merge);
+				relations_needed = 0;
+			}
+			sprintf(lp_filename, "%s.lp", obj->savefile.name);
+			remove(lp_filename);
+			wall_time = time(NULL) - wall_time;
+			logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);
 			goto finished;
+		}
 	}
 	else {
 		/* dataset is "large", perform multiple singleton passes.
@@ -488,10 +560,47 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 			/* dataset is small enough for filtering to
 			   complete in one pass */
 
-			filter_read_lp_file(obj, &filter, 0);
-			if ((relations_needed = do_merge(obj, &filter,
-						&merge, target_density,
-						ckpt_path)) > 0) {
+			if (num_densities <= 1) {
+				filter_read_lp_file(obj, &filter, 0);
+				if ((relations_needed = do_merge(obj, &filter,
+							&merge, target_density,
+							ckpt_path)) > 0) {
+					goto finished;
+				}
+			}
+			else {
+				uint32 d;
+				uint32 sv_nr = filter.num_relations;
+				uint32 sv_ni = filter.num_ideals;
+				uint32 sv_te = filter.target_excess;
+				char dsuffix[32];
+				for (d = 0; d < num_densities; d++) {
+					if (d > 0) {
+						free(filter.relation_array);
+						free(filter.relation_ptr);
+						filter.relation_array = NULL;
+						filter.relation_ptr = NULL;
+						filter.num_relations = sv_nr;
+						filter.num_ideals    = sv_ni;
+						filter.target_excess = sv_te;
+					}
+					filter_read_lp_file(obj, &filter, 0);
+					memset(&merge, 0, sizeof(merge));
+					if ((relations_needed = do_merge(obj, &filter,
+								&merge, target_densities[d], NULL)) > 0) {
+						if (d == 0) goto finished;
+						break;
+					}
+					filter_postproc_relsets(obj, &merge);
+					sprintf(dsuffix, ".%d", (int)(target_densities[d] + 0.5));
+					filter_dump_relsets(obj, &merge, dsuffix);
+					filter_free_relsets(&merge);
+					relations_needed = 0;
+				}
+				sprintf(lp_filename, "%s.lp", obj->savefile.name);
+				remove(lp_filename);
+				wall_time = time(NULL) - wall_time;
+				logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);
 				goto finished;
 			}
 		}
@@ -503,16 +612,53 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 			   determining whether the matrix incorporates enough
 			   of the dataset so that the matrix will work */
 
-			if ((relations_needed = do_partial_filtering(obj,
-						&filter, &merge, entries_r,
-						entries_a, target_density,
-						max_weight, ckpt_path)) > 0) {
+			if (num_densities <= 1) {
+				if ((relations_needed = do_partial_filtering(obj,
+							&filter, &merge, entries_r,
+							entries_a, target_density,
+							max_weight, ckpt_path)) > 0) {
+					goto finished;
+				}
+			}
+			else {
+				uint32 d;
+				uint32 sv_nr = filter.num_relations;
+				uint32 sv_ni = filter.num_ideals;
+				char dsuffix[32];
+				for (d = 0; d < num_densities; d++) {
+					if (d > 0) {
+						free(filter.relation_array);
+						free(filter.relation_ptr);
+						filter.relation_array = NULL;
+						filter.relation_ptr = NULL;
+						filter.num_relations = sv_nr;
+						filter.num_ideals    = sv_ni;
+					}
+					memset(&merge, 0, sizeof(merge));
+					if ((relations_needed = do_partial_filtering(obj,
+								&filter, &merge, entries_r,
+								entries_a, target_densities[d],
+								max_weight, NULL)) > 0) {
+						if (d == 0) goto finished;
+						break;
+					}
+					filter_postproc_relsets(obj, &merge);
+					sprintf(dsuffix, ".%d", (int)(target_densities[d] + 0.5));
+					filter_dump_relsets(obj, &merge, dsuffix);
+					filter_free_relsets(&merge);
+					relations_needed = 0;
+				}
+				sprintf(lp_filename, "%s.lp", obj->savefile.name);
+				remove(lp_filename);
+				wall_time = time(NULL) - wall_time;
+				logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);
 				goto finished;
 			}
 		}
 	}
+	} /* end pre_read state block */
 
-	/* filtering succeeded; delete the LP file */
+	/* single-density filtering succeeded; delete the LP file */
 
 	get_filter_tmp_name(obj, lp_filename, sizeof(lp_filename), ".lp");
 	remove(lp_filename);
@@ -522,7 +668,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 merge_done:
 
 	filter_postproc_relsets(obj, &merge);
-	filter_dump_relsets(obj, &merge);
+	filter_dump_relsets(obj, &merge, "");
 	filter_free_relsets(&merge);
 	wall_time = time(NULL) - wall_time;
 	logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);

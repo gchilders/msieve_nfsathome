@@ -14,6 +14,7 @@ $Id$
 
 #include <common.h>
 #include "gnfs.h"
+#include <dirent.h>
 
 /* the number of quadratic characters for each
    matrix column. A practical upper limit given
@@ -744,6 +745,8 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 	uint64 *dependencies;
 	uint32 skip_matbuild = 0;
 	uint32 only_matbuild = 0;
+	uint32 all_matbuild = 0;
+	double select_density = 0;
 	time_t cpu_time = time(NULL);
 #ifdef HAVE_MPI
 	int32 grid_bools[2] = {0};
@@ -789,6 +792,44 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 			logprintf(obj, "stopping after matrix build\n");
 			only_matbuild = 1;
 		}
+		if (strstr(obj->nfs_args, "all_matbuild=1")) {
+			logprintf(obj, "building matrices for all densities\n");
+			all_matbuild = 1;
+			only_matbuild = 1;
+		}
+		{
+			const char *tmp_sd = strstr(obj->nfs_args, "select_density=");
+			if (tmp_sd != NULL) {
+				select_density = strtod(tmp_sd + 15, NULL);
+				logprintf(obj, "selecting density %.0f for linear algebra\n",
+						select_density);
+			}
+		}
+	}
+
+	/* handle select_density: rename .cyc.NNN and .mat.NNN to unsuffixed versions */
+	if (select_density > 0) {
+		char src[512], dst[512];
+		int dsuffix = (int)(select_density + 0.5);
+		sprintf(src, "%s.cyc.%d", obj->savefile.name, dsuffix);
+		sprintf(dst, "%s.cyc", obj->savefile.name);
+		if (access(src, F_OK) != 0) {
+			logprintf(obj, "error: cycle file '%s' not found\n", src);
+			exit(-1);
+		}
+		if (rename(src, dst) != 0) {
+			logprintf(obj, "error: cannot rename '%s' to '%s'\n", src, dst);
+			exit(-1);
+		}
+		sprintf(src, "%s.mat.%d", obj->savefile.name, dsuffix);
+		sprintf(dst, "%s.mat", obj->savefile.name);
+		if (access(src, F_OK) == 0)
+			rename(src, dst);
+		sprintf(src, "%s.mat.idx.%d", obj->savefile.name, dsuffix);
+		sprintf(dst, "%s.mat.idx", obj->savefile.name);
+		if (access(src, F_OK) == 0)
+			rename(src, dst);
+		skip_matbuild = 1;
 	}
 
 #ifdef HAVE_MPI
@@ -882,55 +923,200 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 		   nfs_filter_relations), and savefile_open() picks that up on
 		   its own; the unstage below is what finally removes it. */
 
-		/* build the initial matrix that is the output from
-		   the filtering */
+		if (all_matbuild) {
+			/* scan for .cyc.NNN files and build a matrix for each */
+			double amb_densities[64];
+			uint32 amb_ndensities = 0;
+			char amb_dir[512];
+			char amb_base[512];
+			char amb_prefix[512];
+			const char *slash;
+			DIR *dirp;
+			struct dirent *direntry;
+			size_t pfx_len;
+			uint32 di, dj;
 
-		build_matrix(obj, n);
+			slash = strrchr(obj->savefile.name, '/');
+			if (slash) {
+				uint32 dlen = (uint32)(slash - obj->savefile.name);
+				if (dlen >= sizeof(amb_dir)) dlen = sizeof(amb_dir) - 1;
+				strncpy(amb_dir, obj->savefile.name, dlen);
+				amb_dir[dlen] = '\0';
+				strncpy(amb_base, slash + 1, sizeof(amb_base) - 1);
+				amb_base[sizeof(amb_base) - 1] = '\0';
+			} else {
+				strcpy(amb_dir, ".");
+				strncpy(amb_base, obj->savefile.name, sizeof(amb_base) - 1);
+				amb_base[sizeof(amb_base) - 1] = '\0';
+			}
 
-		/* read the matrix and the list of cycles into memory
-		   again, now that the underlying relations have been freed */
+			sprintf(amb_prefix, "%s.cyc.", amb_base);
+			pfx_len = strlen(amb_prefix);
 
-		get_matrix_work_name(obj, work_matrix, sizeof(work_matrix));
-		read_matrix_from(obj, work_matrix, &nrows, NULL, NULL,
-				&num_dense_rows, &ncols, NULL, NULL, &cols,
-				NULL, NULL);
-		read_cycles(obj, &ncols, &cols, 0, NULL);
+			dirp = opendir(amb_dir);
+			if (dirp == NULL) {
+				logprintf(obj, "error: cannot open directory '%s'\n", amb_dir);
+				exit(-1);
+			}
+			while ((direntry = readdir(dirp)) != NULL &&
+					amb_ndensities < 64) {
+				if (strncmp(direntry->d_name, amb_prefix, pfx_len) == 0) {
+					const char *sfx = direntry->d_name + pfx_len;
+					char *endptr;
+					double d = strtod(sfx, &endptr);
+					if (*endptr == '\0' && endptr != sfx)
+						amb_densities[amb_ndensities++] = d;
+				}
+			}
+			closedir(dirp);
 
-		count_matrix_nonzero(obj, nrows, num_dense_rows, ncols, cols);
+			/* sort densities numerically */
+			for (di = 1; di < amb_ndensities; di++) {
+				double key = amb_densities[di];
+				dj = di;
+				while (dj > 0 && amb_densities[dj-1] > key) {
+					amb_densities[dj] = amb_densities[dj-1];
+					dj--;
+				}
+				amb_densities[dj] = key;
+			}
 
-		/* perform light filtering on the matrix */
+			logprintf(obj, "found %u density files\n", amb_ndensities);
 
-		sparse_weight = reduce_matrix(obj, &nrows, num_dense_rows,
-				&ncols, cols, NUM_EXTRA_RELATIONS);
-		if (ncols == 0) {
-			logprintf(obj, "matrix is corrupt; skipping "
-					"linear algebra\n");
-			free(cols);
+			for (di = 0; di < amb_ndensities; di++) {
+				char src[512], dst[512];
+				int dsuffix = (int)(amb_densities[di] + 0.5);
+
+				logprintf(obj, "building matrix for density %d\n", dsuffix);
+
+				sprintf(src, "%s.cyc.%d", obj->savefile.name, dsuffix);
+				sprintf(dst, "%s.cyc", obj->savefile.name);
+				if (rename(src, dst) != 0) {
+					logprintf(obj, "error: cannot rename '%s'\n", src);
+					continue;
+				}
+
+				cols = NULL;
+				build_matrix(obj, n);
+
+				/* the build wrote its copy wherever
+				   get_matrix_work_name() says, which is scratch
+				   when one is configured */
+
+				get_matrix_work_name(obj, work_matrix,
+						sizeof(work_matrix));
+				read_matrix_from(obj, work_matrix, &nrows, NULL,
+						NULL, &num_dense_rows, &ncols,
+						NULL, NULL, &cols, NULL, NULL);
+				read_cycles(obj, &ncols, &cols, 0, NULL);
+				count_matrix_nonzero(obj, nrows, num_dense_rows,
+						ncols, cols);
+				sparse_weight = reduce_matrix(obj, &nrows,
+						num_dense_rows, &ncols, cols,
+						NUM_EXTRA_RELATIONS);
+
+				if (ncols == 0) {
+					logprintf(obj, "density %d: matrix corrupt, skipping\n",
+							dsuffix);
+					free(cols);
+					if (!matrix_work_is_final(obj, work_matrix))
+						remove(work_matrix);
+					/* put .cyc back */
+					sprintf(src, "%s.cyc", obj->savefile.name);
+					sprintf(dst, "%s.cyc.%d", obj->savefile.name, dsuffix);
+					rename(src, dst);
+					continue;
+				}
+
+				dump_matrix(obj, nrows, num_dense_rows,
+						ncols, cols, sparse_weight);
+
+				/* the unreduced copy has served its purpose; when
+				   it lived on scratch it is a separate file from
+				   the one dump_matrix() just wrote */
+
+				if (!matrix_work_is_final(obj, work_matrix))
+					remove(work_matrix);
+
+				for (i = 0; i < ncols; i++) {
+					free(cols[i].data);
+					free(cols[i].cycle.list);
+				}
+				free(cols);
+				cols = NULL;
+
+				/* rename .cyc -> .cyc.NNN */
+				sprintf(src, "%s.cyc", obj->savefile.name);
+				sprintf(dst, "%s.cyc.%d", obj->savefile.name, dsuffix);
+				rename(src, dst);
+
+				/* rename .mat -> .mat.NNN */
+				sprintf(src, "%s.mat", obj->savefile.name);
+				sprintf(dst, "%s.mat.%d", obj->savefile.name, dsuffix);
+				rename(src, dst);
+
+				/* rename .mat.idx -> .mat.idx.NNN if present */
+				sprintf(src, "%s.mat.idx", obj->savefile.name);
+				sprintf(dst, "%s.mat.idx.%d", obj->savefile.name, dsuffix);
+				if (access(src, F_OK) == 0)
+					rename(src, dst);
+			}
+		} else {
+			/* build the initial matrix that is the output from
+			   the filtering */
+
+			build_matrix(obj, n);
+
+			/* read the matrix and the list of cycles into memory
+			   again, now that the underlying relations have been
+			   freed */
+
+			get_matrix_work_name(obj, work_matrix,
+					sizeof(work_matrix));
+			read_matrix_from(obj, work_matrix, &nrows, NULL, NULL,
+					&num_dense_rows, &ncols, NULL, NULL,
+					&cols, NULL, NULL);
+			read_cycles(obj, &ncols, &cols, 0, NULL);
+
+			count_matrix_nonzero(obj, nrows, num_dense_rows,
+					ncols, cols);
+
+			/* perform light filtering on the matrix */
+
+			sparse_weight = reduce_matrix(obj, &nrows,
+					num_dense_rows, &ncols, cols,
+					NUM_EXTRA_RELATIONS);
+			if (ncols == 0) {
+				logprintf(obj, "matrix is corrupt; skipping "
+						"linear algebra\n");
+				free(cols);
+				if (!matrix_work_is_final(obj, work_matrix))
+					remove(work_matrix);
+				savefile_unstage(obj);
+				return;
+			}
+
+			/* save the reduced matrix on disk; if MPI is configured,
+			   also save the file offsets where each MPI process will
+			   begin reading its own slab of matrix columns */
+
+			dump_matrix(obj, nrows, num_dense_rows,
+					ncols, cols, sparse_weight);
+
+			/* the unreduced copy has served its purpose; when it
+			   lived on scratch it is a separate file from the one
+			   just written */
+
 			if (!matrix_work_is_final(obj, work_matrix))
 				remove(work_matrix);
-			savefile_unstage(obj);
-			return;
+
+			/* free the matrix */
+			for (i = 0; i < ncols; i++) {
+				free(cols[i].data);
+				free(cols[i].cycle.list);
+			}
+			free(cols);
 		}
-
-		/* save the reduced matrix on disk; if MPI is configured,
-		   also save the file offsets where each MPI process will
-		   begin reading its own slab of matrix columns */
-
-		dump_matrix(obj, nrows, num_dense_rows,
-				ncols, cols, sparse_weight);
-
-		/* the unreduced copy has served its purpose; when it lived on
-		   scratch it is a separate file from the one just written */
-
-		if (!matrix_work_is_final(obj, work_matrix))
-			remove(work_matrix);
-
-		/* free the matrix */
-		for (i = 0; i < ncols; i++) {
-			free(cols[i].data);
-			free(cols[i].cycle.list);
-		}
-		free(cols);
 #if 0
 		/* optimize the layout of large matrices */
 		if (ncols > MIN_REORDER_SIZE) {

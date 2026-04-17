@@ -314,7 +314,7 @@ static uint32 get_committed_rmap_generation(msieve_obj *obj, uint64 *generation)
 }
 
 /*--------------------------------------------------------------------*/
-void filter_dump_relsets(msieve_obj *obj, merge_t *merge) {
+void filter_dump_relsets(msieve_obj *obj, merge_t *merge, const char *suffix) {
 
 	uint32 i;
 	relation_set_t *relset_array = merge->relset_array;
@@ -324,7 +324,10 @@ void filter_dump_relsets(msieve_obj *obj, merge_t *merge) {
 	uint64 rmap_generation = 0;
 	uint32 have_rmap;
 
-	sprintf(buf, "%s.cyc", obj->savefile.name);
+	if (suffix && suffix[0])
+		sprintf(buf, "%s.cyc%s", obj->savefile.name, suffix);
+	else
+		sprintf(buf, "%s.cyc", obj->savefile.name);
 	have_rmap = get_committed_rmap_generation(obj, &rmap_generation);
 	cycle_fp = fopen(buf, "wb");
 	if (cycle_fp == NULL) {

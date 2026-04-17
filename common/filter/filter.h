@@ -207,7 +207,7 @@ int32 filter_merge_checkpoint_load(msieve_obj *obj, merge_t *merge,
 
 void filter_free_relsets(merge_t *merge);
 
-void filter_dump_relsets(msieve_obj *obj, merge_t *merge);
+void filter_dump_relsets(msieve_obj *obj, merge_t *merge, const char *suffix);
 
 #ifdef __cplusplus
 }
