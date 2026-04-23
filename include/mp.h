@@ -332,6 +332,21 @@ static INLINE uint32 mp_gcd_1(uint32 x, uint32 y) {
 	return x;
 }
 
+static INLINE uint64 mp_gcd_2(uint64 x, uint64 y) {
+
+	uint64 tmp;
+
+	if (y < x) {
+		tmp = x; x = y; y = tmp;
+	}
+
+	while (y > 0) {
+		x = x % y;
+		tmp = x; x = y; y = tmp;
+	}
+	return x;
+}
+
 	/* Print routines: print the input mp_t to a file
 	   (if f is not NULL) and also return a pointer to
 	   a string representation of the input (requires

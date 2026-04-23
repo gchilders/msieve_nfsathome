@@ -88,7 +88,7 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	uint32 i; 
 	uint64 p, btmp;
 	int64 a, atmp;
-	uint32 b;
+	uint64 b;
 	char *tmp, *next_field;
 	mpz_poly_t *rpoly = &fb->rfb.poly;
 	mpz_poly_t *apoly = &fb->afb.poly;
@@ -104,11 +104,8 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	if (tmp[0] != ',' || !isdigit(tmp[1]))
 		return -1;
 
-	btmp = strtoull(tmp+1, &next_field, 10);
+	b = strtoull(tmp+1, &next_field, 10);
 	tmp = next_field;
-	b = (uint32)btmp;
-	if (btmp != (uint64)b)
-		return -99; /* cannot use large b */
 
 	num_factors_r = 0;
 	num_factors_a = 0;
@@ -157,7 +154,7 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	if (atmp < 0)
 		atmp += b;
 
-	if (mp_gcd_1((uint32)atmp, b) != 1)
+	if (mp_gcd_2((uint64)atmp, b) != 1)
 		return -6;
 
 	/* handle a rational factor of -1 */
@@ -279,7 +276,7 @@ uint32 find_large_ideals(relation_t *rel,
 	uint32 array_size = 0;
 	uint32 num_factors_r;
 	int64 a = rel->a;
-	uint32 b = rel->b;
+	uint64 b = rel->b;
 
 	out->gf2_factors = 0;
 
@@ -716,112 +713,5 @@ void nfs_free_relation_list(relation_t *rlist, uint32 num_relations) {
 	for (i = 0; i < num_relations; i++)
 		free(rlist[i].factors);
 	free(rlist);
-}
-
-/*--------------------------------------------------------------------*/
-typedef struct {
-	uint32 purge_idx;
-	uint32 rel_idx;
-} relconvert_t;
-
-static int bsearch_relconvert(const void *key, const void *t) {
-	relconvert_t *c = (relconvert_t *)t;
-	uint32 *k = (uint32 *)key;
-
-	if ((*k) < c->purge_idx)
-		return -1;
-	if ((*k) > c->purge_idx)
-		return 1;
-	return 0;
-}
-
-void nfs_convert_cado_cycles(msieve_obj *obj) {
-
-	uint32 i, j;
-
-	char buf[LINE_BUF_SIZE];
-	char purgefile[LINE_BUF_SIZE];
-	savefile_t s;
-	savefile_t *savefile = &s;
-
-	uint32 num_cycles;
-	la_col_t *cycle_list = NULL;
-	uint32 num_unique_relidx;
-	relconvert_t *convert;
-
-	/* read the raw list of relation numbers for each cycle */
-
-	read_cycles(obj, &num_cycles, &cycle_list, 0, NULL);
-
-	/* for CADO filtering results, the cycle file contains
-	   line numbers in a purge file, not the line numbers of
-	   relations like we want. This is arguably better, since
-	   the purge file results have already assigned unique
-	   numbers to ideals so we could use the purge file to
-	   directly build the matrix. Unfortunately, if we did that
-	   then both the linear algebra and the square root would
-	   need modifications to understand the purge file format.
-	   The alternative is to use the purge file lines to convert 
-	   the purge file line numbers to relation numbers */
-
-	sprintf(purgefile, "%s.purged", obj->savefile.name);
-	savefile_init(savefile, purgefile);
-	savefile_open(savefile, SAVEFILE_READ);
-	savefile_read_line(buf, sizeof(buf), savefile);
-
-	num_unique_relidx = strtoul(buf, NULL, 10);
-
-	logprintf(obj, "cycles contain %u unique purge entries\n", 
-				num_unique_relidx);
-
-	convert = (relconvert_t *)xmalloc(num_unique_relidx *
-					sizeof(relconvert_t));
-
-	for (i = 0; i < num_unique_relidx; i++) {
-
-		relconvert_t *curr = convert + i;
-
-		savefile_read_line(buf, sizeof(buf), savefile);
-
-		/* the relation number is the first entry in the
-		   line from the purge file */
-
-		curr->rel_idx = strtoul(buf, NULL, 10);
-		curr->purge_idx = i;
-	}
-
-	savefile_close(savefile);
-	savefile_free(savefile);
-
-	/* walk through the list of cycles and convert
-	   each purge file number to a relation file number */
-
-	for (i = 0; i < num_cycles; i++) {
-		la_col_t *c = cycle_list + i;
-
-		for (j = 0; j < c->cycle.num_relations; j++) {
-
-			relconvert_t *t = (relconvert_t *)bsearch(
-						c->cycle.list + j,
-						convert,
-						(size_t)num_unique_relidx,
-						sizeof(relconvert_t),
-						bsearch_relconvert);
-			if (t == NULL) {
-				/* this cycle is corrupt somehow */
-				logprintf(obj, "error: cannot locate "
-						"relation %u\n", 
-						c->cycle.list[j]);
-				exit(-1);
-			}
-			else {
-				c->cycle.list[j] = t->rel_idx;
-			}
-		}
-	}
-
-	dump_cycles(obj, cycle_list, num_cycles);
-	free_cycle_list(cycle_list, num_cycles);
-	free(convert);
 }
 

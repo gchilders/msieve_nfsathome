@@ -253,7 +253,7 @@ static uint32 fill_qcb(msieve_obj *obj, mpz_poly_t *apoly,
 	for (i = 0; i < num_relations; i++) {
 		relation_t *rel = rlist + i;
 		int64 a = rel->a;
-		uint32 b = rel->b;
+		uint64 b = rel->b;
 
 		QCB_VALS(rel) = 0;
 		for (j = 0; j < qcb_size; j++) {
@@ -266,7 +266,7 @@ static uint32 fill_qcb(msieve_obj *obj, mpz_poly_t *apoly,
 				res += (int64)p;
 
 			symbol = mp_legendre_1(mp_modsub_1((uint32)res,
-					mp_modmul_1(b, r, p), p), p);
+					mp_modmul_1((uint32)(b % p), r, p), p), p);
 
 			/* symbol must be 1 or -1; if it's 0,
 			   there's something wrong with the choice
@@ -590,7 +590,6 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 	uint32 deps_found;
 	uint64 *dependencies;
 	uint32 skip_matbuild = 0;
-	uint32 cado_filter = 0;
 	time_t cpu_time = time(NULL);
 #ifdef HAVE_MPI
 	int32 grid_bools[2] = {0};
@@ -630,10 +629,6 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 		if (strstr(obj->nfs_args, "skip_matbuild=1")) {
 			logprintf(obj, "skipping matrix build\n");
 			skip_matbuild = 1;
-		}
-		if (strstr(obj->nfs_args, "cado_filter=1")) {
-			logprintf(obj, "assuming CADO-NFS filtering\n");
-			cado_filter = 1;
 		}
 	}
 
@@ -716,9 +711,6 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 		if (obj->mpi_la_row_rank + obj->mpi_la_col_rank == 0) {
 #endif
 		uint64 sparse_weight;
-
-		if (cado_filter)
-			nfs_convert_cado_cycles(obj);
 
 		/* build the initial matrix that is the output from
 		   the filtering */

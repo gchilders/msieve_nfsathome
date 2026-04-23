@@ -546,7 +546,7 @@ void relation_batch_free(relation_batch_t *rb) {
 }
 
 /*------------------------------------------------------------------*/
-void relation_batch_add(int64 a, uint32 b, 
+void relation_batch_add(int64 a, uint64 b, 
 			uint32 *factors_r, uint32 num_factors_r, 
 			mpz_t unfactored_r_in,
 			uint32 *factors_a, uint32 num_factors_a, 

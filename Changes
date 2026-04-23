@@ -1,4 +1,4 @@
-Vesrion 1.54:
+Version 1.54:
 	- Merged the CPU lanczos code from the msieve-lacuda branch, which 
 		includes long vector support; compiling with long vectors on
 		a modern machine with a modern gcc has yielded a 10-15%
@@ -7,6 +7,8 @@ Vesrion 1.54:
 		clique removal for datasets larger then 16GB; after years
 		of frustration this finally fixes the 'large dataset bug'
 	- Fixed errors in MPI block Lanczos (thanks Greg Childers)
+	- Updated NFS to allow relation b values > 2^32; large SNFS jobs 
+	  are starting to have a lot of these relations
 	- NFS Polynomial selection updates from many people:
 		- improved estimate of final e-value
 		- improved handling of the factors of leading alg. coefficient
@@ -23,6 +25,8 @@ Vesrion 1.54:
 		(thanks bsquared)
 	- Added a fix in the singleton removal (thanks NyanCat/gchilders)
 	- Changed the default NFS filtering target density to 90
+	- Removed CADO filtering conversion, the file format for that was 
+	  changed ages ago
 
 Version 1.53: 11/11/16
 	- Replaced the GPU sorting library with calls to CUB; this is more

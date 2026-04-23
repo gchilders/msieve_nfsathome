@@ -69,11 +69,11 @@ static INLINE void mpz_poly_free(mpz_poly_t * poly) {
 /* evaluate the homogeneous form of poly(x). If poly has
    degree d, then res = (b ^ d) * poly(a / b) */
 
-void eval_poly(mpz_t res, int64 a, uint32 b, mpz_poly_t *poly);
+void eval_poly(mpz_t res, int64 a, uint64 b, mpz_poly_t *poly);
 
 typedef struct {
 	int64 a;
-	uint32 b;
+	uint64 b;
 } abpair_t;
 
 /* Configuration for NFS parameters */
@@ -325,7 +325,7 @@ static INLINE uint64 decompress_p(uint8 *array, uint32 *offset_in) {
 
 typedef struct relation_t {
 	int64 a;               /* coordinates of relation; free relations */
-	uint32 b;              /*   have b = 0 */
+	uint64 b;              /*   have b = 0 */
 	uint32 rel_index;      /* line of savefile where relation occurs */
 	uint8 num_factors_r;   /* number of rational factors */
 	uint8 num_factors_a;   /* number of algebraic factors */
@@ -385,8 +385,6 @@ void nfs_read_cycles(msieve_obj *obj, factor_base_t *fb, uint32 *ncols,
 			uint32 dependency);
 
 void nfs_free_relation_list(relation_t *rlist, uint32 num_relations);
-
-void nfs_convert_cado_cycles(msieve_obj *obj);
 
 #ifdef __cplusplus
 }

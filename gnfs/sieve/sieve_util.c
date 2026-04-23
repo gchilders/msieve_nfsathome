@@ -15,7 +15,7 @@ $Id$
 #include "sieve.h"
 
 /*------------------------------------------------------------------*/
-void print_relation(savefile_t *savefile, int64 a, uint32 b, 
+void print_relation(savefile_t *savefile, int64 a, uint64 b, 
 			uint32 *factors_r, uint32 num_factors_r, 
 			uint32 large_prime_r[MAX_LARGE_PRIMES],
 			uint32 *factors_a, uint32 num_factors_a, 
@@ -25,7 +25,7 @@ void print_relation(savefile_t *savefile, int64 a, uint32 b,
 	char buf[LINE_BUF_SIZE];
 	char *tmp = buf;
 
-	tmp += sprintf(buf, "%" PRId64 ",%u", a, b);
+	tmp += sprintf(buf, "%" PRId64 ",%" PRIu64, a, b);
 	for (i = 0; i < num_factors_r; i++) {
 		if (i == 0)
 			tmp += sprintf(tmp, ":%x", factors_r[i]);
@@ -70,7 +70,7 @@ uint32 fplog(uint32 k, double log_of_base) {
 }
 
 /*------------------------------------------------------------------*/
-int32 fplog_eval_poly(int64 a, uint32 b, mpz_t scratch,
+int32 fplog_eval_poly(int64 a, uint64 b, mpz_t scratch,
 			mpz_poly_t *f, double log_base,
 			uint32 *bits) { 
 
@@ -89,7 +89,7 @@ int32 fplog_eval_poly(int64 a, uint32 b, mpz_t scratch,
 #define LOG_TARGET 220
 
 double get_log_base(mpz_poly_t *poly, 
-			int64 a0, int64 a1, uint32 b) { 
+			int64 a0, int64 a1, uint64 b) { 
 
 	/* Decide on a base for the logs of one polynomial. 
 
@@ -155,7 +155,7 @@ uint32 read_last_line(msieve_obj *obj, mpz_t n) {
 }
 
 /*------------------------------------------------------------------*/
-void write_last_line(msieve_obj *obj, mpz_t n, uint32 b) {
+void write_last_line(msieve_obj *obj, mpz_t n, uint64 b) {
 
 	char buf[LINE_BUF_SIZE];
 	FILE *linefile;
@@ -168,7 +168,7 @@ void write_last_line(msieve_obj *obj, mpz_t n, uint32 b) {
 	}
 
 	gmp_fprintf(linefile, "N %Zd\n", n);
-	fprintf(linefile, "%u\n", b);
+	fprintf(linefile, "%" PRIu64 "\n", b);
 	fclose(linefile);
 }
 

@@ -125,8 +125,8 @@ typedef struct {
 
 	int64 min_a;
 	int64 max_a;
-	uint32 min_b;
-	uint32 max_b;
+	uint64 min_b;
+	uint64 max_b;
 
 	uint32 num_buckets;
 	sieve_t sieve_rfb;
@@ -150,18 +150,18 @@ static uint32 do_one_line(sieve_job_t *job, uint32 b_offset);
 static void init_one_sieve(sieve_t *out_fb,
 			uint32 num_buckets, 
 			int64 min_a, int64 max_a, 
-			uint32 min_b, uint32 b_offset);
+			uint64 min_b, uint32 b_offset);
 
 static void fill_one_block(sieve_t *sieve_fb, 
 			uint32 block, uint32 num_buckets);
 
 static uint32 do_factoring(sieve_job_t *job,
-			int64 block_start, uint32 b,
+			int64 block_start, uint64 b,
 			mpz_t log_scratch);
 
 static uint32 do_resieve(sieve_job_t *job, uint32 low_offset,
 			uint32 high_offset, uint32 num_resieve, 
-			int64 block_start, uint32 b);
+			int64 block_start, uint64 b);
 
 static void do_one_resieve(sieve_t *fb, resieve_t *resieve_array, 
 			uint8 *hashtable, uint32 low_offset, 
@@ -169,11 +169,11 @@ static void do_one_resieve(sieve_t *fb, resieve_t *resieve_array,
 
 static uint32 do_one_factoring(sieve_job_t *job, 
 				resieve_t *sieve_value,
-				int64 block_start, uint32 b);
+				int64 block_start, uint64 b);
 
 static uint32 do_one_tf(sieve_t *sieve_fb, resieve_t *resieve, 
 			uint32 *factors, uint32 *num_factors_out, 
-			uint32 offset, uint32 b);
+			uint32 offset, uint64 b);
 
 /*------------------------------------------------------------------*/
 uint32 do_line_sieving(msieve_obj *obj, sieve_param_t *params, mpz_t n,
@@ -217,13 +217,13 @@ uint32 do_line_sieving(msieve_obj *obj, sieve_param_t *params, mpz_t n,
 	job.min_a = params->sieve_begin;
 	job.max_a = params->sieve_end;
 	job.min_b = 1;
-	job.max_b = 0xffffffff;     /* default is to sieve forever */
+	job.max_b = (uint64)(-1);     /* default is to sieve forever */
 
 	/* set user-specified limits, if any */
 
 	if (lower_limit != NULL && upper_limit != NULL) {
-		job.min_b = strtoul(lower_limit, NULL, 10);
-		job.max_b = strtoul(upper_limit, NULL, 10);
+		job.min_b = strtoull(lower_limit, NULL, 10);
+		job.max_b = strtoull(upper_limit, NULL, 10);
 		if (job.min_b > job.max_b) {
 			printf("lower bound on b must be <= upper bound\n");
 			return 0;
@@ -257,7 +257,8 @@ uint32 do_line_sieving(msieve_obj *obj, sieve_param_t *params, mpz_t n,
 	
 	logprintf(obj, "a range: [%" PRId64 ", %" PRId64 "]\n", 
 					job.min_a, job.max_a);
-	logprintf(obj, "b range: [%u, %u]\n", job.min_b, job.max_b);
+	logprintf(obj, "b range: [%" PRIu64 ", %" PRIu64 "]\n", 
+					job.min_b, job.max_b);
 	logprintf(obj, "number of hash buckets: %u\n", job.num_buckets);
 	logprintf(obj, "sieve block size: %u\n", BLOCK_SIZE);
 	logprintf(obj, "\n");
@@ -303,7 +304,7 @@ uint32 do_line_sieving(msieve_obj *obj, sieve_param_t *params, mpz_t n,
 	   so this is easy to implement */
 
 	obj->flags |= MSIEVE_FLAG_SIEVING_IN_PROGRESS;
-	for (i = 0; i <= job.max_b - job.min_b; i++) {
+	for (i = 0; i <= (uint32)(job.max_b - job.min_b); i++) {
 
 		relations_found += do_one_line(&job, i);
 
@@ -311,7 +312,7 @@ uint32 do_line_sieving(msieve_obj *obj, sieve_param_t *params, mpz_t n,
 
 		if ((obj->flags & (MSIEVE_FLAG_USE_LOGFILE |
 	    		   	  MSIEVE_FLAG_LOG_TO_STDOUT))) {
-			fprintf(stderr, "b = %u, %u complete / "
+			fprintf(stderr, "b = %" PRIu64 ", %u complete / "
 				"%u batched relations (need %u)\r", 
 				job.min_b + i, relations_found, 
 				job.relation_batch.num_relations,
@@ -323,7 +324,7 @@ uint32 do_line_sieving(msieve_obj *obj, sieve_param_t *params, mpz_t n,
 
 		if (relations_found >= max_relations ||
 		    (obj->flags & MSIEVE_FLAG_STOP_SIEVING) ||
-		    i == job.max_b - job.min_b) {
+		    i == (uint32)(job.max_b - job.min_b)) {
 
 			/* finish up any batch factoring that's left */
 
@@ -336,7 +337,7 @@ uint32 do_line_sieving(msieve_obj *obj, sieve_param_t *params, mpz_t n,
 				     	MSIEVE_FLAG_LOG_TO_STDOUT))
 				fprintf(stderr, "\n");
 
-			logprintf(obj, "completed b = %u, "
+			logprintf(obj, "completed b = %" PRIu64 ", "
 				"found %u relations\n", 
 				job.min_b + i, relations_found);
 			break;
@@ -565,8 +566,8 @@ static uint32 do_one_line(sieve_job_t *job, uint32 b_offset)
 	uint32 i;
 	int64 min_a = job->min_a;
 	int64 max_a = job->max_a;
-	uint32 min_b = job->min_b;
-	uint32 b = min_b + b_offset;
+	uint64 min_b = job->min_b;
+	uint64 b = min_b + b_offset;
 	int64 block_base = min_a;
 	uint32 num_buckets = job->num_buckets;
 	mpz_t log_scratch;
@@ -618,12 +619,12 @@ static uint32 do_one_line(sieve_job_t *job, uint32 b_offset)
 static void init_one_sieve(sieve_t *out_fb,
 			uint32 num_buckets, 
 			int64 min_a, int64 max_a, 
-			uint32 min_b, uint32 b_offset) {
+			uint64 min_b, uint32 b_offset) {
 
 	/* initialize all of the sieve updates */
 
 	uint32 i;
-	uint32 b = min_b + b_offset;
+	uint64 b = min_b + b_offset;
 	uint32 common;
 
 	if (b_offset % LOG_UPDATE_RATE == 0) {
@@ -683,7 +684,7 @@ static void init_one_sieve(sieve_t *out_fb,
 		   if the entry is a projective root (i.e. p == r) */
 
 		entry->skip = 0;
-		br = mp_modmul_1(entry->r, b, p);
+		br = mp_modmul_1(entry->r, (uint32)(b % p), p);
 		if (br == 0 && (entry->r == p || b % p == 0)) {
 			entry->skip = 1;
 			continue;
@@ -731,7 +732,7 @@ static void init_one_sieve(sieve_t *out_fb,
 		int64 rem;
 
 		entry->skip = 0;
-		br = mp_modmul_1(entry->r, b, p);
+		br = mp_modmul_1(entry->r, (uint32)(b % p), p);
 		if (br == 0 && b % entry->orig_p == 0) {
 			entry->skip = 1;
 			continue;
@@ -757,8 +758,10 @@ static void init_one_sieve(sieve_t *out_fb,
 	   their combined log value. This is added to the cutoff
 	   for the entire sieve later */
 
-	common = mpz_fdiv_ui(out_fb->poly->coeff[out_fb->poly->degree], b);
-	common = mp_gcd_1(common, b);
+	uint64_2gmp(b, out_fb->tmp2);
+	mpz_gcd(out_fb->tmp3, out_fb->poly->coeff[out_fb->poly->degree],
+		out_fb->tmp2);
+	common = (uint32)mpz_get_ui(out_fb->tmp3);
 	out_fb->proj_bias = fplog(common, out_fb->log_base);
 }
 
@@ -893,7 +896,7 @@ static void fill_one_block(sieve_t *sieve_fb,
 
 /*------------------------------------------------------------------*/
 static uint32 do_factoring(sieve_job_t *job, 
-			int64 block_start, uint32 b,
+			int64 block_start, uint64 b,
 			mpz_t log_scratch) {
 
 	/* scan a sieve block for smooth numbers */
@@ -1024,7 +1027,7 @@ static uint32 do_factoring(sieve_job_t *job,
 			if (gcda < 0)
 				gcda += b;
 
-			if (mp_gcd_1((uint32)gcda, b) != 1) {
+			if (mp_gcd_2((uint64)gcda, b) != 1) {
 				sieve_a[i+j] = RESIEVE_INVALID;
 				continue;
 			}
@@ -1075,7 +1078,7 @@ static uint32 do_factoring(sieve_job_t *job,
 /*------------------------------------------------------------------*/
 static uint32 do_resieve(sieve_job_t *job, uint32 low_offset,
 			uint32 high_offset, uint32 num_resieve, 
-			int64 block_start, uint32 b) {
+			int64 block_start, uint64 b) {
 
 	/* perform resieving for all the values between 
 	   low_offset and high_offset (inclusive) in a 
@@ -1204,7 +1207,7 @@ static void do_one_resieve(sieve_t *fb, resieve_t *resieve_array,
 
 /*------------------------------------------------------------------*/
 static uint32 do_one_factoring(sieve_job_t *job, resieve_t *sieve_value,
-				int64 block_start, uint32 b) {
+				int64 block_start, uint64 b) {
 
 	/* Determine the factorization of one sieve value */
 
@@ -1330,7 +1333,7 @@ static void divide_out_p(sieve_t *fb, uint32 p) {
 
 static uint32 do_one_tf(sieve_t *sieve_fb, resieve_t *resieve,
 			uint32 *factors, uint32 *num_factors_out,
-			uint32 offset, uint32 b) {
+			uint32 offset, uint64 b) {
 
 	/* Trial factor a sieve value (in sieve_fb->res) using 
 	   the primes in one factor base */
