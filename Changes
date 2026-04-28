@@ -20,6 +20,7 @@ Version 1.54:
 	- Made the maximum merge weight configurable (thanks Lionel Debroux)
 	- Fix typo in dd_precision_is_ieee (thanks Ben Buhrow)
 	- Updated the makefile to build GPU code for more recent GPUs
+	- Fixed typo declaring gzip pointers (thanks ccorn)
 	- Updated CUB version
 	- Added a fix that avoids a crash when linking to GMP 6.2.0 
 		(thanks bsquared)

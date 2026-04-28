@@ -152,7 +152,7 @@ void savefile_open(savefile_t *s, uint32 flags) {
 			fclose(fp);
 		}
 		if (s->is_a_FILE) {
-			s->fp = (gzFile *)fopen(s->name, "a");
+			s->fp = (gzFile)fopen(s->name, "a");
 		} else {
 			s->fp = gzopen(s->name, "a");
 			s->isCompressed = 1;
