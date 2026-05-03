@@ -241,31 +241,34 @@ static void get_sieve_params(uint32 bits, sieve_param_t *params) {
 }
 
 /*--------------------------------------------------------------------*/
-void eval_poly(mpz_t res, int64 a, uint32 b, mpz_poly_t *poly) {
+void eval_poly(mpz_t res, int64 a, uint64 b, mpz_poly_t *poly) {
 
 	/* Evaluate one polynomial at 'a' and 'b' */
 
 	uint32 d = poly->degree;
 	/* Make thread-safe */
-	mpz_t tmp1, tmp2;
+	mpz_t tmp1, tmp2, tmp3;
 
 	mpz_init(tmp1);
 	mpz_init(tmp2);
+	mpz_init(tmp3);
 
 	int64_2gmp(a, tmp1);
-	mpz_set_ui(tmp2, b);
+	uint64_2gmp(b, tmp2);
+	mpz_set(tmp3, tmp2);
 	mpz_set(res, poly->coeff[d]);
 
 	while (--d) {
 		mpz_mul(res, res, tmp1);
 		mpz_addmul(res, poly->coeff[d], tmp2);
-		mpz_mul_ui(tmp2, tmp2, b);
+		mpz_mul(tmp2, tmp2, tmp3);
 	}
 	mpz_mul(res, res, tmp1);
 	mpz_addmul(res, poly->coeff[d], tmp2);
 
 	mpz_clear(tmp1);
 	mpz_clear(tmp2);
+	mpz_clear(tmp3);
 }
 
 /*------------------------------------------------------------------*/

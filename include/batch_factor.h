@@ -29,7 +29,7 @@ extern "C" {
 
 #define MAX_LARGE_PRIMES 3
 
-typedef void (*print_relation_t)(savefile_t *savefile, int64 a, uint32 b,
+typedef void (*print_relation_t)(savefile_t *savefile, int64 a, uint64 b,
 			uint32 *factors_r, uint32 num_factors_r, 
 			uint32 lp_r[MAX_LARGE_PRIMES],
 			uint32 *factors_a, uint32 num_factors_a, 
@@ -40,7 +40,7 @@ typedef void (*print_relation_t)(savefile_t *savefile, int64 a, uint32 b,
 
 typedef struct {
 	int64 a;
-	uint32 b;
+	uint64 b;
 	uint8 num_factors_r;     /* doesn't include large primes */
 	uint8 num_factors_a;     /* doesn't include large primes */
 	uint8 lp_r_num_words;     /* one number with this many words */
@@ -116,7 +116,7 @@ void relation_batch_free(relation_batch_t *rb);
    just involves modifying the base case of the recursion; maybe 
    that should be made into a callback */
 
-void relation_batch_add(int64 a, uint32 b, 
+void relation_batch_add(int64 a, uint64 b, 
 			uint32 *factors_r, uint32 num_factors_r, 
 			mpz_t unfactored_r,
 			uint32 *factors_a, uint32 num_factors_a, 

@@ -249,7 +249,7 @@ static uint32 verify_product(mpz_poly_t *gmp_prod, abpair_t *abpairs,
 
 	for (i = 0; i < num_relations; i++) {
 		int64 a = abpairs[i].a;
-		uint32 b = q - (abpairs[i].b % q);
+		uint32 b = q - (uint32)(abpairs[i].b % q);
 		uint32 ac;
 		uint32 accum[MAX_POLY_DEGREE + 1];
 
@@ -292,7 +292,7 @@ static void relation_to_poly(abpair_t *abpair, mpz_t c,
 	mpz_set(poly->coeff[0], c);
 	int64_2gmp(abpair->a, poly->coeff[1]);
 	mpz_mul(poly->coeff[0], poly->coeff[0], poly->coeff[1]);
-	mpz_set_ui(poly->coeff[1], (unsigned long)abpair->b);
+	uint64_2gmp(abpair->b, poly->coeff[1]);
 
 	poly->degree = 0;
 	if (abpair->b > 0) {
