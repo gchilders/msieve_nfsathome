@@ -4,3 +4,17 @@ common/lanczos/gpu/BxN_NxB_cpu.c
 .vscode/dryrun.log
 .vscode/settings.json
 .vscode/targets.log
+*.no
+*.o
+msieve
+*.a
+*.fatbin
+*.ptx
+*.qo
+*.so
+built
+msieve.dat
+msieve.dat.*
+msieve.fb
+msieve.log
+worktodo.ini

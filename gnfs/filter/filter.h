@@ -18,6 +18,7 @@ $Id$
 #define _GNFS_FILTER_FILTER_H_
 
 #include <common/filter/filter.h>
+#include <common/filter/filter_priv.h>
 #include "gnfs.h"
 
 /* Keep a small but explicit namespace reserve below UINT32_MAX. The

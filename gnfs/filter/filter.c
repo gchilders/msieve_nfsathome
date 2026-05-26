@@ -484,10 +484,6 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	nfs_compact_lp_file(obj, &filter, ram_size);
 	/* save filter state before initial LP read for multi-density small path */
 	{
-	uint32 pre_read_nr = filter.num_relations;
-	uint32 pre_read_ni = filter.num_ideals;
-	uint32 pre_read_te = filter.target_excess;
-
 	filter_read_lp_file(obj, &filter, 0);
 
 	if (savefile_size < ram_size / 2) {
@@ -505,21 +501,58 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 		else {
 			uint32 d;
 			char dsuffix[32];
+			uint8 *saved_rel_array;
+			size_t saved_rel_bytes;
+			uint32 saved_nr, saved_ni;
+			uint32 extra_needed = filter.target_excess;
+
+			/* run cliques once for all densities */
+			filter.target_excess = (uint32)(filter.target_excess *
+							FINAL_EXCESS_FRACTION);
+			if ((relations_needed = check_excess(&filter)) > 0)
+				goto finished;
+			filter_purge_cliques(obj, &filter);
+
+			/* save post-clique state */
+			saved_nr = filter.num_relations;
+			saved_ni = filter.num_ideals;
+			{
+				relation_ideal_t *rp = filter.relation_array;
+				uint32 k;
+				for (k = 0; k < saved_nr; k++)
+					rp = next_relation_ptr(rp);
+				saved_rel_bytes = (uint8 *)rp - (uint8 *)filter.relation_array;
+			}
+			saved_rel_array = (uint8 *)xmalloc(saved_rel_bytes);
+			memcpy(saved_rel_array, filter.relation_array, saved_rel_bytes);
 			for (d = 0; d < num_densities; d++) {
 				if (d > 0) {
 					free(filter.relation_array);
 					free(filter.relation_ptr);
-					filter.relation_array = NULL;
-					filter.relation_ptr = NULL;
-					filter.num_relations = pre_read_nr;
-					filter.num_ideals    = pre_read_ni;
-					filter.target_excess = pre_read_te;
-					filter_read_lp_file(obj, &filter, 0);
+					filter.relation_array = (relation_ideal_t *)xmalloc(saved_rel_bytes);
+					memcpy(filter.relation_array, saved_rel_array, saved_rel_bytes);
+					filter.relation_ptr = (relation_ideal_t **)xmalloc(
+								saved_nr * sizeof(relation_ideal_t *));
+					{
+						relation_ideal_t *rp = filter.relation_array;
+						uint32 k;
+						for (k = 0; k < saved_nr; k++) {
+							filter.relation_ptr[k] = rp;
+							rp = next_relation_ptr(rp);
+						}
+					}
+					filter.num_relations = saved_nr;
+					filter.num_ideals    = saved_ni;
 				}
+				logprintf(obj, "trying target density %.0f\n",
+						target_densities[d]);
 				memset(&merge, 0, sizeof(merge));
-				if ((relations_needed = do_merge(obj, &filter,
-							&merge, target_densities[d], NULL)) > 0) {
-					if (d == 0) goto finished;
+				merge.num_extra_relations = NUM_EXTRA_RELATIONS;
+				merge.target_density = target_densities[d];
+				filter_merge_init(obj, &filter);
+				filter_merge_2way(obj, &filter, &merge);
+				if (filter_merge_full(obj, &merge, extra_needed) != 0) {
+					if (d == 0) { relations_needed = 1000000; free(saved_rel_array); goto finished; }
 					break;
 				}
 				filter_postproc_relsets(obj, &merge);
@@ -528,6 +561,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 				filter_free_relsets(&merge);
 				relations_needed = 0;
 			}
+			free(saved_rel_array);
 			sprintf(lp_filename, "%s.lp", obj->savefile.name);
 			remove(lp_filename);
 			wall_time = time(NULL) - wall_time;
@@ -570,25 +604,61 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 			}
 			else {
 				uint32 d;
-				uint32 sv_nr = filter.num_relations;
-				uint32 sv_ni = filter.num_ideals;
-				uint32 sv_te = filter.target_excess;
 				char dsuffix[32];
+				uint8 *saved_rel_array;
+				size_t saved_rel_bytes;
+				uint32 saved_nr, saved_ni;
+				uint32 extra_needed;
+				filter_read_lp_file(obj, &filter, 0);
+				extra_needed = filter.target_excess;
+
+				/* run cliques once for all densities */
+				filter.target_excess = (uint32)(filter.target_excess *
+								FINAL_EXCESS_FRACTION);
+				if ((relations_needed = check_excess(&filter)) > 0)
+					goto finished;
+				filter_purge_cliques(obj, &filter);
+
+				/* save post-clique state */
+				saved_nr = filter.num_relations;
+				saved_ni = filter.num_ideals;
+				{
+					relation_ideal_t *rp = filter.relation_array;
+					uint32 k;
+					for (k = 0; k < saved_nr; k++)
+						rp = next_relation_ptr(rp);
+					saved_rel_bytes = (uint8 *)rp - (uint8 *)filter.relation_array;
+				}
+				saved_rel_array = (uint8 *)xmalloc(saved_rel_bytes);
+				memcpy(saved_rel_array, filter.relation_array, saved_rel_bytes);
 				for (d = 0; d < num_densities; d++) {
 					if (d > 0) {
 						free(filter.relation_array);
 						free(filter.relation_ptr);
-						filter.relation_array = NULL;
-						filter.relation_ptr = NULL;
-						filter.num_relations = sv_nr;
-						filter.num_ideals    = sv_ni;
-						filter.target_excess = sv_te;
+						filter.relation_array = (relation_ideal_t *)xmalloc(saved_rel_bytes);
+						memcpy(filter.relation_array, saved_rel_array, saved_rel_bytes);
+						filter.relation_ptr = (relation_ideal_t **)xmalloc(
+									saved_nr * sizeof(relation_ideal_t *));
+						{
+							relation_ideal_t *rp = filter.relation_array;
+							uint32 k;
+							for (k = 0; k < saved_nr; k++) {
+								filter.relation_ptr[k] = rp;
+								rp = next_relation_ptr(rp);
+							}
+						}
+						filter.num_relations = saved_nr;
+						filter.num_ideals    = saved_ni;
 					}
-					filter_read_lp_file(obj, &filter, 0);
+					logprintf(obj, "trying target density %.0f\n",
+							target_densities[d]);
 					memset(&merge, 0, sizeof(merge));
-					if ((relations_needed = do_merge(obj, &filter,
-								&merge, target_densities[d], NULL)) > 0) {
-						if (d == 0) goto finished;
+					merge.num_extra_relations = NUM_EXTRA_RELATIONS;
+					merge.target_density = target_densities[d];
+					filter_merge_init(obj, &filter);
+					filter_merge_2way(obj, &filter, &merge);
+					if (filter_merge_full(obj, &merge, extra_needed) != 0) {
+						if (d == 0) { relations_needed = 1000000; free(saved_rel_array); goto finished; }
 						break;
 					}
 					filter_postproc_relsets(obj, &merge);
@@ -597,6 +667,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 					filter_free_relsets(&merge);
 					relations_needed = 0;
 				}
+				free(saved_rel_array);
 				sprintf(lp_filename, "%s.lp", obj->savefile.name);
 				remove(lp_filename);
 				wall_time = time(NULL) - wall_time;
@@ -634,13 +705,17 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 						filter.num_relations = sv_nr;
 						filter.num_ideals    = sv_ni;
 					}
+					logprintf(obj, "trying target density %.0f\n",
+							target_densities[d]);
 					memset(&merge, 0, sizeof(merge));
-					if ((relations_needed = do_partial_filtering(obj,
-								&filter, &merge, entries_r,
-								entries_a, target_densities[d],
-								max_weight, NULL)) > 0) {
-						if (d == 0) goto finished;
-						break;
+					{
+						uint32 dn = do_partial_filtering(obj, &filter, &merge,
+								entries_r, entries_a, target_densities[d],
+								max_weight);
+						if (dn > 0) {
+							if (d == 0) { relations_needed = dn; goto finished; }
+							break;
+						}
 					}
 					filter_postproc_relsets(obj, &merge);
 					sprintf(dsuffix, ".%d", (int)(target_densities[d] + 0.5));
