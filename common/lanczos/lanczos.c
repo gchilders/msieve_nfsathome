@@ -1597,6 +1597,21 @@ uint64 * block_lanczos(msieve_obj *obj,
 		obj->flags |= MSIEVE_FLAG_SIEVING_IN_PROGRESS;
 	}
 
+	/* allow an explicit checkpoint cadence; values other than
+	   DEFAULT_DUMP_INTERVAL are exempt from the timing-based
+	   recalibration, giving deterministic dump dimensions */
+
+	if (obj->nfs_args != NULL) {
+		const char *tmp = strstr(obj->nfs_args, "dump_interval=");
+		if (tmp != NULL) {
+			dump_interval = (uint32)strtoul(tmp + 14, NULL, 10);
+			logprintf(obj, "using dump_interval %u\n",
+					dump_interval);
+			if (dump_interval)
+				obj->flags |= MSIEVE_FLAG_SIEVING_IN_PROGRESS;
+		}
+	}
+
 	/* solve the matrix */
 
 	lanczos_output = block_lanczos_core(obj, &packed_matrix,

@@ -822,7 +822,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		if (p->block_nnz < 100000) p->block_nnz = 100000;
 		if (p->block_nnz > 1750000000) p->block_nnz = 1750000000; 
 	}
-	printf("Nonzeros per block: %u\n", p->block_nnz);
+	logprintf(obj, "nonzeros per matrix block: %u\n", p->block_nnz);
 
 	/* should we used CUDA managed memory to store the matrix */
 

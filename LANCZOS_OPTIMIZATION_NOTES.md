@@ -457,3 +457,149 @@ and simpler geometry changes fail.
 8. Sweep `block_nnz`.
 9. Apply lane-0 `csr_upper_bound` broadcast and remeasure.
 10. Choose the next structural kernel experiment from actual bottlenecks.
+
+## Results: 2026-06-09 Baseline + block_nnz Sweep (basement folder)
+
+Setup: RTX 5070 native sm_120 build, CUDA 13.2, VBITS=64, C168_1074_2202
+density-100 matrix (9538691 x 9538916, 884.6M sparse nnz + 64 packed dense
+rows), 10.5 GB VRAM, benchmark = 5-min `-ncr` checkpoint restarts.
+
+nsys NVTX split (default block_nnz, per iteration):
+
+| Range | ms/iter | share |
+|---|---:|---:|
+| normal SpMV (A·x) | 84.0 | 70% |
+| transpose SpMV (A^T·x) | 28.0 | 23% |
+| vector ops + dense rows + memset | ~4 | 3% |
+
+Normal direction is 3x slower than transpose over the same nnz.
+Profile: /tmp/lanczos_nsys_baseline.nsys-rep
+
+block_nnz sweep:
+
+| block_nnz | blocks | ms/iter | speedup |
+|---|---:|---:|---:|
+| 1.75e9 (default) | 1 | 119.7 | 1.00x |
+| 1e9 | 1 | 119.9 | 1.00x |
+| 512M | 2 | 54.4 | 2.20x |
+| **256M** | 4 | **46.6** | **2.57x** |
+| 128M | 7 | 60.4 | 1.98x |
+| 64M | 14 | 88.4 | 1.35x |
+
+Clear minimum near 256M; L2-locality hypothesis confirmed. Note the sweep
+was run at VBITS=64 (8B per x entry); at VBITS=256 the optimum should shift
+~4x lower (~64M). Full-solve projection at 256M: ~1h57m vs ~5h default.
+
+Next: finer probe 192M-384M, ncu on normal-direction kernel (atomics vs
+DRAM), per-direction warp_items tuning, lane-0 broadcast.
+
+## 2026-06-10: Multi-block Correctness Verification
+
+After a sqrt failure on a solve that had mixed block_nnz experiments and a
+likely matrix rebuild, multi-block SpMV was verified two independent ways:
+
+1. `cub/spmv_blocktest.c` — standalone harness (dlopen spmv_engine.so):
+   single vs 2/4/7/14 column slices bitwise-match a CPU reference on two
+   synthetic shapes including 400K-entry heavy rows.
+2. Real-matrix A/B: identical seed checkpoint restarted under default
+   (1 block) and block_nnz=256M (4 blocks), both run to the same fixed
+   dump boundary (new `dump_interval=N` nfs_args knob in lanczos.c skips
+   the timing-based recalibration). The two 381MB checkpoints at
+   dim_solved=100033 were byte-identical.
+
+Conclusions:
+- Multi-block SpMV and block_nnz=256M are safe for production.
+- A `.chk` is only valid for the exact `.mat` it started on. Rebuilding
+  the matrix draws fresh random quadratic characters, so "rebuild .mat,
+  continue from old .chk" silently produces garbage dependencies that
+  fail in sqrt as "algebraic side is not a square" on every dependency.
+
+## 2026-06-10: Cross-VBITS Comparison (same matrix, fresh-start 380s windows)
+
+Matrix: C168 9532121 x 9532347, 884.6M sparse nnz, RTX 5070. Metric is
+dims/sec (ms/iter is not comparable across VBITS). msieve-reported host
+memory in parens.
+
+| VBITS | block_nnz | blocks | dims/s | ms/iter | mem |
+|---:|---|---:|---:|---:|---|
+| 64  | default (1 blk) | 1 | 528   | 119.7 | (7.4 GB) |
+| 64  | 512M  | 2  | 1162 | 54.4  | |
+| 64  | 256M  | 4  | **1350** | 46.6-47.5 | |
+| 64  | 128M  | 7  | 1046 | 60.4  | |
+| 128 | default | 1 | 743  | 171.3 | (7.5 GB) |
+| 128 | 256M  | 4  | 1308 | 97.3  | (7.7 GB) |
+| 128 | 128M  | 7  | **1421** | 89.6 | (7.9 GB) |
+| 128 | 64M   | 14 | 1020 | 124.8 | (8.4 GB) |
+| 256 | default | 1 | 1208 | 211.3 | (8.3 GB) |
+| 256 | 128M  | 7  | **1435** | 177.8 | (8.7 GB) |
+| 256 | 64M   | 14 | 1162 | 219.6 | (9.1 GB) |
+| 256 | 32M   | 28 | 769  | 255.2 | (10.0 GB) |
+
+Findings:
+
+- Tuned optima converge: 1350 / 1421 / 1435 dims/s for VBITS 64/128/256.
+  Higher VBITS is worth ~5-6% over VBITS=64 once block_nnz is tuned —
+  real but small. The convergence suggests a common memory-system limit.
+- Untuned (single-block) the spread is huge: 528 / 743 / 1208. This is
+  why higher VBITS is the right advice for users who never set block_nnz:
+  wider vectors amortize per-nonzero index traffic.
+- Optimal block_nnz by VBITS: 256M / 128M / 128M. A "half-L2 active
+  x-window" model predicts 278M / 139M / 70M; the v256 deviation (128M
+  measured vs 70M predicted) indicates a per-block overhead floor.
+  Candidate dynamic formula for lanczos_matmul_gpu.c:739:
+    block_nnz = max(128M, (L2_bytes/2) / sizeof(v_t) * avg_col_weight)
+  which reproduces all three measured optima on this card.
+- VBITS=256 fits this ~9.5M matrix on 12GB (shared with display), but
+  vectors scale 4x vs VBITS=64 — capacity, not speed, is the VBITS=256
+  concern for larger matrices on this card.
+
+Next: one ncu pass on the tuned config to identify the converged
+bottleneck (gather sectors / atomics / DRAM). If the memory system is
+saturated, kernel micro-opts (lane-0 broadcast) won't pay; matrix
+reordering would be the remaining lever.
+
+## 2026-06-10: ncu Profile of Tuned Config (VBITS=64, block_nnz=256M)
+
+Captured per-direction via NVTX filters (8 kernels each, --set detailed).
+
+Normal direction (3 full blocks @ ~6.8ms + 1 partial @ ~3ms):
+- L2 cache throughput 74% (the saturated unit), L2 hit rate 87.8%
+- DRAM only 28% (185 GB/s) — NOT DRAM-bound; block_nnz fix confirmed
+- SM 39%, occupancy 89%, L1 hit 8% (random gathers miss L1)
+- autotune picked warp_items=512 at this block size (1024 at single-block)
+
+Transpose direction (4 blocks, heterogeneous):
+- Block 1 (heavy ideal rows, small x-window): L1 hit 86%, L2 only 15%,
+  SM 58% — gathers absorbed by L1 when the window is tiny
+- Blocks 2-3: L2 throughput 84-88%, L2 hit 87.5%, DRAM ~32% — same
+  L2-bandwidth-bound profile as the normal direction
+
+Conclusion: after block_nnz tuning, both directions sit at the L2
+BANDWIDTH ceiling (~75-88% utilization, ~88% hit rate). This explains the
+cross-VBITS convergence at ~1400 dims/s. Remaining levers, in order:
+1. VBITS=256 in production (+~6%, already measured; full 32B sectors per
+   gather and 4x less colidx traffic per dim).
+2. Owned-row stores to cut atomicXor L2 round-trips (bounded, ~10-15% of
+   L2 ops at most).
+3. lane-0 csr_upper_bound broadcast (small).
+4. Column-clustering / matrix reordering to raise the 8% L1 hit rate —
+   the only large lever left, and the most invasive.
+The 2.6x from block_nnz was the structural win; everything left is
+constants-level (5-20%).
+
+## Cross-Card Validation Protocol
+
+`vbits_block_sweep.sh` packages the benchmark for other GPUs: copy
+msieve.dat.mat + msieve.fb + worktodo.ini from the reference C168 job,
+run `./vbits_block_sweep.sh <sm>`, return bench_results.tar.gz.
+
+Predictions to check against the Tesla V100 (sm_70, 6MB L2, 900GB/s HBM2):
+1. The block_nnz curve should be much flatter than the 5070's, with the
+   optimum at large blocks (256M-1.75B) — the L2-resident window is
+   unreachable above the per-block overhead floor.
+2. The VBITS=256 vs 64 gap should be much larger than the 5070's +6%
+   (full-sector gathers attack the DRAM-bound constraint directly).
+3. Total block_nnz gain limited (~1.2-1.5x vs the 5070's 2.6x).
+If (1)-(3) hold, the dynamic block_nnz formula's floor behavior is right
+for small-L2 cards and per-arch guidance becomes: big-L2 cards tune
+block_nnz, small-L2 cards raise VBITS.
