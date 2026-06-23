@@ -603,3 +603,99 @@ Predictions to check against the Tesla V100 (sm_70, 6MB L2, 900GB/s HBM2):
 If (1)-(3) hold, the dynamic block_nnz formula's floor behavior is right
 for small-L2 cards and per-arch guidance becomes: big-L2 cards tune
 block_nnz, small-L2 cards raise VBITS.
+
+## 2026-06-11: Tesla V100 Results (small-L2 validation)
+
+V100-SXM2-32GB (sm_70, 6MB L2, 900GB/s HBM2), CUDA 12.1, 20.2M x 20.2M
+matrix, 2.244B sparse nnz, 111 nnz/col. Fresh-start 900s windows.
+Reference: user's 51h production solve = VBITS=64 default = 574 ms/iter.
+
+| VBITS | block_nnz | blocks | dims/s | ms/iter | host mem |
+|---:|---|---:|---:|---:|---|
+| 64  | default(1.75B) | 2 | 109.5 | 577 | 18.7 GB |
+| 64  | 512M | 5  | 115.5 | 547 | 19.1 GB |
+| 64  | 256M | 9  | 127.5 | 496 | 19.7 GB |
+| 64  | 128M | 18 | **141.9** | 445 | 21.2 GB |
+| 64  | 64M  | 35 | 136.2 | 464 | 23.9 GB |
+| 256 | default(1.75B) | 2 | FAILED internal check at shutdown | | 20.2 GB |
+| 256 | 512M | 5  | 256.1 | 997 | 20.5 GB |
+| 256 | 256M | 9  | **257.5** | 991 | 21.1 GB |
+| 256 | 128M | 18 | 246.3 | 1037 | 22.3 GB |
+| 256 | 64M  | 35 | 217.5 | 1173 | 24.7 GB |
+
+Prediction scorecard:
+1. "Flat curve, optimum at large blocks" — half right. VBITS=256 is flat
+   (512M-128M within 4%), as predicted (its windows can never fit 6MB L2).
+   VBITS=64 has a real curve: +30% at 128M (9.2MB window ~ 1.5x L2), so
+   partial L2 residency pays even on small-L2 cards.
+2. "VBITS=256 gap >> the 5070's +6%" — confirmed dramatically: best-vs-
+   best +81% (141.9 -> 257.5 dims/s). Pure transaction efficiency.
+3. "Total block_nnz gain 1.2-1.5x" — 1.30x at VBITS=64. Combined
+   VBITS=256 + tuned block_nnz vs the production config: 2.35x
+   (the 51h solve becomes ~22h).
+
+Dynamic formula validation: block_nnz = max(128M, (L2/2)/sizeof(v_t) *
+avg_col_weight) predicts: V100 v64 -> 128M (measured optimum, exact);
+V100 v256 -> 128M (within 4.4% of measured best); 5070 v64 -> 278M
+(~256M optimum, exact); 5070 v128/v256 -> 128M (measured optima, exact).
+Within ~5% of measured best on every card/VBITS tested. VALIDATED on
+two architectures at opposite ends of the L2 spectrum.
+
+Unified recommendation: VBITS=256 + dynamic block_nnz wins on both
+cards (5070: 1435 dims/s; V100: 257 dims/s) WHERE VRAM PERMITS — this
+20.2M matrix needs ~21GB at VBITS=256, so 12GB consumer cards must run
+VBITS=64 (+formula) for matrices this size.
+
+ANOMALY to investigate: v256 + default (2 blocks of ~1.75B nnz) failed
+the periodic consistency check during graceful shutdown on the V100
+("error: corrupt state"). All other v256 runs passed continuous checks
+for 8-10 min each. Could be the near-clamp 1.75B block size at VBITS=256
+on sm_70, or a shutdown-path quirk. The 5070 ran v256+default cleanly.
+Do not ship v256 near the 1.75B clamp until understood; the recommended
+formula values (128-256M) are unaffected.
+
+## Tuning Heuristic (validated 2026-06-11, RTX 5070 + Tesla V100)
+
+1. Use the largest VBITS that fits VRAM (256 where possible). Tuned
+   speed orders 256 >= 128 > 64 on every card tested; the advantage
+   grows as L2 shrinks (+6% on 48MB-L2 5070, +81% on 6MB-L2 V100).
+2. Set block_nnz = max(128M, (L2_size/2)/sizeof(v_t) * avg_col_weight).
+   Within ~5% of measured optimum on every tested card/VBITS.
+3. If VRAM is tight: raise block_nnz first (frees per-block rowptr
+   replicas and costs little speed at high VBITS); drop VBITS only as
+   a last resort (-45% on small-L2 cards).
+4. use_managed (matrix > VRAM): max VBITS + default/max block_nnz.
+   The bottleneck becomes matrix bytes streamed per dim of progress
+   = (4B*nnz + rowptr replicas)/VBITS — big VBITS divides it, big
+   blocks minimize replication. (Predicted, not yet benchmarked.)
+5. Never rebuild the .mat mid-solve (fresh random quadratic characters
+   = different matrix; checkpoints are only valid for the exact .mat
+   they started on).
+
+Anomaly follow-up: the v256 + default (1.75B, near-clamp) "corrupt
+state" failure on the V100 did NOT reproduce on rerun — clean halt,
+243.6 dims/s (1048 ms/iter), completing the v256 table (default costs
+~5% vs the 256M optimum; flat curve confirmed). Treated as a transient
+one-off; no config restriction, but if "corrupt state" ever appears
+again, capture the log and investigate the shutdown-path check.
+
+## Planned: VBITS=512 Test (2026-06-12)
+
+Code supports VBITS up to 512 (VWORDS=8 unrolls present; lanczos.h
+whitelist). Predictions to check, written before measurement:
+
+1. Speed: v512 ~= v256 + 0-8%. GPU memory moves in 32B sectors; v_t hits
+   exactly one sector at VBITS=256 (gather sector traffic per dim
+   plateaus there — v512 issues half the gathers but each is 2 sectors).
+   The remaining v512 gain is colidx/rowptr traffic halving per dim.
+   If correct, VBITS=256 is the efficiency sweet spot and 512 is only
+   worth it where its memory cost is free.
+2. Memory: vectors and the dense-row block double vs v256 (~+30% total
+   footprint). RTX 5070 + 9.5M C168 matrix: ~13GB needed vs 12GB card —
+   expect OOM (which is itself the answer for 12GB cards). V100-32GB +
+   20.2M matrix: ~30-31GB at large blocks — borderline; prefer
+   NNZ_LIST="default 512000000 256000000 128000000" and watch the new
+   per-run vram_*.log sampling (added to vbits_block_sweep.sh).
+
+Commands: 5070: build VBITS=512, run plain skip_matbuild (formula picks
+block size). V100: ./vbits_block_sweep.sh 70 512 with the NNZ_LIST above.

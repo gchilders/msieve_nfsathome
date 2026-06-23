@@ -812,15 +812,46 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 
 	CUDA_TRY(cuMemAlloc(&d->gpu_scratch, VBITS * sizeof(v_t)))
 
-	/* Set preferred nonzeros per matrix block */
+	/* Set preferred nonzeros per matrix block. The default sizes the
+	   active input-vector window of each column-slice SpMV block to
+	   about half the L2 cache, with a floor that keeps per-block
+	   overhead (replicated row pointers, launch count) amortized.
+	   Within ~5% of the measured optimum on RTX 5070 (48MB L2) and
+	   Tesla V100 (6MB L2) at VBITS 64/128/256; see
+	   LANCZOS_OPTIMIZATION_NOTES.md. Override with block_nnz=N */
 
 	p->block_nnz = 1750000000;
+	if (p->unpacked_cols != NULL && p->ncols > 0) {
+		int l2_bytes = 0;
+		uint64 total_weight = 0;
+		uint64 computed;
+		double avg_col_weight;
+
+		CUDA_TRY(cuDeviceGetAttribute(&l2_bytes,
+				CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE,
+				d->gpu_info->device_handle))
+
+		for (i = 0; i < p->ncols; i++)
+			total_weight += p->unpacked_cols[i].weight;
+		avg_col_weight = (double)total_weight / p->ncols;
+
+		computed = (uint64)((double)(l2_bytes / 2) / sizeof(v_t) *
+					avg_col_weight);
+		computed = MAX(computed, 128000000);
+		computed = MIN(computed, 1750000000);
+		p->block_nnz = (uint32)computed;
+		logprintf(obj, "computed block_nnz %u (L2 cache %d bytes, "
+				"average column weight %.1f)\n",
+				p->block_nnz, l2_bytes, avg_col_weight);
+	}
 	if (obj->nfs_args != NULL) {
 		const char *tmp;
 		tmp = strstr(obj->nfs_args, "block_nnz=");
-		if (tmp != NULL) p->block_nnz = (uint32)atoi(tmp + 10);
-		if (p->block_nnz < 100000) p->block_nnz = 100000;
-		if (p->block_nnz > 1750000000) p->block_nnz = 1750000000; 
+		if (tmp != NULL) {
+			p->block_nnz = (uint32)atoi(tmp + 10);
+			if (p->block_nnz < 100000) p->block_nnz = 100000;
+			if (p->block_nnz > 1750000000) p->block_nnz = 1750000000;
+		}
 	}
 	logprintf(obj, "nonzeros per matrix block: %u\n", p->block_nnz);
 

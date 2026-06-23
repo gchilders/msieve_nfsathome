@@ -50,8 +50,14 @@ for VB in $VBITS_LIST; do
         args="skip_matbuild=1"
         [ "$nnz" != "default" ] && args="$args block_nnz=$nnz"
         echo "=== VBITS=$VB nnz=$nnz start $(date +%H:%M:%S) ===" | tee -a "$OUT/sweep.log"
+        ( while :; do
+              nvidia-smi --query-gpu=memory.used --format=csv,noheader \
+                  >> "$OUT/vram_v${VB}_${nnz}.log" 2>/dev/null
+              sleep 30
+          done ) & sampler=$!
         timeout "$RUN_SECS" ./msieve -nc2 "$args" -g 0 -t 4 \
             > "$OUT/run_v${VB}_${nnz}.out" 2>&1 || true
+        kill "$sampler" 2>/dev/null
         echo "=== VBITS=$VB nnz=$nnz done  $(date +%H:%M:%S) ===" | tee -a "$OUT/sweep.log"
         sleep 5
     done
