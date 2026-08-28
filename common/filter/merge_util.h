@@ -6,8 +6,8 @@ errors.
 
 Optionally, please be nice and tell me if you find this source to be
 useful. Again optionally, if you add to the functionality present here
-please consider making those additions public too, so that others may 
-benefit from your work.	
+please consider making those additions public too, so that others may
+benefit from your work.
 
 $Id$
 --------------------------------------------------------------------*/
@@ -23,41 +23,54 @@ extern "C" {
 
 #define MERGE_MAX_OBJECTS 500
 
+/* Small variable-length arrays dominate merge allocation counts at very
+   large scale.  Keep them in size-class slabs instead of issuing one
+   malloc/realloc/free per relation set or ideal adjacency list. */
+typedef struct merge_mem_pool_t merge_mem_pool_t;
+
+merge_mem_pool_t *merge_mem_pool_create(void);
+void merge_mem_pool_destroy(merge_mem_pool_t *pool);
+uint32 *merge_mem_alloc(merge_mem_pool_t *pool, uint32 words);
+uint32 *merge_mem_realloc(merge_mem_pool_t *pool, uint32 *ptr,
+			uint32 old_words, uint32 new_words);
+void merge_mem_free(merge_mem_pool_t *pool, uint32 *ptr, uint32 words);
+
 /* structure for merging relations that all have an ideal
    in common */
 
 typedef struct {
 	uint32 num_relsets;            /* number of relation sets to merge */
-	relation_set_t tmp_relsets[MERGE_MAX_OBJECTS];   /* array to hold 
-							    relation sets */
-	relation_set_t tmp_relsets2[MERGE_MAX_OBJECTS];  /* scratch array for 
-							    tmp_relsets */
-	uint32 tmp_relset_idx[MERGE_MAX_OBJECTS]; /* offsets into main 
-						     relation set array 
-						     where these relsets 
-						     occurred (they're put 
-						     back into these 
-						     locations) */
-	uint32 tmp_relations[MERGE_MAX_OBJECTS]; /* scratch buffer for 
-						    merging relation numbers 
+	uint32 relsets_alloc;          /* capacity of dynamic group arrays */
+	merge_mem_pool_t *data_pool;
+	relation_set_t *tmp_relsets;   /* relation sets in the current group */
+	uint32 *tmp_relset_idx;        /* offsets into the main relset array */
+	relation_set_t tmp_relsets2[MERGE_MAX_OBJECTS];  /* small spanning-tree
+							    scratch array */
+	uint32 tmp_relations[MERGE_MAX_OBJECTS]; /* scratch buffer for
+						    merging relation numbers
 						    from 2 relsets */
-	uint32 tmp_ideals[MERGE_MAX_OBJECTS]; /* scratch array for merging 
+	uint32 tmp_ideals[MERGE_MAX_OBJECTS]; /* scratch array for merging
 						 ideals from two relsets */
 } merge_aux_t;
+
+void merge_aux_init(merge_aux_t *aux, merge_mem_pool_t *data_pool);
+void merge_aux_free(merge_aux_t *aux);
 
 /* structure for tracking ideals during merging. Each ideal
    has one entry in each of the two arrays in this struct */
 
 typedef struct {
 	uint32 num_ideals;
-	ideal_set_t *list; /* for circular linked lists of ideals 
+	ideal_set_t *list; /* for circular linked lists of ideals
 			      connected together by a priority queue */
+	merge_mem_pool_t *data_pool;
 } ideal_list_t;
 
 /* set up an ideal list. is_active gives the starting
    state of each ideal in the list (0 or 1) */
 
-void ideal_list_init(ideal_list_t *list, uint32 num_ideals, uint32 is_active);
+void ideal_list_init(ideal_list_t *list, uint32 num_ideals, uint32 is_active,
+			merge_mem_pool_t *data_pool);
 
 /* clean up an ideal list */
 
@@ -88,23 +101,23 @@ void heap_add_ideal(heap_t *heap, ideal_list_t *list, uint32 ideal);
 
 void heap_remove_ideal(heap_t *heap, ideal_list_t *list, uint32 ideal);
 
-/* add all the ideals in a relation set r, that appear in more 
+/* add all the ideals in a relation set r, that appear in more
    than min_ideal_weight relation sets, to active_heap or
    inactive_heap, depending on the ideal */
 
-uint32 heap_add_relset(heap_t *active_heap, 
+uint32 heap_add_relset(heap_t *active_heap,
 			heap_t *inactive_heap,
-			ideal_list_t *list, 
+			ideal_list_t *list,
 			relation_set_t *r,
 			uint32 relset_num,
 			uint32 min_ideal_weight);
-	
+
 /* remove the ideals in a relation set r from active_heap and
    inactive_heap. If an ideal appears in min_ideal_weight or
    less relations after r is removed, then remove it from
    active_heap or inactive_heap entirely */
 
-void heap_remove_relset(heap_t *active_heap, 
+void heap_remove_relset(heap_t *active_heap,
 			heap_t *inactive_heap,
 			ideal_list_t *list,
 			relation_set_t *r,
@@ -116,13 +129,13 @@ void heap_remove_relset(heap_t *active_heap,
 uint32 heap_remove_best(heap_t *heap, ideal_list_t *list);
 uint32 heap_remove_worst(heap_t *heap, ideal_list_t *list);
 
-/* remove all the relation sets containing 'ideal' from 
+/* remove all the relation sets containing 'ideal' from
    active_heap and inactive_heap, storing them in aux. The
    removal process also handles all the other ideals in
    the relation sets */
 
 void load_next_relset_group(merge_aux_t *aux,
-			heap_t *active_heap, heap_t *inactive_heap, 
+			heap_t *active_heap, heap_t *inactive_heap,
 			ideal_list_t *ideal_list,
 			relation_set_t *relset_array,
 			uint32 ideal, uint32 min_ideal_weight);
@@ -145,7 +158,7 @@ size_t get_merge_memuse(relation_set_t *relsets, uint32 num_relsets,
 
 /* functions for merging relation sets */
 
-void merge_two_relsets(relation_set_t *r1, relation_set_t *r2, 
+void merge_two_relsets(relation_set_t *r1, relation_set_t *r2,
 			relation_set_t *r_out, merge_aux_t *aux);
 
 uint32 estimate_new_weight(relation_set_t *r1, relation_set_t *r2);

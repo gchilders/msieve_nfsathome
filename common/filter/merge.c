@@ -6,8 +6,8 @@ errors.
 
 Optionally, please be nice and tell me if you find this source to be
 useful. Again optionally, if you add to the functionality present here
-please consider making those additions public too, so that others may 
-benefit from your work.	
+please consider making those additions public too, so that others may
+benefit from your work.
 
 $Id$
 --------------------------------------------------------------------*/
@@ -41,7 +41,7 @@ static void matrix_weight_add(matrix_weight_t *m, relation_set_t *r) {
 		   r->num_large_ideals;
 	if (w >= m->num_weights_alloc) {
 		uint32 i;
-		m->weights = (uint32 *)xrealloc(m->weights, 
+		m->weights = (uint32 *)xrealloc(m->weights,
 					(size_t)(w + 100) *
 					sizeof(uint32));
 		for (i = m->num_weights_alloc; i < w + 100; i++)
@@ -67,9 +67,9 @@ static uint64 get_matrix_weight(matrix_weight_t *m, uint32 target_cycles) {
 	for (i = 0; total_cycles < target_cycles &&
 				i < m->num_weights_alloc; i++) {
 
-		uint32 curr_cycles = MIN(m->weights[i], 
+		uint32 curr_cycles = MIN(m->weights[i],
 					target_cycles - total_cycles);
-		total_weight += i * curr_cycles;
+		total_weight += (uint64)i * curr_cycles;
 		total_cycles += curr_cycles;
 	}
 
@@ -85,11 +85,11 @@ static int compare_relsets(const void *x, const void *y) {
 
 /*--------------------------------------------------------------------*/
 static void merge_via_spanning_tree(merge_aux_t *aux) {
-	
+
 	/* merge the relation sets in aux using the minimum
 	   spanning tree algorithm as described in Cavallar's
-	   paper. 
-	   
+	   paper.
+
 	   Minimum spanning trees are an active research area.
 	   We use Prim's algorithm to find the spanning tree;
 	   it's very easy to implement, and these spanning tree
@@ -123,7 +123,7 @@ static void merge_via_spanning_tree(merge_aux_t *aux) {
 						relsets + i, relsets + j);
 		}
 	}
-	memcpy(tmp_relsets, relsets, 
+	memcpy(tmp_relsets, relsets,
 			num_relsets * sizeof(relation_set_t));
 
 	/* start with relation set 0 and add every relation set
@@ -135,7 +135,7 @@ static void merge_via_spanning_tree(merge_aux_t *aux) {
 		uint32 weight = (uint32)(-1);
 
 		/* find the pair of relation sets, one in the
-		   tree and one not yet added, that has the 
+		   tree and one not yet added, that has the
 		   minimum merge weight */
 
 		for (i = 0; i < v_done; i++) {
@@ -165,12 +165,13 @@ static void merge_via_spanning_tree(merge_aux_t *aux) {
 	/* remove the original collection of relation sets */
 
 	for (i = 0; i < num_relsets; i++)
-		free(tmp_relsets[i].data);
+		merge_mem_free(aux->data_pool, tmp_relsets[i].data,
+			tmp_relsets[i].num_relations + tmp_relsets[i].num_large_ideals);
 }
 
 /*--------------------------------------------------------------------*/
 static void merge_via_pivot(merge_aux_t *aux) {
-	
+
 	/* a more conventional merge operation for relation
 	   sets: find the lightest one and merge it into
 	   all the other relation sets */
@@ -201,32 +202,36 @@ static void merge_via_pivot(merge_aux_t *aux) {
 	/* squeeze the pivot relation set out of the list */
 
 	relsets[pivot_idx] = relsets[i-1];
-		
+
 	/* merge with the other relation sets and free the pivot */
 
 	for (i = 0; i < num_relsets - 1; i++) {
 		relation_set_t tmp = relsets[i];
 		merge_two_relsets(&pivot, &tmp, relsets + i, aux);
-		free(tmp.data);
+		merge_mem_free(aux->data_pool, tmp.data,
+			tmp.num_relations + tmp.num_large_ideals);
 	}
 
-	free(pivot.data);
+	merge_mem_free(aux->data_pool, pivot.data,
+		pivot.num_relations + pivot.num_large_ideals);
 }
 
 /*--------------------------------------------------------------------*/
 static void do_merges_core(merge_aux_t *aux) {
-	
+
 	/* main interface for merging an ideal so that it
 	   does not appear in a group of relation sets */
 
 	if (aux->num_relsets == 1) {
 		/* relation set contains a singleton ideal; delete it */
-		free(aux->tmp_relsets[0].data);
+		merge_mem_free(aux->data_pool, aux->tmp_relsets[0].data,
+			aux->tmp_relsets[0].num_relations +
+			aux->tmp_relsets[0].num_large_ideals);
 		memset(aux->tmp_relsets + 0, 0, sizeof(relation_set_t));
 		return;
 	}
-	else if (aux->num_relsets >= 3 && 
-		 aux->num_relsets <= SPANNING_TREE_MAX_RELSETS) { 
+	else if (aux->num_relsets >= 3 &&
+		 aux->num_relsets <= SPANNING_TREE_MAX_RELSETS) {
 		merge_via_spanning_tree(aux);
 	}
 	else {
@@ -236,12 +241,12 @@ static void do_merges_core(merge_aux_t *aux) {
 }
 
 /*--------------------------------------------------------------------*/
-static void toggle_ideal_state(ideal_list_t *ideal_list, uint32 ideal, 
+static void toggle_ideal_state(ideal_list_t *ideal_list, uint32 ideal,
 				relation_set_t *relset_array,
 				uint32 *num_cycles,
 				matrix_weight_t *mat_weight) {
-	
-	/* make an inactive ideal active (i.e. allow it to be 
+
+	/* make an inactive ideal active (i.e. allow it to be
 	   merged), or make an active ideal inert (do not allow
 	   it to be merged) */
 
@@ -257,7 +262,7 @@ static void toggle_ideal_state(ideal_list_t *ideal_list, uint32 ideal,
 		/* relation sets that contained this ideal, but
 		   had no other ideals active, now are not cycles
 		   anymore (i.e. ideal needs to be merged in
-		   order to make r a cycle again). Conversely, if 
+		   order to make r a cycle again). Conversely, if
 		   the last active ideal in r is this one, then
 		   r is now a cycle */
 
@@ -282,7 +287,7 @@ static void toggle_ideal_state(ideal_list_t *ideal_list, uint32 ideal,
 
 /*--------------------------------------------------------------------*/
 static uint32 store_next_relset_group(merge_aux_t *aux,
-			heap_t *active_heap, heap_t *inactive_heap, 
+			heap_t *active_heap, heap_t *inactive_heap,
 			ideal_list_t *ideal_list,
 			relation_set_t *relset_array,
 			matrix_weight_t *mat_weight) {
@@ -303,14 +308,15 @@ static uint32 store_next_relset_group(merge_aux_t *aux,
 
 		*r = aux->tmp_relsets[i];
 
-		/* if the merging wiped out r (i.e. it had a singleton 
+		/* if the merging wiped out r (i.e. it had a singleton
 		   ideal), or there are too many relations in r, give up */
 
 		if (r->num_relations == 0) {
 			continue;
 		}
 		else if (r->num_relations > MAX_RELSET_SIZE) {
-			free(r->data);
+			merge_mem_free(aux->data_pool, r->data,
+				r->num_relations + r->num_large_ideals);
 			memset(r, 0, sizeof(relation_set_t));
 			continue;
 		}
@@ -330,6 +336,20 @@ static uint32 store_next_relset_group(merge_aux_t *aux,
 
 /*--------------------------------------------------------------------*/
 #define NUM_CYCLE_BINS 9
+
+static int set_merge_cycle_targets(msieve_obj *obj, uint32 min_cycles,
+				uint32 inactive_ideals, uint32 extra_relations,
+				uint32 *unmerged_ideals, uint32 *target_cycles) {
+	uint64 unmerged = (uint64)min_cycles + inactive_ideals;
+	uint64 target = unmerged + extra_relations;
+	if (unmerged > UINT32_MAX || target > UINT32_MAX) {
+		logprintf(obj, "error: merge cycle target exceeds 32-bit capacity\n");
+		return -1;
+	}
+	*unmerged_ideals = (uint32)unmerged;
+	*target_cycles = (uint32)target;
+	return 0;
+}
 
 int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 
@@ -359,7 +379,7 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 	   A compromise matrix will ignore some number S of the large ideals
 	   in I, and consist of a moderate number (min_cycles+S) of cycles
 	   that are moderately dense. The choice of S and resulting cycles
-	   depends on how many excess relation sets we have to work with, 
+	   depends on how many excess relation sets we have to work with,
 	   and how dense we can tolerate the final matrix.
 
 	   Unlike other filtering implementations, this code attempts to
@@ -371,7 +391,7 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 	   effects of merging choices as the merging runs. It also allows
 	   choosing the next ideal to merge in a way that globally minimizes
 	   the amount of fill-in added to the current collection of cycles.
-	   It thus makes completely unnecessary the complex system of 
+	   It thus makes completely unnecessary the complex system of
 	   merge levels, shrinkage passes and relation set cutoff sizes that
 	   is typical of filtering implementations derived from Cavallar's
 	   paper.
@@ -380,15 +400,15 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 	   will try to eliminate via merging) and inactive ideals (which
 	   we do not try to merge but otherwise process identically). Each
 	   large ideal is placed in one of two discrete priority heaps, the
-	   active or inactive heap, and each heap is keyed to (an upper 
-	   bound on) the amount of fill-in that merging that ideal would 
-	   incur. We start with min_cycles ideals in the active heap, and 
-	   keep merging ideals until the active heap is empty. A relation 
-	   set is considered to be a cycle if it has no active large ideals. 
+	   active or inactive heap, and each heap is keyed to (an upper
+	   bound on) the amount of fill-in that merging that ideal would
+	   incur. We start with min_cycles ideals in the active heap, and
+	   keep merging ideals until the active heap is empty. A relation
+	   set is considered to be a cycle if it has no active large ideals.
 	   Ideals can move freely between the active and inactive heap,
-	   dynamically changing the number of cycles that exist at any given 
+	   dynamically changing the number of cycles that exist at any given
 	   time. In particular, the active heap will always contain the
-	   ideals that will lead to the lightest merges. 
+	   ideals that will lead to the lightest merges.
 
 	   When the active heap is empty, if the current number of cycles
 	   is at least (min_cycles+(ideals in the inactive heap)), merging
@@ -401,14 +421,14 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 	   return for becoming smaller. Finally, whenever the active heap
 	   is empty we also 'bury' some of the heaviest ideals in the inactive
 	   heap; buried ideals are removed from the ideal lists of all the
-	   relation sets containing those ideals, and become ineligible 
-	   for merging (since they are not explicitly tracked anymore). 
+	   relation sets containing those ideals, and become ineligible
+	   for merging (since they are not explicitly tracked anymore).
 	   The burying operation leads to a slightly denser matrix, but
 	   saves significant amounts of memory as merging progresses.
-	   Merging stops when all of these processes converge to a moderate 
-	   size matrix with specified density and a sufficient number of 
+	   Merging stops when all of these processes converge to a moderate
+	   size matrix with specified density and a sufficient number of
 	   cycles.
-	   
+
 	   The effect of this method is that when there are many excess
 	   relations, the merge phase produces a usable but too-large matrix
 	   as quickly as possible, then gradually reduces its size until
@@ -442,9 +462,10 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 	/* initialize; all ideals start off inactive */
 
 	aux = (merge_aux_t *)xmalloc(sizeof(merge_aux_t));
+	merge_aux_init(aux, merge->data_pool);
 	heap_init(&active_heap);
 	heap_init(&inactive_heap);
-	ideal_list_init(&ideal_list, num_ideals, 0);
+	ideal_list_init(&ideal_list, num_ideals, 0, merge->data_pool);
 	matrix_weight_init(&mat_weight);
 
 	/* add each relation set to the heaps, and count the
@@ -467,15 +488,19 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 		if (ideal == (uint32)(-1))
 			break;
 
-		toggle_ideal_state(&ideal_list, ideal, 
+		toggle_ideal_state(&ideal_list, ideal,
 				relset_array, &num_cycles,
 				&mat_weight);
 		heap_add_ideal(&active_heap, &ideal_list, ideal);
 	}
-	unmerged_ideals = min_cycles + inactive_heap.num_ideals;
-	target_cycles = unmerged_ideals + merge->num_extra_relations;
-	avg_cycle_weight = (double)get_matrix_weight(&mat_weight, 
-					num_cycles) / num_cycles;
+	if (set_merge_cycle_targets(obj, min_cycles, inactive_heap.num_ideals,
+			merge->num_extra_relations, &unmerged_ideals,
+			&target_cycles) != 0) {
+		status = 1;
+		goto clean_up;
+	}
+	avg_cycle_weight = num_cycles ?
+		(double)get_matrix_weight(&mat_weight, num_cycles) / num_cycles : 0.0;
 
 	/* keep forming cycles as long as possible */
 
@@ -487,15 +512,15 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 
 			/* we only recalculate the average cycle weight
 			   when there are enough cycles to make a valid
-			   matrix. Note that we do *not* care about the 
-			   average weight of all the cycles we have, but 
-			   the average weight of cycles that would 
+			   matrix. Note that we do *not* care about the
+			   average weight of all the cycles we have, but
+			   the average weight of cycles that would
 			   actually appear in the matrix */
-	
-			if (num_cycles >= target_cycles) {
+
+			if (target_cycles > 0 && num_cycles >= target_cycles) {
 				avg_cycle_weight = (double)get_matrix_weight(
-							&mat_weight, 
-							target_cycles) / 
+							&mat_weight,
+							target_cycles) /
 							target_cycles;
 				if (avg_cycle_weight >= merge->target_density)
 					break;
@@ -509,38 +534,41 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 
 			for (i = 0; i < 500; i++) {
 
-				ideal = heap_remove_worst(&inactive_heap, 
+				ideal = heap_remove_worst(&inactive_heap,
 							&ideal_list);
 				if (ideal == (uint32)(-1))
 					break;
 
-				bury_inactive_ideal(relset_array, 
+				bury_inactive_ideal(relset_array,
 							&ideal_list, ideal);
 				min_cycles++;
 			}
 
-			/* we cannot form more cycles, so transfer a 
-			   few of the lightest unmerged ideals from 
-			   the inactive to the active heap, then 
+			/* we cannot form more cycles, so transfer a
+			   few of the lightest unmerged ideals from
+			   the inactive to the active heap, then
 			   recalculate the target matrix size */
 
 			for (i = 0; i < 2000; i++) {
 
-				ideal = heap_remove_best(&inactive_heap, 
+				ideal = heap_remove_best(&inactive_heap,
 							&ideal_list);
 				if (ideal == (uint32)(-1))
 					break;
 
-				toggle_ideal_state(&ideal_list, ideal, 
+				toggle_ideal_state(&ideal_list, ideal,
 						relset_array, &num_cycles,
 						&mat_weight);
-				heap_add_ideal(&active_heap, 
+				heap_add_ideal(&active_heap,
 						&ideal_list, ideal);
 			}
 
-			unmerged_ideals = min_cycles + inactive_heap.num_ideals;
-			target_cycles = unmerged_ideals + 
-					merge->num_extra_relations;
+			if (set_merge_cycle_targets(obj, min_cycles,
+					inactive_heap.num_ideals, merge->num_extra_relations,
+					&unmerged_ideals, &target_cycles) != 0) {
+				status = 1;
+				goto clean_up;
+			}
 		}
 
 		/* choose the next ideal to merge */
@@ -559,9 +587,9 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 
 		do_merges_core(aux);
 
-		num_cycles += store_next_relset_group(aux, 
+		num_cycles += store_next_relset_group(aux,
 					&active_heap, &inactive_heap,
-					&ideal_list, relset_array, 
+					&ideal_list, relset_array,
 					&mat_weight);
 
 		/* swap ideals between the active and inactive
@@ -573,13 +601,13 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 		       active_heap.worst_bin > inactive_heap.next_bin) {
 
 			ideal = heap_remove_best(&inactive_heap, &ideal_list);
-			toggle_ideal_state(&ideal_list, ideal, 
+			toggle_ideal_state(&ideal_list, ideal,
 						relset_array, &num_cycles,
 						&mat_weight);
 			heap_add_ideal(&active_heap, &ideal_list, ideal);
 
 			ideal = heap_remove_worst(&active_heap, &ideal_list);
-			toggle_ideal_state(&ideal_list, ideal, 
+			toggle_ideal_state(&ideal_list, ideal,
 						relset_array, &num_cycles,
 						&mat_weight);
 			heap_add_ideal(&inactive_heap, &ideal_list, ideal);
@@ -587,8 +615,12 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 
 		/* recalculate the targets to shoot for */
 
-		unmerged_ideals = min_cycles + inactive_heap.num_ideals;
-		target_cycles = unmerged_ideals + merge->num_extra_relations;
+		if (set_merge_cycle_targets(obj, min_cycles, inactive_heap.num_ideals,
+				merge->num_extra_relations, &unmerged_ideals,
+				&target_cycles) != 0) {
+			status = 1;
+			goto clean_up;
+		}
 	}
 
 	/* merging has finished; delete relation sets that
@@ -604,19 +636,35 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 
 		if (r->data && r->num_active_ideals == 0) {
 			relation_set_t *new_r = relset_array + num_cycles++;
+			uint32 old_words = r->num_relations + r->num_large_ideals;
+			uint32 small_total = (uint32)r->num_small_ideals +
+					r->num_large_ideals;
+			if (small_total > UINT16_MAX) {
+				logprintf(obj, "error: cycle small-ideal count exceeds 16 bits\n");
+				exit(-1);
+			}
 			*new_r = *r;
-			new_r->num_small_ideals += new_r->num_large_ideals;
+			new_r->num_small_ideals = (uint16)small_total;
 			new_r->num_large_ideals = 0;
-			new_r->data = (uint32 *)xrealloc(new_r->data,
-							new_r->num_relations *
-							sizeof(uint32));
+			new_r->data = merge_mem_realloc(merge->data_pool, new_r->data,
+							old_words,
+							new_r->num_relations);
+			if (new_r != r)
+				r->data = NULL;
 		}
 		else {
-			free(r->data);
+			merge_mem_free(merge->data_pool, r->data,
+				r->num_relations + r->num_large_ideals);
 			r->data = NULL;
 		}
 	}
-	logprintf(obj, "found %u cycles, need %u\n", 
+	/* From this point onward only the compacted prefix owns payloads.
+	   Record that immediately so failure cleanup cannot revisit stale
+	   relation-set structures beyond num_cycles. */
+	merge->num_relsets = num_cycles;
+	merge->num_ideals = unmerged_ideals;
+
+	logprintf(obj, "found %u cycles, need %u\n",
 				num_cycles, target_cycles);
 
 	if (num_cycles < 0.8 * target_cycles) {
@@ -626,23 +674,24 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 		goto clean_up;
 	}
 
-	qsort(relset_array, (size_t)num_cycles, 
+	qsort(relset_array, (size_t)num_cycles,
 			sizeof(relation_set_t), compare_relsets);
 
-	/* keep only the minimum possible number of 
+	/* keep only the minimum possible number of
 	   the lightest cycles */
 
 	for (i = target_cycles; i < num_cycles; i++) {
 		relation_set_t *r = relset_array + i;
-		free(r->data);
+		merge_mem_free(merge->data_pool, r->data,
+			r->num_relations + r->num_large_ideals);
 		r->data = NULL;
 	}
 	num_cycles = MIN(target_cycles, num_cycles);
 	merge->num_relsets = num_cycles;
-	merge->num_ideals = min_cycles + inactive_heap.num_ideals;
+	merge->num_ideals = unmerged_ideals;
 
-	merge->relset_array = relset_array = 
-			(relation_set_t *)xrealloc(relset_array, num_cycles * 
+	merge->relset_array = relset_array =
+			(relation_set_t *)xrealloc(relset_array, num_cycles *
 						sizeof(relation_set_t));
 
 	/* print statistics on the final collection of cycles */
@@ -658,11 +707,16 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 			cycle_bins[r->num_relations]++;
 	}
 
+	if (num_cycles == 0) {
+		logprintf(obj, "error: merge produced no cycles\n");
+		status = 1;
+		goto clean_up;
+	}
 	merge->avg_cycle_weight = (double)total_cycle_weight / num_cycles;
 	merge->max_relations = max_cycles;
-	logprintf(obj, "weight of %u cycles is about %" PRIu64 
+	logprintf(obj, "weight of %u cycles is about %" PRIu64
 			" (%.2f/cycle)\n",
-			num_cycles, total_cycle_weight, 
+			num_cycles, total_cycle_weight,
 			merge->avg_cycle_weight);
 	logprintf(obj, "distribution of cycle lengths:\n");
 	for (i = 1; i < NUM_CYCLE_BINS + 1; i++)
@@ -676,6 +730,7 @@ clean_up:
 	heap_free(&active_heap);
 	heap_free(&inactive_heap);
 	ideal_list_free(&ideal_list);
+	merge_aux_free(aux);
 	free(aux);
 	return status;
 }

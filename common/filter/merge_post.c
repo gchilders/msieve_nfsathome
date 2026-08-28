@@ -6,8 +6,8 @@ errors.
 
 Optionally, please be nice and tell me if you find this source to be
 useful. Again optionally, if you add to the functionality present here
-please consider making those additions public too, so that others may 
-benefit from your work.	
+please consider making those additions public too, so that others may
+benefit from your work.
 
 $Id$
 --------------------------------------------------------------------*/
@@ -20,8 +20,8 @@ $Id$
    It uses a highly simplified form of an algorithm by Denny and Muller
    that everyone else seems to have completely forgotten.
 
-   Suppose you have two cycles, one containing relations (a,b,c) and 
-   the other containing relations (a,b,d,e). These two cycles are 
+   Suppose you have two cycles, one containing relations (a,b,c) and
+   the other containing relations (a,b,d,e). These two cycles are
    entirely equivalent to two other cycles, (a,b,c) and (c,d,e), except
    that the latter is one relation smaller than the former. The algorithm
    basically takes advantage of the fact that occaisionally two cycles
@@ -52,20 +52,21 @@ static int compare_uint32(const void *x, const void *y) {
 }
 
 /*--------------------------------------------------------------------*/
-static void copy_relset(relation_set_t *src, relation_set_t *dst) {
+static void copy_relset(merge_mem_pool_t *pool,
+		relation_set_t *src, relation_set_t *dst) {
 
 	uint32 size = src->num_relations + src->num_large_ideals;
 
 	*dst = *src;
-	dst->data = (uint32 *)xmalloc(size * sizeof(uint32));
+	dst->data = merge_mem_alloc(pool, size);
 	memcpy(dst->data, src->data, size * sizeof(uint32));
 }
 
 /*--------------------------------------------------------------------*/
 static uint32 merge_via_spanning_tree(merge_aux_t *aux) {
-	
-	/* given a collection of N cycles with at least one 
-	   relation in common, use a minimum spanning tree 
+
+	/* given a collection of N cycles with at least one
+	   relation in common, use a minimum spanning tree
 	   process to produce N different cycles that contain
 	   fewer total relations */
 
@@ -86,7 +87,7 @@ static uint32 merge_via_spanning_tree(merge_aux_t *aux) {
 	/* count the starting number of relations and find the
 	   lightest cycle. This cycle forms the 'anchor' for the
 	   minimum spanning tree. The choice of anchor cycle is
-	   arbitrary, but because it will appear unmodified in 
+	   arbitrary, but because it will appear unmodified in
 	   the final list of cycles we want it to have few relations */
 
 	for (i = 1; i < num_relsets; i++) {
@@ -108,7 +109,7 @@ static uint32 merge_via_spanning_tree(merge_aux_t *aux) {
 		}
 	}
 
-	memcpy(tmp_relsets, relsets, 
+	memcpy(tmp_relsets, relsets,
 			num_relsets * sizeof(relation_set_t));
 
 	/* permute the list of cycles so that the anchor
@@ -120,12 +121,12 @@ static uint32 merge_via_spanning_tree(merge_aux_t *aux) {
 			vertex[j++] = i;
 	}
 
-	copy_relset(tmp_relsets + min_index, relsets + 0);
+	copy_relset(aux->data_pool, tmp_relsets + min_index, relsets + 0);
 	new_total_weight = relsets[0].num_large_ideals;
 
 	/* proceed with Prim's algorithm. Note that here there is
-	   a twist: the objective is not to connect cycles via 
-	   merges so that an ideal is eliminated, but to minimize 
+	   a twist: the objective is not to connect cycles via
+	   merges so that an ideal is eliminated, but to minimize
 	   the total weight. This means that we have an alternative to
 	   merging two cycles: adding a cycle to the tree but not
 	   combining it with another cycle. Hence we technically do
@@ -139,7 +140,7 @@ static uint32 merge_via_spanning_tree(merge_aux_t *aux) {
 		uint32 weight = (uint32)(-1);
 
 		/* find the pair of cycles, one in the
-		   tree and one not yet added, that has the 
+		   tree and one not yet added, that has the
 		   minimum merge weight */
 
 		for (i = 0; i < v_done; i++) {
@@ -165,7 +166,7 @@ static uint32 merge_via_spanning_tree(merge_aux_t *aux) {
 					  relsets + v_done, aux);
 		}
 		else {
-			copy_relset(tmp_relsets + j, relsets + v_done);
+			copy_relset(aux->data_pool, tmp_relsets + j, relsets + v_done);
 		}
 		new_total_weight += relsets[v_done].num_large_ideals;
 
@@ -177,7 +178,8 @@ static uint32 merge_via_spanning_tree(merge_aux_t *aux) {
 	/* remove the original list of cycles */
 
 	for (i = 0; i < num_relsets; i++)
-		free(tmp_relsets[i].data);
+		merge_mem_free(aux->data_pool, tmp_relsets[i].data,
+			tmp_relsets[i].num_relations + tmp_relsets[i].num_large_ideals);
 
 	/* return the number of relations removed */
 
@@ -186,7 +188,7 @@ static uint32 merge_via_spanning_tree(merge_aux_t *aux) {
 
 /*--------------------------------------------------------------------*/
 static uint32 merge_via_pivot(merge_aux_t *aux) {
-	
+
 	/* simplified form of the pevious routine */
 
 	uint32 i;
@@ -210,20 +212,21 @@ static uint32 merge_via_pivot(merge_aux_t *aux) {
 			weight = new_weight;
 		}
 	}
-		
+
 	/* merge it with any other cycle for which the total
 	   merged weight would be reduced */
 
 	for (i = 0; i < num_relsets; i++) {
-		if (i != pivot_idx && 
-		    estimate_new_weight(relsets + pivot_idx, relsets + i) < 
+		if (i != pivot_idx &&
+		    estimate_new_weight(relsets + pivot_idx, relsets + i) <
 					relsets[i].num_large_ideals) {
 
 			relation_set_t tmp = relsets[i];
-			merge_two_relsets(relsets + pivot_idx, 
+			merge_two_relsets(relsets + pivot_idx,
 					&tmp, relsets + i, aux);
 
-			free(tmp.data);
+			merge_mem_free(aux->data_pool, tmp.data,
+				tmp.num_relations + tmp.num_large_ideals);
 		}
 		new_total_weight += relsets[i].num_large_ideals;
 	}
@@ -235,7 +238,7 @@ static uint32 merge_via_pivot(merge_aux_t *aux) {
 
 /*--------------------------------------------------------------------*/
 static uint32 do_merges_core(merge_aux_t *aux) {
-	
+
 	/* the same number of cycles are returned, along with
 	   the number of relations that the shuffling of cycle
 	   basis has saved */
@@ -243,8 +246,8 @@ static uint32 do_merges_core(merge_aux_t *aux) {
 	if (aux->num_relsets == 1) {
 		return 0;
 	}
-	else if (aux->num_relsets >= 3 && 
-		 aux->num_relsets <= SPANNING_TREE_MAX_RELSETS) { 
+	else if (aux->num_relsets >= 3 &&
+		 aux->num_relsets <= SPANNING_TREE_MAX_RELSETS) {
 		return merge_via_spanning_tree(aux);
 	}
 	else {
@@ -254,7 +257,7 @@ static uint32 do_merges_core(merge_aux_t *aux) {
 
 /*--------------------------------------------------------------------*/
 static void store_next_relset_group(merge_aux_t *aux,
-			heap_t *active_heap, heap_t *inactive_heap, 
+			heap_t *active_heap, heap_t *inactive_heap,
 			ideal_list_t *ideal_list,
 			relation_set_t *relset_array) {
 	uint32 i;
@@ -302,7 +305,7 @@ void filter_postproc_relsets(msieve_obj *obj, merge_t *merge) {
 	   list of ideals, each cycle has a list of relations that
 	   occur in that cycle. We assign one 'ideal' to each relation
 	   that appears in the collection of cycles, and minimize that.
-	   Note that we assume that the merge phase has already 
+	   Note that we assume that the merge phase has already
 	   cancelled out any relations that appear more than once in
 	   a cycle */
 
@@ -312,7 +315,7 @@ void filter_postproc_relsets(msieve_obj *obj, merge_t *merge) {
 		relation_set_t *r = relset_array + i;
 		uint32 curr_num_relations = r->num_relations;
 
-		max_ideal_list_size = MAX(max_ideal_list_size, 
+		max_ideal_list_size = MAX(max_ideal_list_size,
 					  curr_num_relations);
 		num_relations += curr_num_relations;
 
@@ -328,20 +331,20 @@ void filter_postproc_relsets(msieve_obj *obj, merge_t *merge) {
 
 		r->num_large_ideals = curr_num_relations;
 		r->num_active_ideals = curr_num_relations;
-		r->data = (uint32 *)xrealloc(r->data, 2 * curr_num_relations * 
-						sizeof(uint32));
+		r->data = merge_mem_realloc(merge->data_pool, r->data,
+					curr_num_relations, 2 * curr_num_relations);
 
 		/* every unique relation is assigned a number */
 
 		for (j = 0; j < curr_num_relations; j++) {
-			hashtable_find(&h, r->data + j, 
-					r->data + curr_num_relations + j, 
+			hashtable_find(&h, r->data + j,
+					r->data + curr_num_relations + j,
 					NULL);
 		}
 
 		/* relation lists occur in sorted order */
 
-		qsort(r->data + curr_num_relations, 
+		qsort(r->data + curr_num_relations,
 			(size_t)curr_num_relations,
 			sizeof(uint32), compare_uint32);
 	}
@@ -355,9 +358,10 @@ void filter_postproc_relsets(msieve_obj *obj, merge_t *merge) {
 	   heapified */
 
 	aux = (merge_aux_t *)xmalloc(sizeof(merge_aux_t));
+	merge_aux_init(aux, merge->data_pool);
 	heap_init(&active_heap);
 	heap_init(&inactive_heap);
-	ideal_list_init(&ideal_list, num_ideals, 1);
+	ideal_list_init(&ideal_list, num_ideals, 1, merge->data_pool);
 
 	for (i = 0; i < num_relsets; i++) {
 		relation_set_t *r = relset_array + i;
@@ -379,19 +383,19 @@ void filter_postproc_relsets(msieve_obj *obj, merge_t *merge) {
 	num_relations = 0;
 	while (active_heap.num_ideals > 0) {
 
-		uint32 ideal = heap_remove_best(&active_heap, 
+		uint32 ideal = heap_remove_best(&active_heap,
 						&ideal_list);
 
-		load_next_relset_group(aux, &active_heap, 
-				&inactive_heap, &ideal_list, 
+		load_next_relset_group(aux, &active_heap,
+				&inactive_heap, &ideal_list,
 				relset_array, ideal, 1);
 
 		num_relations += do_merges_core(aux);
 
 		ideal_list.list[ideal].active = 0;
 
-		store_next_relset_group(aux, &active_heap, 
-					&inactive_heap, &ideal_list, 
+		store_next_relset_group(aux, &active_heap,
+					&inactive_heap, &ideal_list,
 					relset_array);
 	}
 
@@ -411,6 +415,11 @@ void filter_postproc_relsets(msieve_obj *obj, merge_t *merge) {
 		else
 			cycle_bins[r->num_relations]++;
 
+		{
+			uint32 old_words = r->num_relations + r->num_large_ideals;
+			r->data = merge_mem_realloc(merge->data_pool, r->data,
+					old_words, r->num_relations);
+		}
 		r->num_small_ideals = 0;
 		r->num_large_ideals = 0;
 	}
@@ -423,5 +432,6 @@ void filter_postproc_relsets(msieve_obj *obj, merge_t *merge) {
 	heap_free(&active_heap);
 	heap_free(&inactive_heap);
 	ideal_list_free(&ideal_list);
+	merge_aux_free(aux);
 	free(aux);
 }

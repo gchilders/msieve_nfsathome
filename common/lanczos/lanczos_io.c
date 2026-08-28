@@ -6,8 +6,8 @@ errors.
 
 Optionally, please be nice and tell me if you find this source to be
 useful. Again optionally, if you add to the functionality present here
-please consider making those additions public too, so that others may 
-benefit from your work.	
+please consider making those additions public too, so that others may
+benefit from your work.
 
 $Id$
 --------------------------------------------------------------------*/
@@ -81,7 +81,10 @@ static void mat_idx_final(msieve_obj *obj, mat_idx_t *m,
 	}
 
 	i = MAX_MPI_GRID_DIM;
-	fwrite(&i, sizeof(uint32), (size_t)1, idx_fp);
+	if (fwrite(&i, sizeof(uint32), (size_t)1, idx_fp) != 1) {
+		logprintf(obj, "error: can't write matrix index header\n");
+		exit(-1);
+	}
 
 	for (i = 1; i <= MAX_MPI_GRID_DIM; i++) {
 		mat_idx_t *curr_m = m + (i-1);
@@ -89,12 +92,18 @@ static void mat_idx_final(msieve_obj *obj, mat_idx_t *m,
 		curr_m->idx_entries[i].col_start = ncols;
 		curr_m->idx_entries[i].mat_file_offset = mat_file_size;
 
-		fwrite(curr_m->idx_entries, sizeof(mat_block_t), 
-					(size_t)(i+1), idx_fp);
+		if (fwrite(curr_m->idx_entries, sizeof(mat_block_t),
+					(size_t)(i+1), idx_fp) != (size_t)(i+1)) {
+			logprintf(obj, "error: can't write matrix index\n");
+			exit(-1);
+		}
 
 	}
 
-	fclose(idx_fp);
+	if (fflush(idx_fp) != 0 || ferror(idx_fp) || fclose(idx_fp) != 0) {
+		logprintf(obj, "error: can't finalize matrix index\n");
+		exit(-1);
+	}
 	free(m);
 }
 
@@ -114,24 +123,31 @@ static void find_submatrix_bounds(msieve_obj *obj, uint32 *ncols,
 		exit(-1);
 	}
 
-	fread(&max_grid_cols, sizeof(uint32), (size_t)1, matrix_idx_fp);
+	if (fread(&max_grid_cols, sizeof(uint32), (size_t)1, matrix_idx_fp) != 1) {
+		logprintf(obj, "error: truncated matrix index header\n");
+		exit(-1);
+	}
 	if (max_grid_cols < obj->mpi_ncols) {
 		logprintf(obj, "error: matrix expects MPI cols <= %u\n",
 				max_grid_cols);
 		exit(-1);
 	}
 
-	fseek(matrix_idx_fp, 
+	if (fseek(matrix_idx_fp,
 		(long)((obj->mpi_ncols *
 		        (obj->mpi_ncols + 1) / 2 - 1 +
-			obj->mpi_la_col_rank) * sizeof(mat_block_t)), 
-		SEEK_CUR);
+			obj->mpi_la_col_rank) * sizeof(mat_block_t)),
+		SEEK_CUR) != 0) {
+		logprintf(obj, "error: can't seek matrix index\n");
+		exit(-1);
+	}
 
-	fread(&mat_block, sizeof(mat_block_t), 
-				(size_t)1, matrix_idx_fp);
-	fread(&next_mat_block, sizeof(mat_block_t), 
-				(size_t)1, matrix_idx_fp);
-	fclose(matrix_idx_fp);
+	if (fread(&mat_block, sizeof(mat_block_t), 1, matrix_idx_fp) != 1 ||
+	    fread(&next_mat_block, sizeof(mat_block_t), 1, matrix_idx_fp) != 1 ||
+	    fclose(matrix_idx_fp) != 0) {
+		logprintf(obj, "error: truncated matrix index\n");
+		exit(-1);
+	}
 
 	*start_col = mat_block.col_start;
 	*ncols = next_mat_block.col_start - mat_block.col_start;
@@ -140,34 +156,115 @@ static void find_submatrix_bounds(msieve_obj *obj, uint32 *ncols,
 
 #endif
 
+static uint32 cycle_header_rmap_info(msieve_obj *obj, uint64 *generation) {
+	char buf[256];
+	FILE *fp;
+	uint32 first, version, flags, ncycles;
+	uint64 gen;
+	*generation = 0;
+	sprintf(buf, "%s.cyc", obj->savefile.name);
+	fp = fopen(buf, "rb");
+	if (fp == NULL)
+		return 0;
+	if (fread(&first, sizeof(uint32), 1, fp) != 1 || first != CYCLE_FILE_MAGIC) {
+		fclose(fp);
+		return 0;
+	}
+	if (fread(&version, sizeof(uint32), 1, fp) != 1 ||
+	    fread(&flags, sizeof(uint32), 1, fp) != 1 ||
+	    fread(&ncycles, sizeof(uint32), 1, fp) != 1 ||
+	    fread(&gen, sizeof(uint64), 1, fp) != 1 ||
+	    fclose(fp) != 0 || version != CYCLE_FILE_VERSION) {
+		logprintf(obj, "error: invalid versioned cycle header\n");
+		exit(-1);
+	}
+	(void)ncycles;
+	*generation = gen;
+	return (flags & CYCLE_FLAG_RMAP_REQUIRED) != 0;
+}
+
+static void validate_cycle_rmap(msieve_obj *obj, uint64 expected_generation) {
+	char buf[256];
+	FILE *fp;
+	uint64 magic, version, generation, count;
+	uint64 cmagic, cgen, ccount;
+	sprintf(buf, "%s.rmap", obj->savefile.name);
+	fp = fopen(buf, "rb");
+	if (fp == NULL || fread(&magic, sizeof(uint64), 1, fp) != 1 ||
+	    fread(&version, sizeof(uint64), 1, fp) != 1 ||
+	    fread(&generation, sizeof(uint64), 1, fp) != 1 ||
+	    fread(&count, sizeof(uint64), 1, fp) != 1 ||
+	    fclose(fp) != 0 || magic != NFS_RMAP_MAGIC ||
+	    version != NFS_RMAP_VERSION || generation != expected_generation) {
+		logprintf(obj, "error: cycle file requires a matching relation map\n");
+		exit(-1);
+	}
+	sprintf(buf, "%s.rmap.commit", obj->savefile.name);
+	fp = fopen(buf, "rb");
+	if (fp == NULL || fread(&cmagic, sizeof(uint64), 1, fp) != 1 ||
+	    fread(&cgen, sizeof(uint64), 1, fp) != 1 ||
+	    fread(&ccount, sizeof(uint64), 1, fp) != 1 ||
+	    fclose(fp) != 0 || cmagic != NFS_RMAP_COMMIT_MAGIC ||
+	    cgen != generation || ccount != count) {
+		logprintf(obj, "error: required relation map is not transactionally committed\n");
+		exit(-1);
+	}
+}
+
 /*--------------------------------------------------------------------*/
 void dump_cycles(msieve_obj *obj, la_col_t *cols, uint32 ncols) {
 
 	uint32 i;
 	char buf[256];
 	FILE *cycle_fp;
+	uint64 rmap_generation = 0;
+	uint32 require_rmap;
 
 	sprintf(buf, "%s.cyc", obj->savefile.name);
+	require_rmap = cycle_header_rmap_info(obj, &rmap_generation);
+	if (require_rmap)
+		validate_cycle_rmap(obj, rmap_generation);
 	cycle_fp = fopen(buf, "wb");
 	if (cycle_fp == NULL) {
 		logprintf(obj, "error: can't open cycle file\n");
 		exit(-1);
 	}
 
-	fwrite(&ncols, sizeof(uint32), (size_t)1, cycle_fp);
+	if (require_rmap) {
+		uint32 magic = CYCLE_FILE_MAGIC, version = CYCLE_FILE_VERSION;
+		uint32 flags = CYCLE_FLAG_RMAP_REQUIRED;
+		if (fwrite(&magic, sizeof(uint32), 1, cycle_fp) != 1 ||
+		    fwrite(&version, sizeof(uint32), 1, cycle_fp) != 1 ||
+		    fwrite(&flags, sizeof(uint32), 1, cycle_fp) != 1 ||
+		    fwrite(&ncols, sizeof(uint32), 1, cycle_fp) != 1 ||
+		    fwrite(&rmap_generation, sizeof(uint64), 1, cycle_fp) != 1) {
+			logprintf(obj, "error: can't write cycle header\n");
+			exit(-1);
+		}
+	}
+	else if (fwrite(&ncols, sizeof(uint32), 1, cycle_fp) != 1) {
+		logprintf(obj, "error: can't write cycle header\n");
+		exit(-1);
+	}
 
 	for (i = 0; i < ncols; i++) {
 		la_col_t *c = cols + i;
 		uint32 num = c->cycle.num_relations;
-		
-		fwrite(&num, sizeof(uint32), (size_t)1, cycle_fp);
-		fwrite(c->cycle.list, sizeof(uint32), (size_t)num, cycle_fp);
+
+		if (fwrite(&num, sizeof(uint32), 1, cycle_fp) != 1 ||
+		    fwrite(c->cycle.list, sizeof(uint32), (size_t)num, cycle_fp) != num) {
+			logprintf(obj, "error: can't write cycle file\n");
+			exit(-1);
+		}
 	}
-	fclose(cycle_fp);
+	if (fflush(cycle_fp) != 0 || ferror(cycle_fp) || fclose(cycle_fp) != 0) {
+		logprintf(obj, "error: can't finalize cycle file\n");
+		exit(-1);
+	}
 }
 
 /*--------------------------------------------------------------------*/
-void dump_matrix(msieve_obj *obj, 
+void dump_matrix(msieve_obj *obj,
 		uint32 nrows, uint32 num_dense_rows,
 		uint32 ncols, la_col_t *cols,
 		uint64 sparse_weight) {
@@ -189,9 +286,12 @@ void dump_matrix(msieve_obj *obj,
 		exit(-1);
 	}
 
-	fwrite(&nrows, sizeof(uint32), (size_t)1, matrix_fp);
-	fwrite(&num_dense_rows, sizeof(uint32), (size_t)1, matrix_fp);
-	fwrite(&ncols, sizeof(uint32), (size_t)1, matrix_fp);
+	if (fwrite(&nrows, sizeof(uint32), 1, matrix_fp) != 1 ||
+	    fwrite(&num_dense_rows, sizeof(uint32), 1, matrix_fp) != 1 ||
+	    fwrite(&ncols, sizeof(uint32), 1, matrix_fp) != 1) {
+		logprintf(obj, "error: can't write matrix header\n");
+		exit(-1);
+	}
 	dense_row_words = (num_dense_rows + 31) / 32;
 
 	for (i = 0; i < ncols; i++) {
@@ -201,20 +301,26 @@ void dump_matrix(msieve_obj *obj,
 #ifdef HAVE_MPI
 		mat_idx_update(mpi_idx_data, matrix_fp, c->weight);
 #endif
-		fwrite(&c->weight, sizeof(uint32), (size_t)1, matrix_fp);
-		fwrite(c->data, sizeof(uint32), (size_t)num, matrix_fp);
+		if (fwrite(&c->weight, sizeof(uint32), 1, matrix_fp) != 1 ||
+		    fwrite(c->data, sizeof(uint32), (size_t)num, matrix_fp) != num) {
+			logprintf(obj, "error: can't write matrix column %u\n", i);
+			exit(-1);
+		}
 	}
 
 #ifdef HAVE_MPI
 	mat_idx_final(obj, mpi_idx_data, ncols, ftello(matrix_fp));
 #endif
-	fclose(matrix_fp);
+	if (fflush(matrix_fp) != 0 || ferror(matrix_fp) || fclose(matrix_fp) != 0) {
+		logprintf(obj, "error: can't finalize matrix file\n");
+		exit(-1);
+	}
 }
 
 /*--------------------------------------------------------------------*/
-void read_cycles(msieve_obj *obj, 
-		uint32 *num_cycles_out, 
-		la_col_t **cycle_list_out, 
+void read_cycles(msieve_obj *obj,
+		uint32 *num_cycles_out,
+		la_col_t **cycle_list_out,
 		uint32 dependency,
 		uint32 *colperm) {
 
@@ -254,9 +360,32 @@ void read_cycles(msieve_obj *obj,
 	/* read the number of cycles to expect. If necessary,
 	   allocate space for them */
 
-	fread(&num_cycles, sizeof(uint32), (size_t)1, cycle_fp);
+	{
+		uint32 first;
+		if (fread(&first, sizeof(uint32), 1, cycle_fp) != 1) {
+			logprintf(obj, "error: empty cycle file\n");
+			exit(-1);
+		}
+		if (first == CYCLE_FILE_MAGIC) {
+			uint32 version, flags;
+			uint64 generation;
+			if (fread(&version, sizeof(uint32), 1, cycle_fp) != 1 ||
+			    fread(&flags, sizeof(uint32), 1, cycle_fp) != 1 ||
+			    fread(&num_cycles, sizeof(uint32), 1, cycle_fp) != 1 ||
+			    fread(&generation, sizeof(uint64), 1, cycle_fp) != 1 ||
+			    version != CYCLE_FILE_VERSION) {
+				logprintf(obj, "error: invalid versioned cycle file\n");
+				exit(-1);
+			}
+			if (flags & CYCLE_FLAG_RMAP_REQUIRED)
+				validate_cycle_rmap(obj, generation);
+		}
+		else {
+			num_cycles = first;
+		}
+	}
 	if (cycle_list == NULL) {
-		cycle_list = (la_col_t *)xcalloc((size_t)num_cycles, 
+		cycle_list = (la_col_t *)xcalloc((size_t)num_cycles,
 						sizeof(la_col_t));
 	}
 
@@ -267,22 +396,26 @@ void read_cycles(msieve_obj *obj,
 		la_col_t *c;
 		uint32 num_relations;
 
-		if (fread(&num_relations, sizeof(uint32), 
-					(size_t)1, cycle_fp) != 1)
-			break;
+		if (fread(&num_relations, sizeof(uint32), 1, cycle_fp) != 1) {
+			logprintf(obj, "error: truncated cycle file at cycle %u of %u\n",
+				i, num_cycles);
+			exit(-1);
+		}
 
 		if (num_relations > MAX_COL_IDEALS) {
 			printf("error: cycle too large; corrupt file?\n");
 			exit(-1);
 		}
 
-		if (fread(rel_index, sizeof(uint32), (size_t)num_relations, 
-					cycle_fp) != num_relations)
-			break;
+		if (fread(rel_index, sizeof(uint32), (size_t)num_relations,
+					cycle_fp) != num_relations) {
+			logprintf(obj, "error: truncated relation list in cycle %u\n", i);
+			exit(-1);
+		}
 
 		/* all the relation numbers for this cycle
 		   have been read; save them and start the
-		   count for the next cycle. If reading in 
+		   count for the next cycle. If reading in
 		   relations to produce a particular dependency
 		   from the linear algebra phase, skip any
 		   cycles that will not appear in the dependency */
@@ -290,8 +423,7 @@ void read_cycles(msieve_obj *obj,
 		if (dependency) {
 			uint64 curr_dep;
 
-			if (fread(&curr_dep, sizeof(uint64), 
-						(size_t)1, dep_fp) == 0) {
+			if (fread(&curr_dep, sizeof(uint64), 1, dep_fp) != 1) {
 				printf("dependency file corrupt\n");
 				exit(-1);
 			}
@@ -306,9 +438,9 @@ void read_cycles(msieve_obj *obj,
 
 		curr_cycle++;
 		c->cycle.num_relations = num_relations;
-		c->cycle.list = (uint32 *)xmalloc(num_relations * 
+		c->cycle.list = (uint32 *)xmalloc(num_relations *
 						sizeof(uint32));
-		memcpy(c->cycle.list, rel_index, 
+		memcpy(c->cycle.list, rel_index,
 				num_relations * sizeof(uint32));
 	}
 	logprintf(obj, "read %u cycles\n", curr_cycle);
@@ -322,9 +454,15 @@ void read_cycles(msieve_obj *obj,
 		}
 	}
 
-	fclose(cycle_fp);
+	if (ferror(cycle_fp) || fclose(cycle_fp) != 0) {
+		logprintf(obj, "error: can't finalize cycle-file read\n");
+		exit(-1);
+	}
 	if (dep_fp) {
-		fclose(dep_fp);
+		if (ferror(dep_fp) || fclose(dep_fp) != 0) {
+			logprintf(obj, "error: can't finalize dependency-file read\n");
+			exit(-1);
+		}
 	}
 	if (num_cycles == 0) {
 		free(cycle_list);
@@ -334,7 +472,7 @@ void read_cycles(msieve_obj *obj,
 	}
 
 	*num_cycles_out = num_cycles;
-	*cycle_list_out = (la_col_t *)xrealloc(cycle_list, 
+	*cycle_list_out = (la_col_t *)xrealloc(cycle_list,
 				num_cycles * sizeof(la_col_t));
 }
 /*--------------------------------------------------------------------*/
@@ -370,34 +508,46 @@ static void file_cache_free(file_cache_t *f) {
 }
 
 static void file_cache_get_next(msieve_obj *obj, FILE *fp,
-				file_cache_t *f, uint32 dense_row_words, 
+				file_cache_t *f, uint32 dense_row_words,
 				uint32 *num_out, uint32 *entries,
 				uint32 read_submatrix) {
 
 	uint32 num;
-	uint32 words_left = f->num_valid - f->read_ptr;
+	uint32 need;
+	uint32 words_left;
 
-	if (words_left < dense_row_words + 1 ||
-	    f->cache[f->read_ptr] + dense_row_words + 1 > words_left) {
-
-		memmove(f->cache, f->cache + f->read_ptr, 
+	/* First obtain a complete column header, then obtain the complete
+	   column payload. Never inspect cache words that were not read. */
+	for (;;) {
+		words_left = f->num_valid - f->read_ptr;
+		if (words_left >= 1)
+			break;
+		memmove(f->cache, f->cache + f->read_ptr,
 				words_left * sizeof(uint32));
 #ifdef HAVE_MPI
 		/* only the top MPI row reads from disk */
 
 		if (obj->mpi_la_row_rank == 0) {
 #endif
-		f->num_valid = words_left +
+		if (feof(fp)) {
+			logprintf(obj, "error: truncated matrix column\n");
+			exit(-1);
+		}
+		f->num_valid = words_left + (uint32)
 			fread(f->cache + words_left, sizeof(uint32),
 				FILE_CACHE_WORDS - words_left, fp);
+		if (ferror(fp)) {
+			logprintf(obj, "error: matrix read failed\n");
+			exit(-1);
+		}
 #ifdef HAVE_MPI
 		}
 
 		if (read_submatrix && obj->mpi_nrows > 1) {
-			/* broadcast the new cache size and new data 
+			/* broadcast the new cache size and new data
 			   (if any) down the column */
 
-			MPI_TRY(MPI_Bcast(&f->num_valid, 1, MPI_INT, 0, 
+			MPI_TRY(MPI_Bcast(&f->num_valid, 1, MPI_INT, 0,
 						obj->mpi_la_col_grid))
 
 			if (f->num_valid > words_left) {
@@ -408,12 +558,57 @@ static void file_cache_get_next(msieve_obj *obj, FILE *fp,
 		}
 #endif
 		f->read_ptr = 0;
+		if (f->num_valid < 1) {
+			logprintf(obj, "error: truncated matrix column header\n");
+			exit(-1);
+		}
 	}
 
 	num = f->cache[f->read_ptr];
-	if (num + dense_row_words > MAX_COL_IDEALS) {
+	if ((uint64)num + dense_row_words > MAX_COL_IDEALS) {
 		printf("error: column too large; corrupt file?\n");
 		exit(-1);
+	}
+	need = num + dense_row_words + 1;
+	if (need > FILE_CACHE_WORDS) {
+		logprintf(obj, "error: matrix column exceeds I/O cache capacity\n");
+		exit(-1);
+	}
+	while (f->num_valid - f->read_ptr < need) {
+		words_left = f->num_valid - f->read_ptr;
+		memmove(f->cache, f->cache + f->read_ptr,
+				words_left * sizeof(uint32));
+#ifdef HAVE_MPI
+		if (obj->mpi_la_row_rank == 0) {
+#endif
+			if (feof(fp)) {
+				logprintf(obj, "error: truncated matrix column\n");
+				exit(-1);
+			}
+			f->num_valid = words_left + (uint32)
+				fread(f->cache + words_left, sizeof(uint32),
+					FILE_CACHE_WORDS - words_left, fp);
+			if (ferror(fp)) {
+				logprintf(obj, "error: matrix read failed\n");
+				exit(-1);
+			}
+#ifdef HAVE_MPI
+		}
+		if (read_submatrix && obj->mpi_nrows > 1) {
+			MPI_TRY(MPI_Bcast(&f->num_valid, 1, MPI_INT, 0,
+					obj->mpi_la_col_grid))
+			if (f->num_valid > words_left) {
+				MPI_TRY(MPI_Bcast(f->cache + words_left,
+					f->num_valid - words_left, MPI_INT, 0,
+					obj->mpi_la_col_grid))
+			}
+		}
+#endif
+		f->read_ptr = 0;
+		if (f->num_valid < need) {
+			logprintf(obj, "error: truncated matrix column\n");
+			exit(-1);
+		}
 	}
 
 	*num_out = num;
@@ -423,12 +618,12 @@ static void file_cache_get_next(msieve_obj *obj, FILE *fp,
 }
 
 /*--------------------------------------------------------------------*/
-void read_matrix(msieve_obj *obj, 
-		uint32 *nrows_out, uint32 *max_nrows_out, 
+void read_matrix(msieve_obj *obj,
+		uint32 *nrows_out, uint32 *max_nrows_out,
 		uint32 *start_row_out,
 		uint32 *dense_rows_out,
 		uint32 *ncols_out, uint32 *max_ncols_out,
-		uint32 *start_col_out, 
+		uint32 *start_col_out,
 		la_col_t **cols_out, uint32 *rowperm, uint32 *colperm) {
 
 	uint32 i, j, k;
@@ -458,9 +653,17 @@ void read_matrix(msieve_obj *obj,
 		exit(-1);
 	}
 
-	fread(&max_nrows, sizeof(uint32), (size_t)1, matrix_fp);
-	fread(&dense_rows, sizeof(uint32), (size_t)1, matrix_fp);
-	fread(&max_ncols, sizeof(uint32), (size_t)1, matrix_fp);
+	if (fread(&max_nrows, sizeof(uint32), 1, matrix_fp) != 1 ||
+	    fread(&dense_rows, sizeof(uint32), 1, matrix_fp) != 1 ||
+	    fread(&max_ncols, sizeof(uint32), 1, matrix_fp) != 1) {
+		logprintf(obj, "error: truncated matrix header\n");
+		exit(-1);
+	}
+	if (dense_rows > max_nrows || (uint64)dense_rows + 31 >
+			(uint64)MAX_COL_IDEALS * 32 + 31) {
+		logprintf(obj, "error: invalid dense-row count in matrix\n");
+		exit(-1);
+	}
 
 	/* default bounding rectangle on matrix read in */
 
@@ -485,9 +688,9 @@ void read_matrix(msieve_obj *obj,
 		mpi_nrows = obj->mpi_nrows;
 
 		/* we perform an on-the-fly permutation of the rows,
-		   so that row i winds up in MPI row (i % mpi_nrows). 
-		   This is basically a scatter of the initial row 
-		   ordering across all the MPI rows. 
+		   so that row i winds up in MPI row (i % mpi_nrows).
+		   This is basically a scatter of the initial row
+		   ordering across all the MPI rows.
 
 		   While this will distribute the nonzeros across
 		   the MPI rows approximately evenly, we can only
@@ -527,7 +730,7 @@ void read_matrix(msieve_obj *obj,
 		la_col_t *c;
 		uint32 tmp_col[MAX_COL_IDEALS];
 		uint32 num;
-		
+
 		if (colperm != NULL)
 			c = cols + colperm[i];
 		else
@@ -541,15 +744,22 @@ void read_matrix(msieve_obj *obj,
 		k = num + dense_row_words;
 		c->data = NULL;
 		c->weight = num;
+		for (j = 0; j < num; j++) {
+			if (tmp_col[j] >= max_nrows) {
+				logprintf(obj, "error: matrix column %u contains row %u >= %u\n",
+					i, tmp_col[j], max_nrows);
+				exit(-1);
+			}
+		}
 
 		/* possibly permute the row numbers */
 
 		if (rowperm != NULL) {
 			for (j = 0; j < num; j++)
 				tmp_col[j] = rowperm[tmp_col[j]];
-	
+
 			if (num > 1) {
-				qsort(tmp_col, (size_t)num, 
+				qsort(tmp_col, (size_t)num,
 					sizeof(uint32), compare_uint32);
 			}
 		}
@@ -593,7 +803,10 @@ void read_matrix(msieve_obj *obj,
 	}
 
 	file_cache_free(&file_cache);
-	fclose(matrix_fp);
+	if (ferror(matrix_fp) || fclose(matrix_fp) != 0) {
+		logprintf(obj, "error: can't finalize matrix read\n");
+		exit(-1);
+	}
 	*cols_out = cols;
 	*ncols_out = ncols;
 	*nrows_out = nrows;
@@ -607,7 +820,7 @@ void read_matrix(msieve_obj *obj,
 }
 
 /*--------------------------------------------------------------------*/
-void dump_dependencies(msieve_obj *obj, 
+void dump_dependencies(msieve_obj *obj,
 			uint64 *deps, uint32 ncols) {
 
 	char buf[256];
@@ -623,7 +836,10 @@ void dump_dependencies(msieve_obj *obj,
 		exit(-1);
 	}
 
-	fwrite(deps, sizeof(uint64), (size_t)ncols, deps_fp);
-	fclose(deps_fp);
+	if (fwrite(deps, sizeof(uint64), (size_t)ncols, deps_fp) != ncols ||
+	    fflush(deps_fp) != 0 || ferror(deps_fp) || fclose(deps_fp) != 0) {
+		logprintf(obj, "error: can't finalize deps file\n");
+		exit(-1);
+	}
 }
 

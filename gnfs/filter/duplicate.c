@@ -6,13 +6,14 @@ errors.
 
 Optionally, please be nice and tell me if you find this source to be
 useful. Again optionally, if you add to the functionality present here
-please consider making those additions public too, so that others may 
-benefit from your work.	
+please consider making those additions public too, so that others may
+benefit from your work.
 
 $Id$
 --------------------------------------------------------------------*/
 
 #include "filter.h"
+#include "hash64.h"
 
 /* produce <savefile_name>.d, a binary file containing the
    line numbers of relations in the savefile that should *not*
@@ -25,23 +26,24 @@ $Id$
    memory use down but causes good relations to be thrown away.
    Another option is to put the (a,b) values of relations into the
    hashtable, so that hash collisions can be resolved rigorously.
-   Unfortunately this means we have to budget 12 bytes for each
-   unique relation, and there could be tens (hundreds!) of millions 
-   of them.
+   At multi-billion-relation scale the second-pass table stores the
+   complete 128-bit (a,b) key plus a 64-bit chain link in segmented
+   storage. This costs about 24 bytes per collision candidate, but avoids
+   both false duplicate matches and the old 32-bit table-size ceiling.
 
    The implementation here is a compromise: we do duplicate removal
    in two passes. The first pass maps relations into a hashtable
-   of bits, and we save (on disk) the list of hash bins where two 
+   of bits, and we save (on disk) the list of hash bins where two
    or more relations collide. The second pass refills the hashtable
    of bits with just these entries, then reads through the complete
    dataset again and saves the (a,b) values of any relation that
    maps to one of the filled-in hash bins. The memory use in the
-   first pass is constant, and the memory use of the second pass
-   is 12 bytes per duplicate relation. Assuming unique relations
-   greatly outnumber duplicates, this solution finds all the duplicates
+   first pass is constant, and the memory use of the second pass is
+   proportional only to relations landing in collision buckets. Assuming
+   unique relations greatly outnumber duplicates, this solution finds all the duplicates
    with no false positives, and the memory use is low enough so
-   that singleton filtering is a larger memory bottleneck 
-   
+   that singleton filtering is a larger memory bottleneck
+
    One useful optimization for really big problems would turn the
    first-pass hashtable into a Bloom filter using several hash
    functions. This would make it much more effective at avoiding
@@ -62,9 +64,37 @@ static uint64 rrxmrrxmsx_0(uint64 v) {
     return v ^ v >> 28;
 }
 
-static uint32 purge_duplicates_pass2(msieve_obj *obj,
+static void dup_write_u64(msieve_obj *obj, FILE *fp, uint64 value, const char *what) {
+	if (fwrite(&value, sizeof(uint64), 1, fp) != 1) {
+		logprintf(obj, "error: write failed for %s\n", what);
+		exit(-1);
+	}
+}
+
+static void dup_close_output(msieve_obj *obj, FILE *fp, const char *what) {
+	if (fflush(fp) != 0 || ferror(fp) || fclose(fp) != 0) {
+		logprintf(obj, "error: can't finalize %s\n", what);
+		exit(-1);
+	}
+}
+
+/* Return 1 for a complete record, 0 for clean EOF, and -1 for a
+   truncated record or I/O error. */
+static int dup_read_u64(FILE *fp, uint64 *value) {
+	size_t n;
+	if (feof(fp))
+		return 0;
+	n = fread(value, 1, sizeof(uint64), fp);
+	if (n == sizeof(uint64))
+		return 1;
+	if (n == 0 && feof(fp) && !ferror(fp))
+		return 0;
+	return -1;
+}
+
+static uint64 purge_duplicates_pass2(msieve_obj *obj,
 				uint32 log2_hashtable1_size,
-				uint32 max_relations) {
+				uint64 max_relations) {
 
 	savefile_t *savefile = &obj->savefile;
 	FILE *bad_relation_fp;
@@ -72,13 +102,13 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 	FILE *out_fp;
 	uint64 i;
 	char buf[LINE_BUF_SIZE];
-	uint32 num_duplicates;
-	uint32 num_relations;
-	uint32 next_bad_relation;
-	uint32 curr_relation;
+	uint64 num_duplicates;
+	uint64 num_relations;
+	uint64 next_bad_relation;
+	uint64 curr_relation;
 	uint8 *bit_table;
-	hashtable_t duplicates;
-	uint32 key[2];
+	nfs_hashtable64_t duplicates;
+	uint32 key[4];
 
 	logprintf(obj, "commencing duplicate removal, pass 2\n");
 
@@ -91,10 +121,17 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 		exit(-1);
 	}
 	bit_table = (uint8 *)xcalloc(
-			(uint64)1 << (log2_hashtable1_size - 3), 
+			(uint64)1 << (log2_hashtable1_size - 3),
 			sizeof(uint8));
 
-	while (fread(&i, (size_t)1, sizeof(uint64), collision_fp) != 0) {
+	while (1) {
+		int rc = dup_read_u64(collision_fp, &i);
+		if (rc == 0)
+			break;
+		if (rc < 0) {
+			logprintf(obj, "error: truncated duplicate collision file\n");
+			exit(-1);
+		}
 		if (i < ((uint64)1 << log2_hashtable1_size)) {
 			bit_table[i / 8] |= 1 << (i % 8);
 		}
@@ -116,21 +153,26 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 		logprintf(obj, "error: dup2 can't open output file\n");
 		exit(-1);
 	}
-	hashtable_init(&duplicates, (uint32)WORDS_IN(key), 0);
+	nfs_hash64_init(obj, &duplicates, (uint32)WORDS_IN(key));
 
 	num_duplicates = 0;
 	num_relations = 0;
-	curr_relation = (uint32)(-1);
-	next_bad_relation = (uint32)(-1);
-	fread(&next_bad_relation, (size_t)1, 
-			sizeof(uint32), bad_relation_fp);
+	curr_relation = UINT64_MAX;
+	next_bad_relation = UINT64_MAX;
+	{
+		int rc = dup_read_u64(bad_relation_fp, &next_bad_relation);
+		if (rc < 0) {
+			logprintf(obj, "error: truncated bad-relation file\n");
+			exit(-1);
+		}
+	}
 	savefile_read_line(buf, sizeof(buf), savefile);
 
 	while (!savefile_eof(savefile)) {
-		
+
 		uint64 hashval;
 		int64 a;
-		uint32 b;
+		uint64 b;
 		char *next_field;
 
 		if (buf[0] != '-' && !isdigit(buf[0])) {
@@ -140,43 +182,52 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 			savefile_read_line(buf, sizeof(buf), savefile);
 			continue;
 		}
-		if (++curr_relation == next_bad_relation) {
+		curr_relation++;
+		if (max_relations && curr_relation >= max_relations)
+			break;
+
+		if (curr_relation == next_bad_relation) {
 
 			/* this relation isn't valid; save it and
 			   read in the next invalid relation line number */
 
-			fwrite(&curr_relation, (size_t)1, 
-					sizeof(uint32), out_fp);
-			fread(&next_bad_relation, (size_t)1, 
-					sizeof(uint32), bad_relation_fp);
+			dup_write_u64(obj, out_fp, curr_relation, "duplicate relation list");
+			{
+				int rc = dup_read_u64(bad_relation_fp, &next_bad_relation);
+				if (rc < 0) {
+					logprintf(obj, "error: truncated bad-relation file\n");
+					exit(-1);
+				}
+				if (rc == 0)
+					next_bad_relation = UINT64_MAX;
+			}
 			savefile_read_line(buf, sizeof(buf), savefile);
 			continue;
 		}
-
-		if (max_relations && curr_relation >= max_relations)
-			break;
 
 		/* determine if the (a,b) coordinates of the
 		   relation collide in the table of bits */
 
 		a = strtoll(buf, &next_field, 10);
 		b = strtoull(next_field + 1, NULL, 10);
-		key[0] = (uint32)a;
-		key[1] = ((a >> 32) & 0x1f) | (b << 5);
+		key[0] = (uint32)(uint64)a;
+		key[1] = (uint32)((uint64)a >> 32);
+		key[2] = (uint32)b;
+		key[3] = (uint32)(b >> 32);
 
-		hashval = (rrxmrrxmsx_0(a) ^ rrxmrrxmsx_0((uint64)b)) >>
+		hashval = (rrxmrrxmsx_0((uint64)a) ^ rrxmrrxmsx_0((uint64)b)) >>
                                         (64 - log2_hashtable1_size);
 
 		if (bit_table[hashval/8] & hashmask[hashval % 8]) {
 
 			/* relation collides in the first hashtable;
-			   use the second hashtable to determine 
+			   use the second hashtable to determine
 			   rigorously if the relation was previously seen */
 
-			uint32 is_dup;
-			hashtable_find(&duplicates, key, NULL, &is_dup);
+			uint32 is_new;
+			nfs_hash64_find(obj, &duplicates, key, &is_new);
 
-			if (!is_dup) {
+			if (is_new) {
 
 				/* relation was seen for the first time;
 				   doesn't count as a duplicate */
@@ -187,8 +238,7 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 				/* relation was previously seen; this
 				   time it's a duplicate */
 
-				fwrite(&curr_relation, (size_t)1, 
-						sizeof(uint32), out_fp);
+				dup_write_u64(obj, out_fp, curr_relation, "duplicate relation list");
 				num_duplicates++;
 			}
 		}
@@ -201,24 +251,24 @@ static uint32 purge_duplicates_pass2(msieve_obj *obj,
 		savefile_read_line(buf, sizeof(buf), savefile);
 	}
 
-	logprintf(obj, "found %u duplicates and %u unique relations\n", 
-				num_duplicates, num_relations);
-	logprintf(obj, "memory use: %.1f MB\n", 
+	logprintf(obj, "found %" PRIu64 " duplicates and %" PRIu64
+			" unique relations\n", num_duplicates, num_relations);
+	logprintf(obj, "memory use: %.1f MB\n",
 			(double)(((uint64)1 << (log2_hashtable1_size-3)) +
-			hashtable_sizeof(&duplicates)) / 1048576);
+			nfs_hash64_sizeof(&duplicates)) / 1048576);
 
 	/* clean up and finish */
 
 	savefile_close(savefile);
 	fclose(bad_relation_fp);
-	fclose(out_fp);
+	dup_close_output(obj, out_fp, "duplicate relation list");
 	sprintf(buf, "%s.hc", savefile->name);
 	remove(buf);
 	sprintf(buf, "%s.br", savefile->name);
 	remove(buf);
 
 	free(bit_table);
-	hashtable_free(&duplicates);
+	nfs_hash64_free(&duplicates);
 	return num_relations;
 }
 
@@ -256,20 +306,20 @@ static double estimate_rel_size(savefile_t *savefile) {
 #define TARGET_HITS_PER_PRIME 40.0
 
 uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
-				uint32 max_relations, 
-				uint32 *num_relations_out) {
+				uint64 max_relations,
+				uint64 *num_relations_out) {
 
 	uint32 i;
 	savefile_t *savefile = &obj->savefile;
 	FILE *bad_relation_fp;
 	FILE *collision_fp;
-	uint32 curr_relation;
-	uint32 *my_curr_relation;
+	uint64 curr_relation;
+	uint64 *my_curr_relation;
 	char *buf;
-	uint32 num_relations;
-	uint32 num_collisions;
-	uint32 num_composite;
-	uint32 num_malformed;
+	uint64 num_relations;
+	uint64 num_collisions;
+	uint64 num_composite;
+	uint64 num_malformed;
 	uint8 *hashtable;
 	uint32 log2_hashtable1_size;
 	double rel_size = estimate_rel_size(savefile);
@@ -280,7 +330,7 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	uint32 num_free_relations;
 	uint32 num_free_relations_alloc;
 
-	uint32 *prime_bins;
+	uint64 *prime_bins;
 	double bin_max;
 
 	uint32 *array_size;
@@ -293,7 +343,7 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	if (batch < 1) batch = 1;
 
 	/* per thread variables */
-	my_curr_relation = (uint32 *)malloc(batch * sizeof(uint32));
+	my_curr_relation = (uint64 *)xcalloc((size_t)batch, sizeof(uint64));
 	buf = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
 	scratch = (mpz_t *)malloc(batch * sizeof(mpz_t));
 	array_size = (uint32 *)malloc(batch * sizeof(uint32));
@@ -338,10 +388,10 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	if (log2_hashtable1_size > 63)
 	 	log2_hashtable1_size = 63;
 	/* printf("log2_hashtable1_size = %u\n", log2_hashtable1_size); */
-	hashtable = (uint8 *)xcalloc((uint64)1 << 
+	hashtable = (uint8 *)xcalloc((uint64)1 <<
 				(log2_hashtable1_size - 3), sizeof(uint8));
-	prime_bins = (uint32 *)xcalloc((size_t)1 << (32 - LOG2_BIN_SIZE),
-					sizeof(uint32));
+	prime_bins = (uint64 *)xcalloc((size_t)1 << (32 - LOG2_BIN_SIZE),
+					sizeof(uint64));
 
 	/* set up the structures for tracking free relations */
 
@@ -353,24 +403,24 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	free_relations = (uint32 *)xmalloc(num_free_relations_alloc *
 						sizeof(uint32));
 
-	curr_relation = (uint32)(-1);
+	curr_relation = UINT64_MAX;
 	num_relations = 0;
 	num_collisions = 0;
 	num_composite = 0;
 	num_malformed = 0;
-	
+
 	do {
 		num_relations_read = 0;
 		for(i = 0; i < batch; i++) {
 			char *buf_i = buf + i * LINE_BUF_SIZE;
-			savefile_read_line(buf_i, 
+			savefile_read_line(buf_i,
 					LINE_BUF_SIZE * sizeof(char), savefile);
 			if (savefile_eof(savefile)) break;
 			if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
 				/* no relation on this line */
 				i--;
 				continue;
-			} 
+			}
 			num_relations_read++;
 			my_curr_relation[i] = curr_relation + i + 1;
 		}
@@ -379,15 +429,15 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 
 		curr_relation += num_relations_read;
 		if (max_relations && curr_relation >= max_relations) {
-			uint32 max_exceeded = curr_relation - max_relations;
+			uint64 max_exceeded = curr_relation - max_relations + 1;
 			curr_relation -= max_exceeded;
-			num_relations_read -= max_exceeded;
+			num_relations_read -= (uint32)max_exceeded;
 		}
 
 #pragma omp parallel for
 		for (i = 0; i < num_relations_read; i++) {
 			char *buf_i = buf + i * LINE_BUF_SIZE;
-			status[i] = nfs_read_relation(buf_i, fb, &tmp_rel[i], 
+			status[i] = nfs_read_relation(buf_i, fb, &tmp_rel[i],
 					&array_size[i], 1, scratch[i], 1);
 		}
 
@@ -396,21 +446,21 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 			uint64 blob[2];
 
 			if (my_curr_relation[i] > 0 && (my_curr_relation[i] % 10000000 == 0)) {
-				printf("read %uM relations\n", curr_relation / 1000000);
+				printf("read %" PRIu64 "M relations\n", curr_relation / 1000000);
 			}
 			if (status[i] != 0) {
 
 				/* save the line number of bad relations (hopefully
 			   		there are very few of them) */
 
-				fwrite(&my_curr_relation[i], (size_t)1, 
-					sizeof(uint32), bad_relation_fp);
+				dup_write_u64(obj, bad_relation_fp, my_curr_relation[i],
+					"bad relation list");
 				if (status[i] == -98)
 					num_composite++;
 				else if (status[i] == -97)
 					num_malformed++;
 				else
-			   	 logprintf(obj, "error %d reading relation %u\n",
+				logprintf(obj, "error %d reading relation %" PRIu64 "\n",
 						status[i], my_curr_relation[i]);
 			} else {
 
@@ -435,8 +485,8 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 				bit to zero */
 
 				if (hashtable[hashval / 8] & hashmask[hashval % 8]) {
-					fwrite(&hashval, (size_t)1, 
-							sizeof(uint64), collision_fp);
+					dup_write_u64(obj, collision_fp, hashval,
+						"collision list");
 					num_collisions++;
 					hashtable[hashval / 8] &= ~hashmask[hashval % 8];
 				}
@@ -463,12 +513,12 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 					uint32 j;
 
 					for (j = array_size[i] = 0; j < num_r + num_a; j++) {
-						uint64 p = decompress_p(tmp_rel[i].factors, 
+						uint64 p = decompress_p(tmp_rel[i].factors,
 									&array_size[i]);
 
-						/* add the factors of tmp_rel to the 
+						/* add the factors of tmp_rel to the
 						counts of (32-bit) primes */
-				
+
 						if (p >= ((uint64)1 << 32))
 							continue;
 
@@ -476,12 +526,12 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 
 						/* schedule the adding of a free relation
 						for each algebraic factor */
-						
+
 						if (j >= num_r &&
 							p > MAX_PACKED_PRIME &&
 							p < FREE_RELATION_LIMIT) {
 							p = p / 2;
-							free_relation_bits[p / 8] |= 
+							free_relation_bits[p / 8] |=
 									hashmask[p % 8];
 						}
 					}
@@ -492,21 +542,21 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 
 	free(hashtable);
 	savefile_close(savefile);
-	fclose(bad_relation_fp);
-	fclose(collision_fp);
+	dup_close_output(obj, bad_relation_fp, "bad relation list");
+	dup_close_output(obj, collision_fp, "collision list");
 
 	if (num_composite > 0)
-		logprintf(obj, "skipped %d relations with composite factors\n",
+		logprintf(obj, "skipped %" PRIu64 " relations with composite factors\n",
 				num_composite);
 	if (num_malformed > 0)
-		logprintf(obj, "skipped %d malformed relations\n",
+		logprintf(obj, "skipped %" PRIu64 " malformed relations\n",
 				num_malformed);
-	logprintf(obj, "found %u hash collisions in %u relations\n", 
-				num_collisions, num_relations);
+	logprintf(obj, "found %" PRIu64 " hash collisions in %" PRIu64
+			" relations\n", num_collisions, num_relations);
 
 	if (max_relations == 0 || max_relations > curr_relation + 1) {
 
-		/* cancel out any free relations that are 
+		/* cancel out any free relations that are
 		   already present in the dataset, then add
 		   free relations that remain */
 
@@ -523,20 +573,20 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	}
 	free(free_relations);
 	free(free_relation_bits);
-	
+
 	/* free per thread variables */
 
 	for (i = 0; i < batch; i++) {
 		free(tmp_rel[i].factors);
 		mpz_clear(scratch[i]);
 	}
-	
+
 	free(my_curr_relation);
 	free(scratch);
 	free(array_size);
 	free(tmp_rel);
 	free(status);
-	
+
 	if (num_collisions == 0) {
 
 		/* no duplicates; no second pass is necessary */
@@ -563,7 +613,7 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	   process should be chosen here. We don't want the bound
 	   to depend on an arbitrarily chosen factor base, since
 	   that bound may be too large or much too small. The former
-	   would make filtering take too long, and the latter 
+	   would make filtering take too long, and the latter
 	   could make filtering impossible.
 
 	   Conceptually, we want the bound to be the point below

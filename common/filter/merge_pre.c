@@ -6,13 +6,14 @@ errors.
 
 Optionally, please be nice and tell me if you find this source to be
 useful. Again optionally, if you add to the functionality present here
-please consider making those additions public too, so that others may 
-benefit from your work.	
+please consider making those additions public too, so that others may
+benefit from your work.
 
 $Id$
 --------------------------------------------------------------------*/
 
 #include "filter_priv.h"
+#include "merge_util.h"
 
 /*--------------------------------------------------------------------*/
 static int compare_uint32(const void *x, const void *y) {
@@ -54,10 +55,10 @@ void filter_merge_init(msieve_obj *obj, filter_t *filter) {
 	}
 
 	for (i = 0; i < NUM_IDEAL_BINS+1; i++) {
-		logprintf(obj, "relations with %u large ideals: %u\n", 
+		logprintf(obj, "relations with %u large ideals: %u\n",
 					i, ideal_count_bins[i]);
 	}
-	logprintf(obj, "relations with %u+ large ideals: %u\n", 
+	logprintf(obj, "relations with %u+ large ideals: %u\n",
 				i, ideal_count_bins[i]);
 }
 
@@ -71,13 +72,13 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 	/* performs 2-way merges and initializes the structures
 	   needed by the rest of the merge code. 2-way merges are
 	   handled separately because there are a lot of them to do
-	   (typically 30% of the ideals participate in 2-way merges) 
+	   (typically 30% of the ideals participate in 2-way merges)
 	   and they can be performed very efficiently.
 
-	   We can perform a 2-way merge by locating all the 2-way 
-	   cliques in the input dataset, then collapsing each clique 
-	   into a relation set. A relation belongs to at most one 
-	   clique, and no optimization is possible in the combining 
+	   We can perform a 2-way merge by locating all the 2-way
+	   cliques in the input dataset, then collapsing each clique
+	   into a relation set. A relation belongs to at most one
+	   clique, and no optimization is possible in the combining
 	   process */
 
 	uint32 i, j;
@@ -89,15 +90,15 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 	uint32 num_ideals;
 	uint32 num_deleted;
 
-	ideal_relation_t *reverse_array;
-	uint32 num_reverse;
-	uint32 num_reverse_alloc;
+	ideal_relation_list_t reverse_list;
 
 	relation_set_t *relset_array;
 	uint32 num_relset;
-	uint32 num_relset_alloc;
+	size_t num_relset_alloc;
 
 	logprintf(obj, "commencing 2-way merge\n");
+	if (merge->data_pool == NULL)
+		merge->data_pool = merge_mem_pool_create();
 
 	/* set up the hashtable for ideal counts */
 
@@ -105,15 +106,12 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 	relation_ptr = filter->relation_ptr;
 	num_relations = filter->num_relations;
 	num_ideals = filter->num_ideals;
-	ideal_map = (ideal_map_t *)xcalloc((size_t)num_ideals, 
+	ideal_map = (ideal_map_t *)xcalloc((size_t)num_ideals,
 					sizeof(ideal_map_t));
 
 	/* set up structure for linked lists of clique relations */
 
-	num_reverse = 1;
-	num_reverse_alloc = 10000;
-	reverse_array = (ideal_relation_t *)xmalloc(num_reverse_alloc *
-					sizeof(ideal_relation_t));
+	ideal_relation_list_init(&reverse_list);
 
 	/* count the number of times each ideal occurs in relations */
 
@@ -157,19 +155,11 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 			   ideal; add it to the ideal's linked list */
 // #pragma omp critical (add_relation)
 			{
-				if (num_reverse == num_reverse_alloc) {
-					num_reverse_alloc *= 2;
-					reverse_array = (ideal_relation_t *)xrealloc(
-							reverse_array,
-							num_reverse_alloc *
-							sizeof(ideal_relation_t));
-				}
-				reverse_array[num_reverse].relation_array_word =
-						(uint32 *)curr_relation -
-						(uint32 *)relation_array;
-				reverse_array[num_reverse].next = 
-							ideal_map[ideal].payload;
-				ideal_map[ideal].payload = num_reverse++;
+				uint64 relation_array_word = (uint64)(
+					(uint32 *)curr_relation - (uint32 *)relation_array);
+				ideal_map[ideal].payload = ideal_relation_list_append(
+						&reverse_list, relation_array_word,
+						ideal_map[ideal].payload);
 			}
 		}
 	}
@@ -183,18 +173,18 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 	/* find all the cliques and convert to relation sets.
 	   We perform breadth first search by iterating through
 	   all of the relations.
-	  
+
 	   Note that the clique removal step iterated through
 	   ideals looking for cliques. It could do that because
 	   the only objective was to find cliques. Here the objective
 	   is different: find all relations, performing extra work
 	   on cliques. If we discovered relations through the ideals
-	   they contained, we'd have to do a lot more traversing 
+	   they contained, we'd have to do a lot more traversing
 	   of linked lists */
 
 	curr_relation = relation_array;
 	num_deleted = 0;
-	for (i = 0; i < num_relations; 
+	for (i = 0; i < num_relations;
 		i++, curr_relation = next_relation_ptr(curr_relation)) {
 
 		uint32 tmp_relations[MAX_2WAY_RELATIONS];
@@ -209,7 +199,7 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 			continue;
 
 		/* relation hasn't been seen before. Start counting
-		   the ideals in it, and list the large ideals that 
+		   the ideals in it, and list the large ideals that
 		   the relation contains. The clique is complete when
 		   all the ideals in the list have been processed */
 
@@ -224,20 +214,20 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 
 		for (j = 0; j < num_tmp_ideal; j++) {
 			uint32 ideal = tmp_ideals[j];
-			uint32 offset;
+			uint64 offset;
 
 			/* check if the ideal is not part of a clique */
 
 			if (!ideal_map[ideal].clique)
 				continue;
 
-			/* we've found a clique, and have to find all the 
+			/* we've found a clique, and have to find all the
 			   relations in it */
 
 			offset = ideal_map[ideal].payload;
 			while (offset) {
 
-				ideal_relation_t *rev = reverse_array + offset;
+				ideal_relation_t *rev = ideal_relation_list_at(&reverse_list, offset);
 				relation_ideal_t *r = (relation_ideal_t *)
 						((uint32 *)relation_array +
 						rev->relation_array_word);
@@ -249,7 +239,7 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 				/* relation seen for the first time;
 				   add its count of ideals to the totals for
 				   the current clique, and merge its ideal
-				   list with that of the current clique. The 
+				   list with that of the current clique. The
 				   relation is now considered processed */
 
 				/* check for overflow */
@@ -269,13 +259,13 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 
 				/* perform the merge */
 
-				tmp_relations[num_tmp_relation++] = 
+				tmp_relations[num_tmp_relation++] =
 							r->rel_index;
 				num_small_ideal += r->gf2_factors;
 				num_tmp_ideal = merge_relations(accum_ideals,
 						tmp_ideals, num_tmp_ideal,
 						r->ideal_list, r->ideal_count);
-				memcpy(tmp_ideals, accum_ideals, 
+				memcpy(tmp_ideals, accum_ideals,
 						num_tmp_ideal * sizeof(uint32));
 				r->connected = 1;
 				offset = rev->next;
@@ -292,21 +282,33 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 			j = (uint32)(-1);
 		}
 
-		/* clique is complete; throw it away if it 
+		/* clique is complete; throw it away if it
 		   contains too many relations */
-		
+
 		if (num_tmp_relation >= MAX_RELSET_SIZE) {
 			num_deleted++;
 			continue;
 		}
-		
+
 		/* allocate a relation set for the clique */
 
-		if (num_relset == num_relset_alloc) {
-			num_relset_alloc *= 2;
+		if ((size_t)num_relset == num_relset_alloc) {
+			size_t max_alloc = (size_t)UINT32_MAX;
+			size_t increment = MAX((size_t)1, num_relset_alloc / 4);
+			size_t new_alloc;
+			if (num_relset_alloc >= max_alloc) {
+				logprintf(obj, "error: relation-set count exceeds 32-bit capacity\n");
+				exit(-1);
+			}
+			new_alloc = num_relset_alloc > max_alloc - increment ?
+				max_alloc : num_relset_alloc + increment;
+			if (new_alloc > (size_t)-1 / sizeof(relation_set_t)) {
+				logprintf(obj, "error: relation-set allocation exceeds address space\n");
+				exit(-1);
+			}
+			num_relset_alloc = new_alloc;
 			relset_array = (relation_set_t *)xrealloc(relset_array,
-							num_relset_alloc *
-							sizeof(relation_set_t));
+						num_relset_alloc * sizeof(relation_set_t));
 		}
 		curr_relset = relset_array + num_relset;
 		curr_relset->num_relations = num_tmp_relation;
@@ -316,8 +318,8 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 		/* sort the relation numbers in ascending order
 		   (the ideal list is already ordered), then store */
 
-		curr_relset->data = (uint32 *) xmalloc(sizeof(uint32) *
-					(num_tmp_relation + num_tmp_ideal));
+		curr_relset->data = merge_mem_alloc(merge->data_pool,
+					num_tmp_relation + num_tmp_ideal);
 		if (num_tmp_relation > 1) {
 			qsort(tmp_relations, (size_t)num_tmp_relation,
 					sizeof(uint32), compare_uint32);
@@ -331,9 +333,11 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 
 	/* free unneeded objects */
 
-	free(reverse_array);
+	ideal_relation_list_free(&reverse_list);
 	free(filter->relation_array);
 	filter->relation_array = NULL;
+	free(filter->relation_ptr);
+	filter->relation_ptr = NULL;
 	relset_array = (relation_set_t *)xrealloc(relset_array,
 				num_relset * sizeof(relation_set_t));
 
@@ -361,7 +365,7 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 		relation_set_t *r = relset_array + i;
 		uint32 *ideal_list = r->data + r->num_relations;
 		for (j = 0; j < r->num_large_ideals; j++) {
-			ideal_list[j] = ideal_map[ideal_list[j]].payload;
+			ideal_list[j] = (uint32)ideal_map[ideal_list[j]].payload;
 		}
 	}
 

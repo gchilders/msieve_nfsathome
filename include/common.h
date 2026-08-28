@@ -43,6 +43,16 @@ extern "C" {
 
 #define BIGNUM_BUF_SIZE 500
 #define LINE_BUF_SIZE 300
+
+/* Versioned cycle/relation-map metadata used when NFS source relation
+   numbers have been compacted into a dense 32-bit namespace. Legacy cycle
+   files still begin directly with num_cycles. */
+#define NFS_RMAP_MAGIC ((uint64)0x4d5352564d415032ULL)
+#define NFS_RMAP_VERSION ((uint64)2)
+#define NFS_RMAP_COMMIT_MAGIC ((uint64)0x4d535256434d5432ULL)
+#define CYCLE_FILE_MAGIC ((uint32)0xffffffffU)
+#define CYCLE_FILE_VERSION ((uint32)1U)
+#define CYCLE_FLAG_RMAP_REQUIRED ((uint32)0x00000001U)
 #define SAVEFILE_READ 0x01
 #define SAVEFILE_WRITE 0x02
 #define SAVEFILE_APPEND 0x04

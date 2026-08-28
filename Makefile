@@ -224,6 +224,8 @@ GPU_OBJS += \
 
 NFS_HDR = \
 	gnfs/filter/filter.h \
+	gnfs/filter/hash64.h \
+	gnfs/filter/rmap.h \
 	gnfs/poly/poly.h \
 	gnfs/poly/poly_skew.h \
 	gnfs/poly/stage1/stage1.h \

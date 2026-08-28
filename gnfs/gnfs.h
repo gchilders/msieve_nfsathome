@@ -318,6 +318,11 @@ static INLINE uint64 decompress_p(uint8 *array, uint32 *offset_in) {
 	return p;
 }
 
+/* Relation filtering may compact a >32-bit source relation namespace
+   into dense 32-bit IDs. The versioned relation-map and cycle metadata
+   constants are shared from common.h. */
+
+
 /* canonical representation of a relation, used in
    the NFS postprocessing phase */
 
