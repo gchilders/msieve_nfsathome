@@ -136,7 +136,7 @@ void print_usage(char *progname) {
 		 " the arguments are a space-delimited list of:\n"
 		 " polynomial selection options:\n"
 #ifdef HAVE_CUDA
-		 "   sortlib=X       use GPU sorting library X\n"
+		 "   sortlib=X       override built-in GPU sorting library with X\n"
 		 "   gpu_mem_mb=X    use X megabytes of GPU memory\n"
 #endif
 		 "   polydegree=X    select polynomials with degree X\n"

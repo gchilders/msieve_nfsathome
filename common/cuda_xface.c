@@ -29,6 +29,35 @@ cuGetErrorMessage(CUresult result, int line)
 }
 
 /*------------------------------------------------------------------------*/
+CUresult
+cuda_load_embedded_module(CUmodule *module, const void *fatbin,
+		const char *ptx, const char *module_name)
+{
+	CUresult status;
+	const char *error_name = NULL;
+	const char *error_string = NULL;
+
+	status = cuModuleLoadData(module, fatbin);
+	if (status == CUDA_SUCCESS)
+		return status;
+
+	cuGetErrorName(status, &error_name);
+	cuGetErrorString(status, &error_string);
+	printf("warning: embedded %s fatbin failed to load (%s: %s); "
+	       "trying embedded PTX\n",
+	       module_name,
+	       error_name ? error_name : "unknown CUDA error",
+	       error_string ? error_string : "no description");
+
+	status = cuModuleLoadData(module, ptx);
+	if (status == CUDA_SUCCESS) {
+		printf("using embedded PTX fallback for %s\n", module_name);
+	}
+
+	return status;
+}
+
+/*------------------------------------------------------------------------*/
 void
 gpu_init(gpu_config_t *config)
 {

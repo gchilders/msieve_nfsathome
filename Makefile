@@ -21,6 +21,8 @@ OMP = 1
 # gcc with basic optimization (-march flag could
 # get overridden by architecture-specific builds)
 CC = gcc
+CXX = g++
+HOSTCC ?= $(CC)
 WARN_FLAGS = -Wall -W
 OPT_FLAGS = -O3 -g -march=native \
 	    -D_FILE_OFFSET_BITS=64 -DNDEBUG -D_LARGEFILE64_SOURCE -DVBITS=$(VBITS)
@@ -50,29 +52,56 @@ else
 	LIBS += -ldl
 endif
 ifdef CUDA
+# Preserve the historical CUDA=cc interface for single-architecture builds,
+# and allow CUDA_ARCHS to request one executable containing several native
+# cubins. CUDA_ARCHS may be space- or comma-separated. The first architecture
+# is also the default PTX virtual architecture unless CUDA_PTX_ARCH is set.
 ifeq ($(CUDA),1)
-	SM = 60
+	CUDA_ARCHS ?= 80 86 89 90 120
 else
-	SM = $(CUDA)
+	CUDA_ARCHS ?= $(CUDA)
 endif
+comma := ,
+CUDA_ARCH_LIST := $(strip $(subst $(comma), ,$(CUDA_ARCHS)))
+CUDA_PTX_ARCH ?= $(firstword $(CUDA_ARCH_LIST))
+CUDA_GENCODE := $(foreach arch,$(CUDA_ARCH_LIST),-gencode arch=compute_$(arch),code=sm_$(arch))
+CUDA_FATBIN_GENCODE := $(CUDA_GENCODE) \
+	-gencode arch=compute_$(CUDA_PTX_ARCH),code=compute_$(CUDA_PTX_ARCH)
 
 ifeq ($(WIN),1)
 	CUDA_ROOT = $(shell echo $$CUDA_PATH)
 	NVCC = "$(CUDA_ROOT)/bin/nvcc"
 
 ifeq ($(WIN64),1)
-	CUDA_LIBS = "$(CUDA_ROOT)/lib/x64/cuda.lib"
+	CUDA_DRIVER_LIBS = "$(CUDA_ROOT)/lib/x64/cuda.lib"
+	CUDA_RUNTIME_LIBS = "$(CUDA_ROOT)/lib/x64/cudart_static.lib"
 else
-	CUDA_LIBS = "$(CUDA_ROOT)/lib/win32/cuda.lib"
+	CUDA_DRIVER_LIBS = "$(CUDA_ROOT)/lib/win32/cuda.lib"
+	CUDA_RUNTIME_LIBS = "$(CUDA_ROOT)/lib/win32/cudart_static.lib"
 endif
-
+	CUDA_HOST_FLAGS = -Xcompiler /fp:strict
+	BIN2C = msieve_bin2c.exe
+	# The historical WIN=1 Makefile mixes MinGW C with NVCC/MSVC C++.
+	# Keep its DSO-based CUDA packaging by default; Visual Studio projects
+	# are also unchanged. CUDA_SINGLE_BINARY=1 may be used with a compatible
+	# all-MSVC/COFF toolchain.
+	CUDA_SINGLE_BINARY ?= 0
 else
 	NVCC = "$(shell which nvcc)"
 	CUDA_ROOT = $(shell dirname $(NVCC))/../
-	CUDA_LIBS = -lcuda
+	CUDA_DRIVER_LIBS = -lcuda
+	CUDA_RUNTIME_LIBS = -L"$(CUDA_ROOT)/lib64" -lcudart_static -ldl -lrt
+	CUDA_HOST_FLAGS = -Xcompiler -ffloat-store
+	BIN2C = msieve_bin2c
+	CUDA_SINGLE_BINARY ?= 1
 endif
 	CFLAGS += -I"$(CUDA_ROOT)/include" -Icub -DHAVE_CUDA
-	LIBS += $(CUDA_LIBS)
+ifeq ($(CUDA_SINGLE_BINARY),1)
+	CFLAGS += -DMSIEVE_CUDA_SINGLE_BINARY
+	LIBS += $(CUDA_RUNTIME_LIBS) $(CUDA_DRIVER_LIBS)
+else
+	LIBS += $(CUDA_DRIVER_LIBS)
+endif
 
 ifeq ($(CUDAAWARE),1)
 	CFLAGS += -DHAVE_CUDAAWARE_MPI
@@ -80,7 +109,18 @@ endif
 endif
 ifeq ($(MPI),1)
 	CC = mpicc
+	CXX = mpicxx
 	CFLAGS += -DHAVE_MPI
+endif
+
+ifdef CUDA
+ifeq ($(CUDA_SINGLE_BINARY),1)
+	LINKER = $(CXX)
+else
+	LINKER = $(CC)
+endif
+else
+	LINKER = $(CC)
 endif
 ifeq ($(BOINC),1)
 	# fill in as appropriate
@@ -180,8 +220,6 @@ COMMON_NOGPU_SRCS = \
 ifdef CUDA
 	COMMON_SRCS += $(COMMON_GPU_SRCS)
 	COMMON_HDR += $(COMMON_GPU_HDR)
-	GPU_OBJS += \
-		lanczos_kernel.ptx lanczos_kernel.fatbin
 else
 	COMMON_SRCS += $(COMMON_NOGPU_SRCS)
 	COMMON_HDR += $(COMMON_NOGPU_HDR)
@@ -216,9 +254,36 @@ QS_OBJS = \
 
 #---------------------------------- GPU file lists -------------------------
 
-GPU_OBJS += \
+rwildcard=$(foreach d,$(wildcard $1*),$(call rwildcard,$d/,$2) $(filter $(subst *,%,$2),$d))
+CUB_DEPS := $(call rwildcard,cub/cub/,*.cuh)
+
+# Define these unconditionally so plain `make clean` removes artifacts left
+# by an earlier CUDA build even when CUDA is not specified on the clean command.
+CUDA_ENGINE_OBJS = \
+	cub/sort_engine.o \
+	cub/spmv_engine.o
+
+CUDA_EMBED_OBJS = \
+	stage1_core_fatbin_embed.o \
+	stage1_core_ptx_embed.o \
+	lanczos_kernel_fatbin_embed.o \
+	lanczos_kernel_ptx_embed.o
+
+ifdef CUDA
+ifeq ($(CUDA_SINGLE_BINARY),1)
+GPU_OBJS = $(CUDA_ENGINE_OBJS) $(CUDA_EMBED_OBJS)
+CUDA_ARCHIVE_OBJS = $(GPU_OBJS)
+else
+GPU_OBJS = \
 	stage1_core.ptx stage1_core.fatbin \
+	lanczos_kernel.ptx lanczos_kernel.fatbin \
 	cub/built
+CUDA_ARCHIVE_OBJS =
+endif
+else
+GPU_OBJS =
+CUDA_ARCHIVE_OBJS =
+endif
 
 #---------------------------------- NFS file lists -------------------------
 
@@ -295,7 +360,6 @@ else
 	NFS_HDR += $(NFS_NOGPU_HDR)
 	NFS_SRCS += $(NFS_NOGPU_SRCS)
 	NFS_OBJS += $(NFS_NOGPU_OBJS)
-	GPU_OBJS =
 endif
 
 #---------------------------------- make targets -------------------------
@@ -306,8 +370,11 @@ help:
 	@echo "add 'WIN=1 if building on windows"
 	@echo "add 'WIN64=1 if building on 64-bit windows"
 	@echo "add 'ECM=1' if GMP-ECM is available (enables ECM)"
-	@echo "add 'CUDA=cc' for Nvidia graphics card support where cc is the compute"
-	@echo "     capacity of the gpu. CUDA=1 defaults to 60"
+	@echo "add 'CUDA=1' for Nvidia graphics card support"
+	@echo "     CUDA=1 defaults to 80 86 89 90 120"
+	@echo "     use CUDA_ARCHS=\"80 86 89 90\" to embed several native architectures"
+	@echo "     CUDA_PTX_ARCH defaults to the first CUDA_ARCHS entry and supplies PTX fallback"
+	@echo "     CUDA_SINGLE_BINARY=1 is the Unix default; =0 selects legacy external CUDA files"
 	@echo "add 'MPI=1' for parallel processing using MPI"
 	@echo "     add 'CUDAAWARE=1' if using CUDA-Aware MPI"
 	@echo "add 'BOINC=1' to add BOINC wrapper"
@@ -315,17 +382,18 @@ help:
 	@echo "add 'VBITS=X' for linear algebra with X-bit vectors"
 	@echo "     (64, 128, 192, 256, 320, 384, 448, 512)"
 
-all: $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(GPU_OBJS)
+all: demo.o $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(GPU_OBJS)
 	rm -f libmsieve.a
-	ar r libmsieve.a $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS)
+	ar r libmsieve.a $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(CUDA_ARCHIVE_OBJS)
 	ranlib libmsieve.a
-	$(CC) $(CFLAGS) demo.c -o msieve $(LDFLAGS) \
-			libmsieve.a $(LIBS)
+	$(LINKER) $(CFLAGS) -o msieve $(LDFLAGS) demo.o libmsieve.a $(LIBS)
 
 clean:
 	cd cub && make clean WIN=$(WIN) WIN64=$(WIN64) && cd ..
-	rm -f msieve msieve.exe libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
-		$(COMMON_GPU_OBJS) $(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) *.ptx *.fatbin
+	rm -f msieve msieve.exe demo.o libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
+		$(COMMON_GPU_OBJS) $(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) \
+		$(CUDA_ENGINE_OBJS) $(CUDA_EMBED_OBJS) *.ptx *.fatbin *_embed.c \
+		msieve_bin2c msieve_bin2c.exe
 
 #----------------------------------------- build rules ----------------------
 
@@ -356,17 +424,56 @@ mpqs/sieve_core_generic_64k.qo: mpqs/sieve_core.c $(COMMON_HDR) $(QS_HDR)
 
 # GPU build rules
 
+ifdef CUDA
+# The two Driver-API kernel modules are built twice: a multi-architecture
+# fatbin with native SASS plus PTX, and a standalone PTX image. Both are
+# converted to C arrays and linked into msieve. The standalone PTX is kept
+# separately because some driver/toolkit combinations have accepted raw PTX
+# after rejecting an otherwise valid fatbin container.
 stage1_core.ptx: $(NFS_GPU_HDR)
-	$(NVCC) -arch sm_$(SM) -ptx -o $@ $<
+	$(NVCC) -arch compute_$(CUDA_PTX_ARCH) -ptx -o $@ $<
 
 stage1_core.fatbin: $(NFS_GPU_HDR)
-	$(NVCC) -arch sm_$(SM) -fatbin -o $@ $<
+	$(NVCC) $(CUDA_FATBIN_GENCODE) -fatbin -o $@ $<
 
 lanczos_kernel.ptx: $(COMMON_GPU_HDR)
-	$(NVCC) -arch sm_$(SM) -ptx -DVBITS=$(VBITS) -o $@ $<
+	$(NVCC) -arch compute_$(CUDA_PTX_ARCH) -ptx -DVBITS=$(VBITS) -o $@ $<
 
 lanczos_kernel.fatbin: $(COMMON_GPU_HDR)
-	$(NVCC) -arch sm_$(SM) -fatbin -DVBITS=$(VBITS) -o $@ $<
+	$(NVCC) $(CUDA_FATBIN_GENCODE) -fatbin -DVBITS=$(VBITS) -o $@ $<
 
+ifeq ($(CUDA_SINGLE_BINARY),1)
+# CUB engines are ordinary CUDA objects linked directly into the executable.
+# Include native SASS for every requested architecture and PTX for forward
+# compatibility, matching the module fatbins above.
+cub/sort_engine.o: cub/sort_engine.cu cub/sort_engine.h $(CUB_DEPS)
+	$(NVCC) $(CUDA_FATBIN_GENCODE) $(CUDA_HOST_FLAGS) -O3 \
+		-I. -Icub -I"$(CUDA_ROOT)/include" -c -o $@ $<
+
+cub/spmv_engine.o: cub/spmv_engine.cu cub/spmv_engine.h $(CUB_DEPS)
+	$(NVCC) $(CUDA_FATBIN_GENCODE) $(CUDA_HOST_FLAGS) -O3 -DVBITS=$(VBITS) \
+		-I. -Icub -I"$(CUDA_ROOT)/include" -c -o $@ $<
+
+$(BIN2C): tools/bin2c.c
+	$(HOSTCC) -O2 -o $@ $<
+
+stage1_core_fatbin_embed.c: stage1_core.fatbin $(BIN2C)
+	./$(BIN2C) msieve_stage1_core_fatbin $< > $@
+
+stage1_core_ptx_embed.c: stage1_core.ptx $(BIN2C)
+	./$(BIN2C) --text msieve_stage1_core_ptx $< > $@
+
+lanczos_kernel_fatbin_embed.c: lanczos_kernel.fatbin $(BIN2C)
+	./$(BIN2C) msieve_lanczos_kernel_fatbin $< > $@
+
+lanczos_kernel_ptx_embed.c: lanczos_kernel.ptx $(BIN2C)
+	./$(BIN2C) --text msieve_lanczos_kernel_ptx $< > $@
+
+%_embed.o: %_embed.c
+	$(CC) $(MACHINE_FLAGS) -c -o $@ $<
+else
 cub/built:
-	cd cub && make WIN=$(WIN) WIN64=$(WIN64) VBITS=$(VBITS) sm=$(SM)0 && cd ..
+	cd cub && make WIN=$(WIN) WIN64=$(WIN64) VBITS=$(VBITS) \
+		sm=$(firstword $(CUDA_ARCH_LIST))0 && cd ..
+endif
+endif

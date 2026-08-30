@@ -359,10 +359,9 @@ To run stage 1 this way, you have to have
 
 - a graphics card with an Nvidia GPU
 
-- the latest Nvidia drivers
-
-- the latest Nvidia CUDA toolkit, or if using a precompiled binary
-  the CUDA runtime API library from the latest Nvidia CUDA toolkit
+- a supported Nvidia driver. The CUDA toolkit is needed to build a GPU
+  binary; in the default single-binary build the CUDA runtime is linked
+  statically into msieve.
 
 The heart of stage 1 is a large collision search, where we're looking
 for pairs of 64-bit numbers that match, in a large unsorted collection
@@ -374,17 +373,30 @@ making GPUs sort efficiently, and the end result is several third-party
 libraries that can sort incredibly fast on latter-day graphics cards.
 
 Msieve now includes the source for one of those libraries, from Back 40
-Computing, and building the GPU-enabled version of Msieve will package
-up the sorting into an externally callable library that is loaded at
-runtime. The GPU branch also includes its own custom GPU kernels that
-create at high speed the collections to sort, as well as postprocess
-the sorted results on the GPU. 
+Computing. With the Unix Makefile, the GPU sort and sparse-matrix engines
+are linked directly into msieve. The custom stage-1 and Lanczos kernels
+are embedded as both a multi-architecture fatbin and a standalone PTX
+fallback, so no PTX, fatbin, or cub shared-library files are required at
+runtime.
 
-By default, the library will attempt to load the sort engine that is 
-appropriate for your GPU, but this can be overriden with additional 
-arguments:
+A single GPU binary can contain native code for several architectures, for
+example:
 
-   sortlib=X       use GPU sorting library in file X
+   make CUDA=1 CUDA_ARCHS="80 86 89 90" CUDA_PTX_ARCH=80
+
+CUDA_PTX_ARCH defaults to the first entry in CUDA_ARCHS. List architectures
+from oldest to newest so that the default PTX image can run on every selected
+GPU generation. The historical CUDA=cc form still builds for one architecture.
+
+On Unix/Linux this single-binary packaging is the Makefile default. Set
+CUDA_SINGLE_BINARY=0 to restore the historical external PTX/fatbin and CUB
+shared-library layout. The legacy WIN=1 Makefile defaults to the external
+layout because its MinGW C and NVCC/MSVC C++ objects are not guaranteed to be
+link-compatible; the Visual Studio project files are unchanged.
+
+The built-in sort engine can still be overridden for testing or custom builds:
+
+   sortlib=X       override the built-in GPU sorting engine with file X
    gpu_mem_mb=X    use at most X megabytes of GPU memory
 
 Finally, if you actually have several graphics boards in your machine, 

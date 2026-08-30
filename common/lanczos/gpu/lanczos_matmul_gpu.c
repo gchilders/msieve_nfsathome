@@ -13,6 +13,15 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include "lanczos_gpu.h"
+#ifdef MSIEVE_CUDA_SINGLE_BINARY
+#include <cuda_embedded.h>
+
+/* Built-in CUB engine entry points. These are linked directly into msieve
+   in single-binary CUDA builds; keep the public DSO header unchanged. */
+extern void *spmv_engine_init(int *vbits);
+extern void spmv_engine_free(void *engine);
+extern void spmv_engine_run(void *engine, spmv_data_t *spmv_data);
+#endif
 #include "lanczos_gpu_core.h"
 
 static const char * gpu_kernel_names[] = 
@@ -595,6 +604,62 @@ static void gpu_matrix_free(packed_matrix_t *p) {
 }
 
 /*------------------------------------------------------------------------*/
+#ifdef MSIEVE_CUDA_SINGLE_BINARY
+static void
+load_spmv_engine(msieve_obj *obj, gpudata_t *d)
+{
+	char libname[256];
+	char *tmp = NULL;
+
+	if (d->gpu_info->compute_version_major < 2) {
+		printf("error: GPU compute capability >= 2.0 required\n");
+		exit(-1);
+	}
+
+	/* The normal build links the CUB SpMV engine directly into msieve. */
+	d->spmv_engine_handle = NULL;
+	d->spmv_engine_init = spmv_engine_init;
+	d->spmv_engine_free = spmv_engine_free;
+	d->spmv_engine_run = spmv_engine_run;
+
+	/* Preserve the historical spmvlib= override for testing/custom engines. */
+	if (obj->nfs_args != NULL)
+		tmp = strstr(obj->nfs_args, "spmvlib=");
+	if (tmp == NULL)
+		return;
+
+	{
+		uint32 i;
+		for (i = 0, tmp += 8; i < sizeof(libname) - 1; i++) {
+			if (*tmp == 0 || isspace(*tmp))
+				break;
+			libname[i] = *tmp++;
+		}
+		libname[i] = 0;
+	}
+
+	d->spmv_engine_handle = load_dynamic_lib(libname);
+	if (d->spmv_engine_handle == NULL) {
+		printf("error: failed to load GPU matrix multiply engine override "
+		       "from \"%s\"\n", libname);
+		exit(-1);
+	}
+
+	d->spmv_engine_init = get_lib_symbol(d->spmv_engine_handle,
+					"spmv_engine_init");
+	d->spmv_engine_free = get_lib_symbol(d->spmv_engine_handle,
+					"spmv_engine_free");
+	d->spmv_engine_run = get_lib_symbol(d->spmv_engine_handle,
+					"spmv_engine_run");
+	if (d->spmv_engine_init == NULL ||
+	    d->spmv_engine_free == NULL ||
+	    d->spmv_engine_run == NULL) {
+		printf("error: cannot find GPU matrix multiply function in \"%s\"\n",
+			libname);
+		exit(-1);
+	}
+}
+#else
 static void
 load_spmv_engine(msieve_obj *obj, gpudata_t *d)
 {
@@ -653,6 +718,8 @@ load_spmv_engine(msieve_obj *obj, gpudata_t *d)
 		exit(-1);
 	}
 }
+#endif
+
 
 /*-------------------------------------------------------------------*/
 void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
@@ -708,6 +775,16 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
                 exit(-1);
 	}
 
+#ifdef MSIEVE_CUDA_SINGLE_BINARY
+	/* Prefer native code from the embedded multi-architecture fatbin.
+	   Keep a separately embedded PTX image as a fallback for driver/toolkit
+	   combinations that reject the fatbin container. */
+	status = cuda_load_embedded_module(&d->gpu_module,
+			msieve_lanczos_kernel_fatbin,
+			(const char *)msieve_lanczos_kernel_ptx,
+			"lanczos_kernel");
+	CUDA_TRY(status)
+#else
 	/* load kernels */
 
 	status = cuModuleLoad(&d->gpu_module, "lanczos_kernel.ptx");				\
@@ -715,6 +792,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		printf("Error loading ptx. Trying fatbin.\n");
 		CUDA_TRY(cuModuleLoad(&d->gpu_module, "lanczos_kernel.fatbin"))
 	}
+#endif
 
 	d->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
 				sizeof(gpu_launch_t));
@@ -779,7 +857,8 @@ void matrix_extra_free(packed_matrix_t *p) {
 	free(d->launch);
 
 	d->spmv_engine_free(d->spmv_engine);
-	unload_dynamic_lib(d->spmv_engine_handle);
+	if (d->spmv_engine_handle != NULL)
+		unload_dynamic_lib(d->spmv_engine_handle);
 
 	CUDA_TRY(cuCtxDestroy(d->gpu_context))
 	/* CUDA_TRY(cuDevicePrimaryCtxRelease(d->gpu_info->device_handle)) */
