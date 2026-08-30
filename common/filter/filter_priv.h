@@ -29,16 +29,47 @@ extern "C" {
 /* structure for the mapping between large ideals
    and relations (used during clique removal) */
 
+/* The reverse-list hot path is bandwidth-bound. Both values are bounded by
+   the 4-billion-relation common-filter ceiling and the maximum 100 ideals in
+   a packed relation, so 48 bits is ample for either a packed-array word
+   offset or a reverse-list link (the worst case is below 2^39). Packing the
+   pair into 12 bytes saves 25% versus two uint64 values without giving up the
+   large-dataset headroom. */
+#define IDEAL_RELATION_VALUE_BITS 48
+#define IDEAL_RELATION_VALUE_MASK ((((uint64)1) << IDEAL_RELATION_VALUE_BITS) - 1)
+
 typedef struct {
-	uint64 relation_array_word;  /* 64-bit word offset into relation
-					array where the relation starts */
-	uint64 next;		     /* next relation containing this ideal */
+	uint32 relation_lo;
+	uint32 next_lo;
+	uint32 hi;       /* relation high 16 bits, then next high 16 bits */
 } ideal_relation_t;
 
+static INLINE void ideal_relation_set(ideal_relation_t *entry,
+				uint64 relation_array_word, uint64 next) {
+	if (relation_array_word > IDEAL_RELATION_VALUE_MASK ||
+	    next > IDEAL_RELATION_VALUE_MASK) {
+		printf("error: reverse ideal-list value exceeds 48 bits\n");
+		exit(-1);
+	}
+	entry->relation_lo = (uint32)relation_array_word;
+	entry->next_lo = (uint32)next;
+	entry->hi = (uint32)((relation_array_word >> 32) & 0xffff) |
+		((uint32)((next >> 32) & 0xffff) << 16);
+}
+
+static INLINE uint64 ideal_relation_word(const ideal_relation_t *entry) {
+	return (uint64)entry->relation_lo |
+		((uint64)(entry->hi & 0xffff) << 32);
+}
+
+static INLINE uint64 ideal_relation_next(const ideal_relation_t *entry) {
+	return (uint64)entry->next_lo |
+		((uint64)(entry->hi >> 16) << 32);
+}
+
 /* Reverse ideal->relation lists can contain more than 2^32 entries even
-   when relation and ideal IDs themselves remain 32-bit (each weight-2 ideal
-   contributes two entries). Allocate them in fixed segments so growth does
-   not require enormous reallocations and use uint64 offsets throughout. */
+   when relation and ideal IDs themselves remain 32-bit. Fixed segments avoid
+   huge reallocations. */
 #define IDEAL_RELATION_SEGMENT_BITS 20
 #define IDEAL_RELATION_SEGMENT_SIZE ((uint64)1 << IDEAL_RELATION_SEGMENT_BITS)
 #define IDEAL_RELATION_SEGMENT_MASK (IDEAL_RELATION_SEGMENT_SIZE - 1)
@@ -67,6 +98,14 @@ static INLINE ideal_relation_t *ideal_relation_list_at(
 		(offset & IDEAL_RELATION_SEGMENT_MASK);
 }
 
+/* All offsets traversed after construction were produced by append(), so the
+   hot BFS path can skip redundant bounds checks. */
+static INLINE ideal_relation_t *ideal_relation_list_at_fast(
+				ideal_relation_list_t *list, uint64 offset) {
+	return list->segments[offset >> IDEAL_RELATION_SEGMENT_BITS] +
+		(offset & IDEAL_RELATION_SEGMENT_MASK);
+}
+
 static INLINE uint64 ideal_relation_list_append(ideal_relation_list_t *list,
 				uint64 relation_array_word, uint64 next) {
 	uint64 offset = list->num_used;
@@ -74,6 +113,12 @@ static INLINE uint64 ideal_relation_list_append(ideal_relation_list_t *list,
 	uint32 segment;
 	ideal_relation_t *entry;
 
+	if (offset > IDEAL_RELATION_VALUE_MASK ||
+	    relation_array_word > IDEAL_RELATION_VALUE_MASK ||
+	    next > IDEAL_RELATION_VALUE_MASK) {
+		printf("error: reverse ideal list exceeds 48-bit packed range\n");
+		exit(-1);
+	}
 	if (segment64 > UINT32_MAX) {
 		printf("error: reverse ideal list exceeds addressable segment count\n");
 		exit(-1);
@@ -96,9 +141,9 @@ static INLINE uint64 ideal_relation_list_append(ideal_relation_list_t *list,
 					 sizeof(ideal_relation_t));
 		}
 	}
-	entry = ideal_relation_list_at(list, offset);
-	entry->relation_array_word = relation_array_word;
-	entry->next = next;
+	entry = list->segments[segment] +
+		(offset & IDEAL_RELATION_SEGMENT_MASK);
+	ideal_relation_set(entry, relation_array_word, next);
 	list->num_used++;
 	return offset;
 }
@@ -111,18 +156,44 @@ static INLINE void ideal_relation_list_free(ideal_relation_list_t *list) {
 	memset(list, 0, sizeof(*list));
 }
 
-/* structure used to map between a large ideal and a
-   linked list of relations that use that ideal */
+/* Keep the ideal map at eight bytes, matching the original cache footprint.
+   The payload needs far fewer than 62 bits; the top two bits carry the clique
+   traversal flags. */
+#define IDEAL_MAP_CONNECTED (((uint64)1) << 62)
+#define IDEAL_MAP_CLIQUE    (((uint64)1) << 63)
+#define IDEAL_MAP_PAYLOAD_MASK (IDEAL_MAP_CONNECTED - 1)
 
 typedef struct {
-	uint64 payload;	/* count, then offset in ideal_relation_t list;
-				   can exceed 2^32 when billions of weight-2
-				   ideals survive the prefilter */
-	uint8 clique;      /* nonzero if this ideal can participate in
-				   a clique */
-	uint8 connected;   /* nonzero if this ideal has already been
-				   added to a clique under construction */
+	uint64 data;
 } ideal_map_t;
+
+static INLINE uint64 ideal_map_payload(const ideal_map_t *map) {
+	return map->data & IDEAL_MAP_PAYLOAD_MASK;
+}
+
+static INLINE void ideal_map_set_payload(ideal_map_t *map, uint64 payload) {
+	if (payload > IDEAL_MAP_PAYLOAD_MASK) {
+		printf("error: ideal-map payload exceeds packed range\n");
+		exit(-1);
+	}
+	map->data = (map->data & ~IDEAL_MAP_PAYLOAD_MASK) | payload;
+}
+
+static INLINE uint32 ideal_map_is_clique(const ideal_map_t *map) {
+	return (map->data & IDEAL_MAP_CLIQUE) != 0;
+}
+
+static INLINE uint32 ideal_map_is_connected(const ideal_map_t *map) {
+	return (map->data & IDEAL_MAP_CONNECTED) != 0;
+}
+
+static INLINE void ideal_map_set_clique(ideal_map_t *map) {
+	map->data |= IDEAL_MAP_CLIQUE;
+}
+
+static INLINE void ideal_map_set_connected(ideal_map_t *map) {
+	map->data |= IDEAL_MAP_CONNECTED;
+}
 
 /* a relation_set_t simulates matrix rows; the following simulates
    the matrix columns, mapping ideals to the relation sets
@@ -133,15 +204,15 @@ typedef struct ideal_set_t {
 				   containing this ideal */
 	uint32 num_relsets_alloc; /* maximum number of relset numbers the
 				     'relsets' array can hold */
-	uint16 active;          /* 1 if ideal is active, 0 if inactive */
 	uint32 min_relset_size; /* the number of ideals in the
 				   lightest relation set that
 				   contains this ideal */
+	uint32 active;          /* 1 if ideal is active, 0 if inactive */
 	uint32 *relsets;        /* list of members in an array of
 				   relation sets that contain this
 				   ideal (no ordering assumed) */
-	struct ideal_set_t *next;
-	struct ideal_set_t *prev;  /* used to build circular linked lists */
+	uint32 next;            /* compact heap-list node reference */
+	uint32 prev;            /* compact heap-list node reference */
 } ideal_set_t;
 
 /* relation sets with more than this many relations are deleted */

@@ -86,8 +86,9 @@ typedef struct {
 	uint16 num_relations;     /* number of relations in this relation set */
 	uint16 num_small_ideals;  /* number of ideals that are not tracked */
 	uint16 num_large_ideals;  /* number of ideals that are tracked */
-	uint16 num_active_ideals; /* number of ideals eligible for merging
-				     (0 means relset is a cycle) */
+	uint16 num_active_ideals; /* low 9 bits: number of ideals eligible for
+				     merging (0 means relset is a cycle); high
+				     bits are private merge-allocation metadata */
 	uint32 *data;             /* the first num_relations elements are
 				     the relation numbers that participate in
 				     this relation set, while the last
@@ -95,6 +96,46 @@ typedef struct {
 				     that are tracked for merging. Both lists
 				     are assumed sorted in ascending order */
 } relation_set_t;
+
+/* Full merge never permits 500 or more objects in a relation set, so nine
+   bits are sufficient for num_active_ideals.  Keep the payload-pool class in
+   otherwise-unused bits of the same uint16.  This preserves the historical
+   16-byte relation_set_t while allowing pooled payloads to retain their
+   original allocation class when inactive ideals are buried. */
+#define RELSET_ACTIVE_BITS 9
+#define RELSET_ACTIVE_MASK ((uint16)0x01ffU)
+#define RELSET_ALLOC_SHIFT RELSET_ACTIVE_BITS
+#define RELSET_ALLOC_MASK  ((uint16)0x3e00U)
+#define RELSET_ALLOC_EXTERNAL 31U
+
+static INLINE uint32 relation_set_num_active(const relation_set_t *r) {
+	return r->num_active_ideals & RELSET_ACTIVE_MASK;
+}
+
+static INLINE void relation_set_set_num_active(relation_set_t *r,
+					uint32 count) {
+	if (count > RELSET_ACTIVE_MASK) {
+		printf("error: relation set has too many active ideals\n");
+		exit(-1);
+	}
+	r->num_active_ideals = (uint16)((r->num_active_ideals &
+					RELSET_ALLOC_MASK) | count);
+}
+
+static INLINE uint32 relation_set_alloc_class(const relation_set_t *r) {
+	return (r->num_active_ideals & RELSET_ALLOC_MASK) >> RELSET_ALLOC_SHIFT;
+}
+
+static INLINE void relation_set_set_alloc_class(relation_set_t *r,
+					uint32 alloc_class) {
+	if (alloc_class > RELSET_ALLOC_EXTERNAL) {
+		printf("error: invalid relation-set allocation class\n");
+		exit(-1);
+	}
+	r->num_active_ideals = (uint16)((r->num_active_ideals &
+					RELSET_ACTIVE_MASK) |
+					(alloc_class << RELSET_ALLOC_SHIFT));
+}
 
 /* structure controlling the merge process */
 

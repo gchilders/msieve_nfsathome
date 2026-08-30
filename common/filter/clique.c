@@ -331,7 +331,7 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 		for (j = 0; j < curr_relation->ideal_count; j++) {
 			uint32 ideal = curr_relation->ideal_list[j];
 #pragma omp atomic update
-			ideal_map[ideal].payload++;
+			ideal_map[ideal].data++;
 		}
 	}
 
@@ -341,9 +341,8 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 
 #pragma omp parallel for
 	for (i = 0; i < num_ideals; i++) {
-		if (ideal_map[i].payload <= max_clique_relations) {
-			ideal_map[i].payload = 0;
-			ideal_map[i].clique = 1;
+		if (ideal_map_payload(ideal_map + i) <= max_clique_relations) {
+			ideal_map[i].data = IDEAL_MAP_CLIQUE;
 		}
 	}
 
@@ -362,16 +361,16 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 		for (j = 0; j < curr_relation->ideal_count; j++) {
 			uint32 ideal = curr_relation->ideal_list[j];
 
-			if (!ideal_map[ideal].clique)
+			if (!ideal_map_is_clique(ideal_map + ideal))
 				continue;
 
 			/* relation belongs in a clique because of this
 			   ideal; add it to the ideal's linked list */
 // #pragma omp critical (add_relation)
 			{
-				ideal_map[ideal].payload = ideal_relation_list_append(
-						&reverse_list, relation_array_word,
-						ideal_map[ideal].payload);
+				ideal_map_set_payload(ideal_map + ideal,
+				ideal_relation_list_append(&reverse_list, relation_array_word,
+					ideal_map_payload(ideal_map + ideal)));
 			}
 		}
 	}
@@ -400,7 +399,8 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 		   or is part of a clique but the clique has
 		   already been visited */
 
-		if (!ideal_map[i].clique || ideal_map[i].connected)
+		if (!ideal_map_is_clique(ideal_map + i) ||
+		    ideal_map_is_connected(ideal_map + i))
 			continue;
 
 		/* we've found a clique, and have to measure its
@@ -415,25 +415,25 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 		num_clique_relations = 0;
 		curr_clique_ideal = 0;
 		clique_ideals[0] = i;
-		ideal_map[i].connected = 1;
+		ideal_map_set_connected(ideal_map + i);
 		num_clique_ideals = 1;
 
 		/* for each clique ideal in the queue */
 
 		while (curr_clique_ideal < num_clique_ideals) {
 			uint32 idx = clique_ideals[curr_clique_ideal];
-			uint64 offset = ideal_map[idx].payload;
+			uint64 offset = ideal_map_payload(ideal_map + idx);
 
 			/* find the relations containing the ideal */
 
 			while (offset != 0) {
-				ideal_relation_t *rev = ideal_relation_list_at(&reverse_list, offset);
+				ideal_relation_t *rev = ideal_relation_list_at_fast(&reverse_list, offset);
 				relation_ideal_t *r = (relation_ideal_t *)(
 						(uint32 *)relation_array +
-						rev->relation_array_word);
+						ideal_relation_word(rev));
 
 				if (r->connected) {
-					offset = rev->next;
+					offset = ideal_relation_next(rev);
 					continue;
 				}
 
@@ -447,13 +447,13 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 					/* add the contribution of this ideal
 					   to the score of the clique */
 
-					if (!map->clique) {
+					if (!ideal_map_is_clique(map)) {
 						clique_score += 1.0 /
-							map->payload;
+							ideal_map_payload(map);
 						continue;
 					}
 
-					if (map->connected)
+					if (ideal_map_is_connected(map))
 						continue;
 
 					/* ideal is a clique ideal and has
@@ -476,7 +476,7 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 					}
 					clique_ideals[num_clique_ideals++] =
 							new_ideal;
-					map->connected = 1;
+					ideal_map_set_connected(map);
 				}
 
 				/* save the relation and mark as visited */
@@ -498,7 +498,7 @@ static uint32 purge_cliques_core(msieve_obj *obj,
 				}
 				clique_relations[num_clique_relations++] = r->rel_index;
 				r->connected = 1;
-				offset = rev->next;
+				offset = ideal_relation_next(rev);
 			}
 
 			/* current clique ideal is finished */

@@ -122,7 +122,7 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 		for (j = 0; j < curr_relation->ideal_count; j++) {
 			uint32 ideal = curr_relation->ideal_list[j];
 #pragma omp atomic update
-			ideal_map[ideal].payload++;
+			ideal_map[ideal].data++;
 		}
 	}
 
@@ -132,9 +132,8 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 
 #pragma omp parallel for
 	for (i = 0; i < num_ideals; i++) {
-		if (ideal_map[i].payload == 2) {
-			ideal_map[i].payload = 0;
-			ideal_map[i].clique = 1;
+		if (ideal_map_payload(ideal_map + i) == 2) {
+			ideal_map[i].data = IDEAL_MAP_CLIQUE;
 		}
 	}
 
@@ -148,7 +147,7 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 		for (j = 0; j < curr_relation->ideal_count; j++) {
 			uint32 ideal = curr_relation->ideal_list[j];
 
-			if (!ideal_map[ideal].clique)
+			if (!ideal_map_is_clique(ideal_map + ideal))
 				continue;
 
 			/* relation belongs in a clique because of this
@@ -157,9 +156,9 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 			{
 				uint64 relation_array_word = (uint64)(
 					(uint32 *)curr_relation - (uint32 *)relation_array);
-				ideal_map[ideal].payload = ideal_relation_list_append(
-						&reverse_list, relation_array_word,
-						ideal_map[ideal].payload);
+				ideal_map_set_payload(ideal_map + ideal,
+				ideal_relation_list_append(&reverse_list, relation_array_word,
+					ideal_map_payload(ideal_map + ideal)));
 			}
 		}
 	}
@@ -168,7 +167,6 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 	num_relset_alloc = 10000;
 	relset_array = (relation_set_t *)xmalloc(num_relset_alloc *
 					sizeof(relation_set_t));
-	num_deleted = 0;
 
 	/* find all the cliques and convert to relation sets.
 	   We perform breadth first search by iterating through
@@ -218,21 +216,21 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 
 			/* check if the ideal is not part of a clique */
 
-			if (!ideal_map[ideal].clique)
+			if (!ideal_map_is_clique(ideal_map + ideal))
 				continue;
 
 			/* we've found a clique, and have to find all the
 			   relations in it */
 
-			offset = ideal_map[ideal].payload;
+			offset = ideal_map_payload(ideal_map + ideal);
 			while (offset) {
 
-				ideal_relation_t *rev = ideal_relation_list_at(&reverse_list, offset);
+				ideal_relation_t *rev = ideal_relation_list_at_fast(&reverse_list, offset);
 				relation_ideal_t *r = (relation_ideal_t *)
 						((uint32 *)relation_array +
-						rev->relation_array_word);
+						ideal_relation_word(rev));
 				if (r->connected) {
-					offset = rev->next;
+					offset = ideal_relation_next(rev);
 					continue;
 				}
 
@@ -268,7 +266,7 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 				memcpy(tmp_ideals, accum_ideals,
 						num_tmp_ideal * sizeof(uint32));
 				r->connected = 1;
-				offset = rev->next;
+				offset = ideal_relation_next(rev);
 			}
 
 			/* the ideals were merged into the existing list,
@@ -318,8 +316,8 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 		/* sort the relation numbers in ascending order
 		   (the ideal list is already ordered), then store */
 
-		curr_relset->data = merge_mem_alloc(merge->data_pool,
-					num_tmp_relation + num_tmp_ideal);
+		curr_relset->data = merge_relset_alloc(merge->data_pool,
+					curr_relset, num_tmp_relation + num_tmp_ideal);
 		if (num_tmp_relation > 1) {
 			qsort(tmp_relations, (size_t)num_tmp_relation,
 					sizeof(uint32), compare_uint32);
@@ -351,12 +349,12 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 		uint32 *ideal_list = r->data + r->num_relations;
 		for (j = 0; j < r->num_large_ideals; j++) {
 #pragma omp atomic update
-			ideal_map[ideal_list[j]].payload++;
+			ideal_map[ideal_list[j]].data++;
 		}
 	}
 	for (i = j = 0; i < num_ideals; i++) {
-		if (ideal_map[i].payload) {
-			ideal_map[i].payload = j++;
+		if (ideal_map_payload(ideal_map + i)) {
+			ideal_map_set_payload(ideal_map + i, j++);
 		}
 	}
 	num_ideals = j;
@@ -365,7 +363,8 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 		relation_set_t *r = relset_array + i;
 		uint32 *ideal_list = r->data + r->num_relations;
 		for (j = 0; j < r->num_large_ideals; j++) {
-			ideal_list[j] = (uint32)ideal_map[ideal_list[j]].payload;
+			ideal_list[j] = (uint32)ideal_map_payload(
+					ideal_map + ideal_list[j]);
 		}
 	}
 

@@ -764,6 +764,17 @@ does not require reallocating or copying hundred-gigabyte arrays. Duplicate
 pass 2 stores the complete signed 64-bit a and unsigned 64-bit b coordinates,
 so duplicate confirmation remains exact at multi-billion-relation scale.
 
+Within the 32-bit common filter, clique and 2-way reverse maps keep the
+historical cache footprint while retaining large-count headroom: ideal-map
+state is packed into 8 bytes per ideal and reverse edges use two packed 48-bit
+values (12 bytes per edge). The 48-bit fields are far above the maximum word
+offset or weight-2 reverse-list length possible below the 4-billion handoff.
+Merge payloads and ideal adjacency lists retain slab allocation so very large
+filters do not devolve into hundreds of millions to billions of independent
+allocator objects. Relation-set payloads remember their actual slab size class
+separately from their logical length, so burying an inactive ideal does not
+copy a payload just to move it into a smaller allocation class.
+
 Thus the raw NFS relation file is no longer limited to about 4 billion
 relations. The intended use is to accept inputs such as 10-billion-relation
 sets, prune them in the 64-bit disk-based stage, and hand a substantially

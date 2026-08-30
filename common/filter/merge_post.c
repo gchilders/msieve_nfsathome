@@ -58,7 +58,7 @@ static void copy_relset(merge_mem_pool_t *pool,
 	uint32 size = src->num_relations + src->num_large_ideals;
 
 	*dst = *src;
-	dst->data = merge_mem_alloc(pool, size);
+	dst->data = merge_relset_alloc(pool, dst, size);
 	memcpy(dst->data, src->data, size * sizeof(uint32));
 }
 
@@ -178,8 +178,7 @@ static uint32 merge_via_spanning_tree(merge_aux_t *aux) {
 	/* remove the original list of cycles */
 
 	for (i = 0; i < num_relsets; i++)
-		merge_mem_free(aux->data_pool, tmp_relsets[i].data,
-			tmp_relsets[i].num_relations + tmp_relsets[i].num_large_ideals);
+		merge_relset_free(aux->data_pool, tmp_relsets + i);
 
 	/* return the number of relations removed */
 
@@ -225,8 +224,7 @@ static uint32 merge_via_pivot(merge_aux_t *aux) {
 			merge_two_relsets(relsets + pivot_idx,
 					&tmp, relsets + i, aux);
 
-			merge_mem_free(aux->data_pool, tmp.data,
-				tmp.num_relations + tmp.num_large_ideals);
+			merge_relset_free(aux->data_pool, &tmp);
 		}
 		new_total_weight += relsets[i].num_large_ideals;
 	}
@@ -325,13 +323,13 @@ void filter_postproc_relsets(msieve_obj *obj, merge_t *merge) {
 
 		r->num_small_ideals = 0;
 		r->num_large_ideals = 0;
-		r->num_active_ideals = 0;
+		relation_set_set_num_active(r, 0);
 		if (curr_num_relations == 1)
 			continue;
 
 		r->num_large_ideals = curr_num_relations;
-		r->num_active_ideals = curr_num_relations;
-		r->data = merge_mem_realloc(merge->data_pool, r->data,
+		relation_set_set_num_active(r, curr_num_relations);
+		r->data = merge_relset_realloc(merge->data_pool, r,
 					curr_num_relations, 2 * curr_num_relations);
 
 		/* every unique relation is assigned a number */
@@ -417,7 +415,7 @@ void filter_postproc_relsets(msieve_obj *obj, merge_t *merge) {
 
 		{
 			uint32 old_words = r->num_relations + r->num_large_ideals;
-			r->data = merge_mem_realloc(merge->data_pool, r->data,
+			r->data = merge_relset_realloc(merge->data_pool, r,
 					old_words, r->num_relations);
 		}
 		r->num_small_ideals = 0;

@@ -24,8 +24,7 @@ void filter_free_relsets(merge_t *merge) {
 
 	for (i = 0; relset_array != NULL && i < num_relsets; i++) {
 		relation_set_t *r = relset_array + i;
-		merge_mem_free(merge->data_pool, r->data,
-			r->num_relations + r->num_large_ideals);
+		merge_relset_free(merge->data_pool, r);
 	}
 	merge_mem_pool_destroy(merge->data_pool);
 	merge->data_pool = NULL;

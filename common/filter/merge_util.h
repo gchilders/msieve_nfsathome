@@ -35,6 +35,16 @@ uint32 *merge_mem_realloc(merge_mem_pool_t *pool, uint32 *ptr,
 			uint32 old_words, uint32 new_words);
 void merge_mem_free(merge_mem_pool_t *pool, uint32 *ptr, uint32 words);
 
+/* Relation-set payloads can lose stored ideals without losing matrix weight.
+   Their logical word count therefore shrinks frequently during full merge.
+   Track the actual pool class in relation_set_t so these shrink operations do
+   not copy payloads merely to keep the allocator's free-list class in sync. */
+uint32 *merge_relset_alloc(merge_mem_pool_t *pool, relation_set_t *r,
+			uint32 words);
+uint32 *merge_relset_realloc(merge_mem_pool_t *pool, relation_set_t *r,
+			uint32 old_words, uint32 new_words);
+void merge_relset_free(merge_mem_pool_t *pool, relation_set_t *r);
+
 /* structure for merging relations that all have an ideal
    in common */
 

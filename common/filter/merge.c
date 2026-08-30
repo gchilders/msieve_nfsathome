@@ -165,8 +165,7 @@ static void merge_via_spanning_tree(merge_aux_t *aux) {
 	/* remove the original collection of relation sets */
 
 	for (i = 0; i < num_relsets; i++)
-		merge_mem_free(aux->data_pool, tmp_relsets[i].data,
-			tmp_relsets[i].num_relations + tmp_relsets[i].num_large_ideals);
+		merge_relset_free(aux->data_pool, tmp_relsets + i);
 }
 
 /*--------------------------------------------------------------------*/
@@ -208,12 +207,10 @@ static void merge_via_pivot(merge_aux_t *aux) {
 	for (i = 0; i < num_relsets - 1; i++) {
 		relation_set_t tmp = relsets[i];
 		merge_two_relsets(&pivot, &tmp, relsets + i, aux);
-		merge_mem_free(aux->data_pool, tmp.data,
-			tmp.num_relations + tmp.num_large_ideals);
+		merge_relset_free(aux->data_pool, &tmp);
 	}
 
-	merge_mem_free(aux->data_pool, pivot.data,
-		pivot.num_relations + pivot.num_large_ideals);
+	merge_relset_free(aux->data_pool, &pivot);
 }
 
 /*--------------------------------------------------------------------*/
@@ -224,9 +221,7 @@ static void do_merges_core(merge_aux_t *aux) {
 
 	if (aux->num_relsets == 1) {
 		/* relation set contains a singleton ideal; delete it */
-		merge_mem_free(aux->data_pool, aux->tmp_relsets[0].data,
-			aux->tmp_relsets[0].num_relations +
-			aux->tmp_relsets[0].num_large_ideals);
+		merge_relset_free(aux->data_pool, aux->tmp_relsets + 0);
 		memset(aux->tmp_relsets + 0, 0, sizeof(relation_set_t));
 		return;
 	}
@@ -267,13 +262,21 @@ static void toggle_ideal_state(ideal_list_t *ideal_list, uint32 ideal,
 		   r is now a cycle */
 
 		if (active) {
-			if (--(r->num_active_ideals) == 0) {
+			uint32 nactive = relation_set_num_active(r);
+			if (nactive == 0) {
+				printf("error: active-ideal count underflow\n");
+				exit(-1);
+			}
+			relation_set_set_num_active(r, --nactive);
+			if (nactive == 0) {
 				(*num_cycles)++;
 				matrix_weight_add(mat_weight, r);
 			}
 		}
 		else {
-			if (r->num_active_ideals++ == 0) {
+			uint32 nactive = relation_set_num_active(r);
+			relation_set_set_num_active(r, nactive + 1);
+			if (nactive == 0) {
 				(*num_cycles)--;
 				matrix_weight_sub(mat_weight, r);
 			}
@@ -315,8 +318,7 @@ static uint32 store_next_relset_group(merge_aux_t *aux,
 			continue;
 		}
 		else if (r->num_relations > MAX_RELSET_SIZE) {
-			merge_mem_free(aux->data_pool, r->data,
-				r->num_relations + r->num_large_ideals);
+			merge_relset_free(aux->data_pool, r);
 			memset(r, 0, sizeof(relation_set_t));
 			continue;
 		}
@@ -634,7 +636,7 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 	for (i = num_cycles = 0; i < num_relsets; i++) {
 		relation_set_t *r = relset_array + i;
 
-		if (r->data && r->num_active_ideals == 0) {
+		if (r->data && relation_set_num_active(r) == 0) {
 			relation_set_t *new_r = relset_array + num_cycles++;
 			uint32 old_words = r->num_relations + r->num_large_ideals;
 			uint32 small_total = (uint32)r->num_small_ideals +
@@ -646,16 +648,13 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 			*new_r = *r;
 			new_r->num_small_ideals = (uint16)small_total;
 			new_r->num_large_ideals = 0;
-			new_r->data = merge_mem_realloc(merge->data_pool, new_r->data,
-							old_words,
-							new_r->num_relations);
+			new_r->data = merge_relset_realloc(merge->data_pool, new_r,
+							old_words, new_r->num_relations);
 			if (new_r != r)
 				r->data = NULL;
 		}
 		else {
-			merge_mem_free(merge->data_pool, r->data,
-				r->num_relations + r->num_large_ideals);
-			r->data = NULL;
+			merge_relset_free(merge->data_pool, r);
 		}
 	}
 	/* From this point onward only the compacted prefix owns payloads.
@@ -682,9 +681,7 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 
 	for (i = target_cycles; i < num_cycles; i++) {
 		relation_set_t *r = relset_array + i;
-		merge_mem_free(merge->data_pool, r->data,
-			r->num_relations + r->num_large_ideals);
-		r->data = NULL;
+		merge_relset_free(merge->data_pool, r);
 	}
 	num_cycles = MIN(target_cycles, num_cycles);
 	merge->num_relsets = num_cycles;

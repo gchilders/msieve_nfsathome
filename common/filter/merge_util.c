@@ -16,10 +16,22 @@ $Id$
 #include "merge_util.h"
 
 /*--------------------------------------------------------------------*/
-#define MERGE_POOL_MIN_WORDS 2
 #define MERGE_POOL_MAX_WORDS 2048
-#define MERGE_POOL_NUM_CLASSES 11
+#define MERGE_POOL_NUM_CLASSES 20
 #define MERGE_POOL_SLAB_BYTES (16 * 1024 * 1024)
+
+/* 1.5x-ish size classes track the natural growth pattern of relation and
+   adjacency arrays much more closely than powers of two. This cuts internal
+   fragmentation and improves cache density in full merge. */
+static const uint16 merge_pool_class_words[MERGE_POOL_NUM_CLASSES] = {
+	2, 4, 6, 8, 12, 16, 24, 32, 48, 64,
+	96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048
+};
+
+/* Heap list links use 32-bit references. Values below this are ideal IDs;
+   values at or above it identify heap-bin sentinels. This leaves more than
+   26 million IDs of headroom above the 4,000,000,000 common-filter ceiling. */
+#define HEAP_HEAD_REF_BASE 0xf0000000U
 
 typedef struct merge_pool_slab_t {
 	struct merge_pool_slab_t *next;
@@ -28,18 +40,30 @@ typedef struct merge_pool_slab_t {
 
 struct merge_mem_pool_t {
 	void *free_list[MERGE_POOL_NUM_CLASSES];
+	uint8 *next_block[MERGE_POOL_NUM_CLASSES];
+	size_t blocks_left[MERGE_POOL_NUM_CLASSES];
 	merge_pool_slab_t *slabs;
 };
 
 static uint32 merge_pool_class(uint32 words, uint32 *class_words) {
-	uint32 idx = 0;
-	uint32 w = MERGE_POOL_MIN_WORDS;
-	while (w < words && w < MERGE_POOL_MAX_WORDS) {
-		w <<= 1;
-		idx++;
+	uint32 lo = 0, hi = MERGE_POOL_NUM_CLASSES - 1;
+	while (lo < hi) {
+		uint32 mid = (lo + hi) >> 1;
+		if (words <= merge_pool_class_words[mid])
+			hi = mid;
+		else
+			lo = mid + 1;
 	}
-	*class_words = w;
-	return idx;
+	*class_words = merge_pool_class_words[lo];
+	return lo;
+}
+
+static void merge_mem_free_class(merge_mem_pool_t *pool, uint32 *ptr,
+					uint32 idx) {
+	if (ptr == NULL)
+		return;
+	*(void **)ptr = pool->free_list[idx];
+	pool->free_list[idx] = ptr;
 }
 
 merge_mem_pool_t *merge_mem_pool_create(void) {
@@ -68,29 +92,35 @@ uint32 *merge_mem_alloc(merge_mem_pool_t *pool, uint32 words) {
 	if (pool == NULL || words > MERGE_POOL_MAX_WORDS)
 		return (uint32 *)xmalloc((size_t)words * sizeof(uint32));
 	idx = merge_pool_class(words, &class_words);
-	if (pool->free_list[idx] == NULL) {
-		size_t block_bytes = (size_t)class_words * sizeof(uint32);
-		size_t slab_bytes = MERGE_POOL_SLAB_BYTES;
-		size_t nblocks, i;
-		uint8 *mem;
-		merge_pool_slab_t *slab;
-		if (slab_bytes < block_bytes)
-			slab_bytes = block_bytes;
-		nblocks = slab_bytes / block_bytes;
-		slab_bytes = nblocks * block_bytes;
-		slab = (merge_pool_slab_t *)xmalloc(sizeof(*slab));
-		mem = (uint8 *)xmalloc(slab_bytes);
-		slab->mem = mem;
-		slab->next = pool->slabs;
-		pool->slabs = slab;
-		for (i = 0; i < nblocks; i++) {
-			void *block = mem + i * block_bytes;
-			*(void **)block = pool->free_list[idx];
-			pool->free_list[idx] = block;
-		}
+	if (pool->free_list[idx] != NULL) {
+		p = pool->free_list[idx];
+		pool->free_list[idx] = *(void **)p;
+		return (uint32 *)p;
 	}
-	p = pool->free_list[idx];
-	pool->free_list[idx] = *(void **)p;
+
+	{
+		size_t block_bytes = (size_t)class_words * sizeof(uint32);
+		if (pool->blocks_left[idx] == 0) {
+			size_t slab_bytes = MERGE_POOL_SLAB_BYTES;
+			size_t nblocks;
+			uint8 *mem;
+			merge_pool_slab_t *slab;
+			if (slab_bytes < block_bytes)
+				slab_bytes = block_bytes;
+			nblocks = slab_bytes / block_bytes;
+			slab_bytes = nblocks * block_bytes;
+			slab = (merge_pool_slab_t *)xmalloc(sizeof(*slab));
+			mem = (uint8 *)xmalloc(slab_bytes);
+			slab->mem = mem;
+			slab->next = pool->slabs;
+			pool->slabs = slab;
+			pool->next_block[idx] = mem;
+			pool->blocks_left[idx] = nblocks;
+		}
+		p = pool->next_block[idx];
+		pool->next_block[idx] += block_bytes;
+		pool->blocks_left[idx]--;
+	}
 	return (uint32 *)p;
 }
 
@@ -104,8 +134,7 @@ void merge_mem_free(merge_mem_pool_t *pool, uint32 *ptr, uint32 words) {
 	}
 	idx = merge_pool_class(words, &class_words);
 	(void)class_words;
-	*(void **)ptr = pool->free_list[idx];
-	pool->free_list[idx] = ptr;
+	merge_mem_free_class(pool, ptr, idx);
 }
 
 uint32 *merge_mem_realloc(merge_mem_pool_t *pool, uint32 *ptr,
@@ -137,6 +166,104 @@ uint32 *merge_mem_realloc(merge_mem_pool_t *pool, uint32 *ptr,
 	memcpy(out, ptr, (size_t)MIN(old_words, new_words) * sizeof(uint32));
 	merge_mem_free(pool, ptr, old_words);
 	return out;
+}
+
+/*--------------------------------------------------------------------*/
+uint32 *merge_relset_alloc(merge_mem_pool_t *pool, relation_set_t *r,
+			uint32 words) {
+	uint32 idx, class_words;
+
+	if (words == 0) {
+		relation_set_set_alloc_class(r, RELSET_ALLOC_EXTERNAL);
+		return NULL;
+	}
+	if (pool == NULL || words > MERGE_POOL_MAX_WORDS) {
+		relation_set_set_alloc_class(r, RELSET_ALLOC_EXTERNAL);
+		return (uint32 *)xmalloc((size_t)words * sizeof(uint32));
+	}
+	idx = merge_pool_class(words, &class_words);
+	(void)class_words;
+	relation_set_set_alloc_class(r, idx);
+	return merge_mem_alloc(pool, words);
+}
+
+uint32 *merge_relset_realloc(merge_mem_pool_t *pool, relation_set_t *r,
+			uint32 old_words, uint32 new_words) {
+	uint32 old_idx, new_idx, class_words;
+	uint32 *out;
+
+	if (r->data == NULL)
+		return merge_relset_alloc(pool, r, new_words);
+	if (new_words == 0) {
+		merge_relset_free(pool, r);
+		return NULL;
+	}
+	if (pool == NULL) {
+		relation_set_set_alloc_class(r, RELSET_ALLOC_EXTERNAL);
+		return (uint32 *)xrealloc(r->data,
+				(size_t)new_words * sizeof(uint32));
+	}
+
+	old_idx = relation_set_alloc_class(r);
+	if (old_idx == RELSET_ALLOC_EXTERNAL) {
+		if (new_words > MERGE_POOL_MAX_WORDS)
+			return (uint32 *)xrealloc(r->data,
+					(size_t)new_words * sizeof(uint32));
+		new_idx = merge_pool_class(new_words, &class_words);
+		out = merge_mem_alloc(pool, new_words);
+		memcpy(out, r->data,
+			(size_t)MIN(old_words, new_words) * sizeof(uint32));
+		free(r->data);
+		relation_set_set_alloc_class(r, new_idx);
+		return out;
+	}
+
+	if (old_idx >= MERGE_POOL_NUM_CLASSES) {
+		printf("error: invalid pooled relation-set allocation class\n");
+		exit(-1);
+	}
+	if (new_words <= MERGE_POOL_MAX_WORDS) {
+		new_idx = merge_pool_class(new_words, &class_words);
+		/* Shrinking a payload is intentionally a no-op. The stored pool
+		   class remains the class that owns this block, eliminating the
+		   copy that used to occur while burying inactive ideals. */
+		if (new_idx <= old_idx)
+			return r->data;
+		out = merge_mem_alloc(pool, new_words);
+		memcpy(out, r->data,
+			(size_t)MIN(old_words, new_words) * sizeof(uint32));
+		merge_mem_free_class(pool, r->data, old_idx);
+		relation_set_set_alloc_class(r, new_idx);
+		return out;
+	}
+
+	out = (uint32 *)xmalloc((size_t)new_words * sizeof(uint32));
+	memcpy(out, r->data,
+		(size_t)MIN(old_words, new_words) * sizeof(uint32));
+	merge_mem_free_class(pool, r->data, old_idx);
+	relation_set_set_alloc_class(r, RELSET_ALLOC_EXTERNAL);
+	return out;
+}
+
+void merge_relset_free(merge_mem_pool_t *pool, relation_set_t *r) {
+	uint32 idx;
+	if (r->data == NULL)
+		return;
+	if (pool == NULL) {
+		free(r->data);
+		r->data = NULL;
+		return;
+	}
+	idx = relation_set_alloc_class(r);
+	if (idx == RELSET_ALLOC_EXTERNAL)
+		free(r->data);
+	else if (idx < MERGE_POOL_NUM_CLASSES)
+		merge_mem_free_class(pool, r->data, idx);
+	else {
+		printf("error: invalid pooled relation-set allocation class\n");
+		exit(-1);
+	}
+	r->data = NULL;
 }
 
 void merge_aux_init(merge_aux_t *aux, merge_mem_pool_t *data_pool) {
@@ -192,12 +319,16 @@ void ideal_list_init(ideal_list_t *ideal_list,
 	ideal_list->list = (ideal_set_t *)xcalloc((size_t)num_ideals,
 						sizeof(ideal_set_t));
 
+	if (num_ideals > HEAP_HEAD_REF_BASE) {
+		printf("error: ideal count exceeds compact heap-reference range\n");
+		exit(-1);
+	}
 	for (i = 0; i < num_ideals; i++) {
 		ideal_set_t *entry = ideal_list->list + i;
 		entry->active = is_active;
 		entry->min_relset_size = UINT32_MAX;
-		entry->next = entry;
-		entry->prev = entry;
+		entry->next = i;
+		entry->prev = i;
 	}
 }
 
@@ -247,9 +378,10 @@ void heap_init(heap_t *heap) {
 						sizeof(ideal_set_t));
 
 	for (i = 0; i < heap->num_bins; i++) {
+		uint32 ref = HEAP_HEAD_REF_BASE + i;
 		ideal_set_t *entry = heap->hashtable + i;
-		entry->next = entry;
-		entry->prev = entry;
+		entry->next = ref;
+		entry->prev = ref;
 	}
 }
 
@@ -262,24 +394,24 @@ void heap_free(heap_t *heap) {
 /*--------------------------------------------------------------------*/
 #define HEAP_MAX_KEY 1048575U
 
+static INLINE uint32 heap_head_ref(uint32 bin) {
+	return HEAP_HEAD_REF_BASE + bin;
+}
+
+static INLINE ideal_set_t *heap_ref_node(heap_t *heap,
+			ideal_list_t *ideal_list, uint32 ref) {
+	if (ref >= HEAP_HEAD_REF_BASE)
+		return heap->hashtable + (ref - HEAP_HEAD_REF_BASE);
+	return ideal_list->list + ref;
+}
+
 static uint32 heap_compute_key(ideal_set_t *ideal) {
 	uint64 key;
 
 	/* the heap is used to pick the next ideal to be merged,
 	   and the key is the maximum amount of fill-in that can
 	   occur when the merge takes place. The key computation
-	   implements the Markowitz criterion: merging the least
-	   dense matrix row (of weight c) with r-1 other rows, in
-	   order to eliminate one ideal they all have in common,
-	   will cause at most (r-1)*(c-1) extra nonzero entries to
-	   appear in the matrix. This is a quantitative way of
-	   choosing the ideal to merge that will perturb the current
-	   matrix the least, and is a general case of the minimum
-	   degree algorithm.
-
-	   Using a heap to track the Markowitz value of every ideal
-	   means that the next ideal to eliminate is chosen in
-	   constant time, with no approximations. */
+	   implements the Markowitz criterion. */
 
 	if (ideal->num_relsets == 0)
 		return (uint32)(-1);
@@ -297,6 +429,7 @@ void heap_add_ideal(heap_t *heap,
 	ideal_set_t *head;
 	ideal_set_t *new_node = ideal_list->list + ideal;
 	uint32 key = heap_compute_key(new_node);
+	uint32 node_ref = ideal;
 
 	if (key == (uint32)(-1)) {
 		printf("error: attempted to heapify an empty ideal\n");
@@ -308,43 +441,30 @@ void heap_add_ideal(heap_t *heap,
 
 	if (key >= heap->num_bins) {
 		uint32 i;
-		ideal_set_t *ideal_array = ideal_list->list;
 		uint32 new_size;
 		uint64 doubled = (uint64)2 * heap->num_bins;
 		uint64 requested = (uint64)key + 100;
 		uint64 wanted = MAX(requested, doubled);
+		ideal_set_t *new_hashtable;
 		if (wanted > (uint64)HEAP_MAX_KEY + 1)
 			wanted = (uint64)HEAP_MAX_KEY + 1;
 		new_size = (uint32)wanted;
-		ideal_set_t *new_hashtable = (ideal_set_t *)xmalloc(
-						new_size * sizeof(ideal_set_t));
+		new_hashtable = (ideal_set_t *)xcalloc((size_t)new_size,
+						sizeof(ideal_set_t));
 
-		/* transfer chains of ideals with the same
-		   key value over to the new hashtable */
+		/* Head references encode the bin number rather than an address.
+		   Resizing therefore only copies the endpoints; ideal nodes do
+		   not need to be relinked. */
 		for (i = 0; i < heap->num_bins; i++) {
 			ideal_set_t *old_entry = heap->hashtable + i;
 			ideal_set_t *new_entry = new_hashtable + i;
-			new_entry->next = new_entry;
-			new_entry->prev = new_entry;
-			if (old_entry->next != old_entry) {
-				uint32 j;
-
-				j = old_entry->next - ideal_array;
-				new_entry->next = old_entry->next;
-				ideal_array[j].prev = new_entry;
-
-				j = old_entry->prev - ideal_array;
-				new_entry->prev = old_entry->prev;
-				ideal_array[j].next = new_entry;
-			}
+			new_entry->next = old_entry->next;
+			new_entry->prev = old_entry->prev;
 		}
-
-		/* initialize the rest of the entries */
-
 		for (; i < new_size; i++) {
-			ideal_set_t *entry = new_hashtable + i;
-			entry->next = entry;
-			entry->prev = entry;
+			uint32 ref = heap_head_ref(i);
+			new_hashtable[i].next = ref;
+			new_hashtable[i].prev = ref;
 		}
 		free(heap->hashtable);
 		heap->hashtable = new_hashtable;
@@ -354,10 +474,10 @@ void heap_add_ideal(heap_t *heap,
 	/* add the new ideal */
 
 	head = heap->hashtable + key;
-	new_node->prev = head;
+	new_node->prev = heap_head_ref(key);
 	new_node->next = head->next;
-	head->next->prev = new_node;
-	head->next = new_node;
+	heap_ref_node(heap, ideal_list, head->next)->prev = node_ref;
+	head->next = node_ref;
 
 	/* adjust the best and worst heap bucket pointers */
 
@@ -376,29 +496,28 @@ void heap_remove_ideal(heap_t *heap,
 			uint32 ideal) {
 
 	ideal_set_t *node = ideal_list->list + ideal;
-	uint32 key = heap_compute_key(node);
 	ideal_set_t *head;
 
 	/* do nothing if the ideal is not connected */
 
-	if (node->next == node)
+	if (node->next == ideal)
 		return;
 
-	/* remove the ideal from the chain of ideals with
-	   this key value */
+	/* remove the ideal from the chain of ideals with this key value */
 
 	heap->num_ideals--;
-	node->next->prev = node->prev;
-	node->prev->next = node->next;
-	node->prev = node;
-	node->next = node;
+	heap_ref_node(heap, ideal_list, node->next)->prev = node->prev;
+	heap_ref_node(heap, ideal_list, node->prev)->next = node->next;
+	node->prev = ideal;
+	node->next = ideal;
 
 	/* adjust the best and worst heap bucket pointers */
 
 	head = heap->hashtable + heap->next_bin;
-	if (head->next == head) {
-		uint32 i = key;
-		while (i < heap->num_bins && head->next == head) {
+	if (head->next == heap_head_ref(heap->next_bin)) {
+		uint32 i = heap->next_bin;
+		while (i < heap->num_bins &&
+		       head->next == heap_head_ref(i)) {
 			head++;
 			i++;
 		}
@@ -406,13 +525,13 @@ void heap_remove_ideal(heap_t *heap,
 	}
 
 	head = heap->hashtable + heap->worst_bin;
-	if (head->next == head) {
+	if (head->next == heap_head_ref(heap->worst_bin)) {
 		uint32 i = heap->worst_bin;
-		while (i > 0 && head->next == head) {
+		while (i > 0 && head->next == heap_head_ref(i)) {
 			i--;
 			head--;
 		}
-		if (head->next == head)
+		if (head->next == heap_head_ref(i))
 			heap->worst_bin = (uint32)(-1);
 		else
 			heap->worst_bin = i;
@@ -430,7 +549,7 @@ uint32 heap_add_relset(heap_t *active_heap,
 	uint32 i;
 	uint32 weight = r->num_small_ideals + r->num_large_ideals;
 
-	r->num_active_ideals = 0;
+	relation_set_set_num_active(r, 0);
 
 	/* add the relation set by adding each of its
 	   large ideals to the heap */
@@ -472,13 +591,14 @@ uint32 heap_add_relset(heap_t *active_heap,
 			heap_add_ideal(heap, ideal_list, ideal);
 
 		if (heap == active_heap)
-			r->num_active_ideals++;
+			relation_set_set_num_active(r,
+					relation_set_num_active(r) + 1);
 	}
 
 	/* return the number of ideals that still
 	   need merging before r can become a cycle */
 
-	return r->num_active_ideals;
+	return relation_set_num_active(r);
 }
 
 /*--------------------------------------------------------------------*/
@@ -568,7 +688,11 @@ uint32 heap_remove_best(heap_t *heap, ideal_list_t *ideal_list) {
 	if (key == heap->num_bins)
 		return (uint32)(-1);
 
-	ideal = heap->hashtable[key].next - ideal_list->list;
+	ideal = heap->hashtable[key].next;
+	if (ideal >= HEAP_HEAD_REF_BASE) {
+		printf("error: empty best heap bucket\n");
+		exit(-1);
+	}
 	heap_remove_ideal(heap, ideal_list, ideal);
 	return ideal;
 }
@@ -585,7 +709,11 @@ uint32 heap_remove_worst(heap_t *heap, ideal_list_t *ideal_list) {
 	if ((int32)key < 0)
 		return (uint32)(-1);
 
-	ideal = heap->hashtable[key].next - ideal_list->list;
+	ideal = heap->hashtable[key].next;
+	if (ideal >= HEAP_HEAD_REF_BASE) {
+		printf("error: empty worst heap bucket\n");
+		exit(-1);
+	}
 	heap_remove_ideal(heap, ideal_list, ideal);
 	return ideal;
 }
@@ -643,7 +771,6 @@ void bury_inactive_ideal(relation_set_t *relset_array,
 	for (i = 0; i < ideal_set->num_relsets; i++) {
 		relation_set_t *r = relset_array + ideal_set->relsets[i];
 		uint32 num_ideals = r->num_large_ideals;
-		uint32 old_words = r->num_relations + num_ideals;
 
 		if (r->num_small_ideals == UINT16_MAX) {
 			printf("error: relation-set small-ideal count exceeds 16 bits\n");
@@ -671,11 +798,9 @@ void bury_inactive_ideal(relation_set_t *relset_array,
 				r_array[j-1] = r_array[j];
 		}
 
-		/* Keep the pool size class synchronized with the logical
-		   payload size. Otherwise a later free after crossing a size-class
-		   boundary would put this block on the wrong free list. */
-		r->data = merge_mem_realloc(ideal_list->data_pool, r->data,
-				old_words, old_words - 1);
+		/* The payload's actual allocation class is tracked separately
+		   from its logical length, so burying an ideal never needs to copy
+		   the payload merely to move it to a smaller pool class. */
 	}
 
 	/* reset the ideal structure */
@@ -683,6 +808,9 @@ void bury_inactive_ideal(relation_set_t *relset_array,
 	merge_mem_free(ideal_list->data_pool, ideal_set->relsets,
 			ideal_set->num_relsets_alloc);
 	memset(ideal_set, 0, sizeof(ideal_set_t));
+	ideal_set->min_relset_size = UINT32_MAX;
+	ideal_set->next = ideal;
+	ideal_set->prev = ideal;
 }
 
 /*--------------------------------------------------------------------*/
@@ -738,7 +866,7 @@ void merge_two_relsets(relation_set_t *r1, relation_set_t *r2,
 
 	/* save the merged lists */
 
-	r_out->data = merge_mem_alloc(aux->data_pool,
+	r_out->data = merge_relset_alloc(aux->data_pool, r_out,
 				r_out->num_relations + r_out->num_large_ideals);
 	memcpy(r_out->data,
 	       aux->tmp_relations,
