@@ -163,6 +163,115 @@ static int lp32_writer_finish(lp32_writer_t *w) {
 #define LP32_ALIVE_TEST(a,i) ((a)[(size_t)(i) >> 3] & (uint8)(1U << ((i) & 7)))
 #define LP32_ALIVE_CLEAR(a,i) ((a)[(size_t)(i) >> 3] &= (uint8)~(1U << ((i) & 7)))
 
+/* Renumber a dense ideal-count array without serially scanning billions of
+   entries. The first pass counts survivors in independent fixed-size blocks,
+   a tiny serial prefix sum assigns each block its output range, and the final
+   pass writes exactly the same monotonically increasing IDs as the original
+   serial loop. Keeping the block size large makes this a memory-bandwidth
+   operation instead of an OpenMP scheduling exercise. */
+#define IDEAL_RENUMBER_BLOCK_SIZE ((uint64)1 << 20)
+
+static uint32 renumber_ideal_counts(uint32 *counts, uint32 num_ideals,
+                uint32 min_keep, uint32 max_keep,
+                uint32 discard_value, uint32 *max_count_out) {
+    uint32 num_blocks;
+    uint64 *block_offsets;
+    uint32 *block_max;
+    uint64 total = 0;
+    uint32 global_max = 0;
+    int b;
+
+    if (num_ideals == 0) {
+        if (max_count_out)
+            *max_count_out = 0;
+        return 0;
+    }
+
+    num_blocks = (uint32)(((uint64)num_ideals +
+            IDEAL_RENUMBER_BLOCK_SIZE - 1) / IDEAL_RENUMBER_BLOCK_SIZE);
+    block_offsets = (uint64 *)xmalloc((size_t)num_blocks * sizeof(uint64));
+    block_max = (uint32 *)xcalloc((size_t)num_blocks, sizeof(uint32));
+
+#pragma omp parallel for schedule(static)
+    for (b = 0; b < (int)num_blocks; b++) {
+        uint64 k;
+        uint64 start = (uint64)b * IDEAL_RENUMBER_BLOCK_SIZE;
+        uint64 end = MIN(start + IDEAL_RENUMBER_BLOCK_SIZE,
+                (uint64)num_ideals);
+        uint64 local_count = 0;
+        uint32 local_max = 0;
+
+        for (k = start; k < end; k++) {
+            uint32 v = counts[(size_t)k];
+            if (v >= min_keep && v <= max_keep) {
+                local_count++;
+                local_max = MAX(local_max, v);
+            }
+        }
+        block_offsets[b] = local_count;
+        block_max[b] = local_max;
+    }
+
+    for (b = 0; b < (int)num_blocks; b++) {
+        uint64 block_count = block_offsets[b];
+        block_offsets[b] = total;
+        total += block_count;
+        global_max = MAX(global_max, block_max[b]);
+    }
+    if (total > UINT32_MAX) {
+        printf("error: ideal renumbering exceeds 32-bit capacity\n");
+        exit(-1);
+    }
+
+#pragma omp parallel for schedule(static)
+    for (b = 0; b < (int)num_blocks; b++) {
+        uint64 k;
+        uint64 start = (uint64)b * IDEAL_RENUMBER_BLOCK_SIZE;
+        uint64 end = MIN(start + IDEAL_RENUMBER_BLOCK_SIZE,
+                (uint64)num_ideals);
+        uint32 next = (uint32)block_offsets[b];
+
+        for (k = start; k < end; k++) {
+            uint32 v = counts[(size_t)k];
+            if (v >= min_keep && v <= max_keep)
+                counts[(size_t)k] = next++;
+            else
+                counts[(size_t)k] = discard_value;
+        }
+    }
+
+    free(block_max);
+    free(block_offsets);
+    if (max_count_out)
+        *max_count_out = global_max;
+    return (uint32)total;
+}
+
+static uint32 count_relation_ideals_parallel(relation_ideal_t **relation_ptr,
+                uint32 num_relations, uint32 num_ideals, uint32 *counts) {
+    uint32 i, j;
+    uint32 bad_relation = UINT32_MAX;
+
+#pragma omp parallel for private(j) schedule(static)
+    for (i = 0; i < num_relations; i++) {
+        relation_ideal_t *relation = relation_ptr[i];
+        for (j = 0; j < relation->ideal_count; j++) {
+            uint32 ideal = relation->ideal_list[j];
+            if (ideal >= num_ideals) {
+#pragma omp critical (lp32_bad_ideal)
+                {
+                    if (i < bad_relation)
+                        bad_relation = i;
+                }
+                continue;
+            }
+#pragma omp atomic update
+            counts[ideal]++;
+        }
+    }
+    return bad_relation;
+}
+
 /*--------------------------------------------------------------------*/
 static void filter_read_lp_file_1pass(msieve_obj *obj,
                 filter_t *filter,
@@ -230,13 +339,6 @@ static void filter_read_lp_file_1pass(msieve_obj *obj,
             exit(-1);
         }
         filter->relation_ptr[i] = r;
-        for (j = 0; j < r->ideal_count; j++) {
-            if (r->ideal_list[j] >= num_ideals) {
-                logprintf(obj, "error: invalid ideal ID in LP relation %u\n", i);
-                exit(-1);
-            }
-            counts[r->ideal_list[j]]++;
-        }
         r = next_relation_ptr(r);
     }
     if ((uint8 *)r != end) {
@@ -244,16 +346,25 @@ static void filter_read_lp_file_1pass(msieve_obj *obj,
         exit(-1);
     }
 
-    for (i = j = 0; i < num_ideals; i++) {
-        if (counts[i] == 0 || counts[i] > max_ideal_weight)
-            counts[i] = (uint32)(-1);
-        else
-            counts[i] = j++;
+    /* Record boundaries must be discovered serially because LP records are
+       variable length, but ideal counting is independent once relation_ptr[]
+       exists. Validate ideal IDs in this parallel pass before indexing counts. */
+    {
+        uint32 bad_relation = count_relation_ideals_parallel(
+                filter->relation_ptr, num_relations, num_ideals, counts);
+        if (bad_relation != UINT32_MAX) {
+            logprintf(obj, "error: invalid ideal ID in LP relation %u\n",
+                    bad_relation);
+            exit(-1);
+        }
     }
-    add_target_excess(obj, filter, i - j);
+
+    j = renumber_ideal_counts(counts, num_ideals, 1, max_ideal_weight,
+            UINT32_MAX, NULL);
+    add_target_excess(obj, filter, num_ideals - j);
     filter->num_ideals = j;
 
-    if (i != j) {
+    if (num_ideals != j) {
         logprintf(obj, "keeping %u ideals with weight <= %u, "
                 "target excess is %u\n",
                 j, max_ideal_weight,
@@ -334,13 +445,9 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
         exit(-1);
     }
 
-    for (i = j = 0; i < num_ideals; i++) {
-        if (counts[i] <= max_ideal_weight)
-            counts[i] = j++;
-        else
-            counts[i] = (uint32)(-1);
-    }
-    add_target_excess(obj, filter, i - j);
+    j = renumber_ideal_counts(counts, num_ideals, 0, max_ideal_weight,
+            UINT32_MAX, NULL);
+    add_target_excess(obj, filter, num_ideals - j);
     filter->num_ideals = j;
     logprintf(obj, "keeping %u ideals with weight <= %u, "
             "target excess is %u\n", j, max_ideal_weight,
@@ -503,10 +610,8 @@ void filter_purge_lp_singletons(msieve_obj *obj,
             num_singletons > 500000 &&
             new_file_size >= ram_size / 2);
 
-    for (i = j = 0; i < num_ideals; i++) {
-        if (counts[i] != 0)
-            counts[i] = j++;
-    }
+    j = renumber_ideal_counts(counts, num_ideals, 1, UINT32_MAX,
+            0, NULL);
     num_ideals = j;
 
     if (lp32_reader_rewind(&reader) != 0) {
@@ -686,13 +791,8 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	   relations, and renumber the ideals to ignore
 	   any that have a count of zero */
 
-	num_ideals = 0;
-	for (i = j = 0; i < orig_num_ideals; i++) {
-		if (freqtable[i]) {
-			j = MAX(j, freqtable[i]);
-			freqtable[i] = num_ideals++;
-		}
-	}
+	num_ideals = renumber_ideal_counts(freqtable, orig_num_ideals,
+			1, UINT32_MAX, 0, &j);
 
 	logprintf(obj, "reduce to %u relations and %u ideals in %u passes\n",
 				num_relations, num_ideals, num_passes);

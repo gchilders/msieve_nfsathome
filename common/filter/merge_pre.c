@@ -29,6 +29,63 @@ static int compare_uint32(const void *x, const void *y) {
 /*--------------------------------------------------------------------*/
 #define NUM_IDEAL_BINS 6
 
+#define MERGE_RENUMBER_BLOCK_SIZE ((uint64)1 << 20)
+
+static uint32 renumber_ideal_map(ideal_map_t *ideal_map, uint32 num_ideals) {
+	uint32 num_blocks;
+	uint64 *block_offsets;
+	uint64 total = 0;
+	int b;
+
+	if (num_ideals == 0)
+		return 0;
+
+	num_blocks = (uint32)(((uint64)num_ideals +
+			MERGE_RENUMBER_BLOCK_SIZE - 1) / MERGE_RENUMBER_BLOCK_SIZE);
+	block_offsets = (uint64 *)xmalloc((size_t)num_blocks * sizeof(uint64));
+
+#pragma omp parallel for schedule(static)
+	for (b = 0; b < (int)num_blocks; b++) {
+		uint64 k;
+		uint64 start = (uint64)b * MERGE_RENUMBER_BLOCK_SIZE;
+		uint64 end = MIN(start + MERGE_RENUMBER_BLOCK_SIZE,
+				(uint64)num_ideals);
+		uint64 local_count = 0;
+		for (k = start; k < end; k++) {
+			if (ideal_map_payload(ideal_map + (size_t)k))
+				local_count++;
+		}
+		block_offsets[b] = local_count;
+	}
+
+	for (b = 0; b < (int)num_blocks; b++) {
+		uint64 block_count = block_offsets[b];
+		block_offsets[b] = total;
+		total += block_count;
+	}
+	if (total > UINT32_MAX) {
+		printf("error: merge ideal renumbering exceeds 32-bit capacity\n");
+		exit(-1);
+	}
+
+#pragma omp parallel for schedule(static)
+	for (b = 0; b < (int)num_blocks; b++) {
+		uint64 k;
+		uint64 start = (uint64)b * MERGE_RENUMBER_BLOCK_SIZE;
+		uint64 end = MIN(start + MERGE_RENUMBER_BLOCK_SIZE,
+				(uint64)num_ideals);
+		uint32 next = (uint32)block_offsets[b];
+		for (k = start; k < end; k++) {
+			ideal_map_t *entry = ideal_map + (size_t)k;
+			if (ideal_map_payload(entry))
+				ideal_map_set_payload(entry, next++);
+		}
+	}
+
+	free(block_offsets);
+	return (uint32)total;
+}
+
 void filter_merge_init(msieve_obj *obj, filter_t *filter) {
 
 	/* start the merge process. Right now this only prints
@@ -36,23 +93,45 @@ void filter_merge_init(msieve_obj *obj, filter_t *filter) {
 	   sorts the ideals of each relation into ascending order */
 
 	uint32 i;
-	relation_ideal_t *curr_relation = filter->relation_array;
 	uint32 num_relations = filter->num_relations;
-	uint32 ideal_count_bins[NUM_IDEAL_BINS+2] = {0};
+	uint32 bin0 = 0, bin1 = 0, bin2 = 0, bin3 = 0;
+	uint32 bin4 = 0, bin5 = 0, bin6 = 0, bin7plus = 0;
+	uint32 ideal_count_bins[NUM_IDEAL_BINS+2];
 
+	/* relation_ptr[] makes every packed relation independently addressable.
+	   Sorting relation-local ideal lists is therefore embarrassingly parallel;
+	   scalar reductions keep the tiny histogram portable to OpenMP 2.x. */
+#pragma omp parallel for schedule(static) \
+		reduction(+:bin0,bin1,bin2,bin3,bin4,bin5,bin6,bin7plus)
 	for (i = 0; i < num_relations; i++) {
+		relation_ideal_t *curr_relation = filter->relation_ptr[i];
 		uint32 num_ideals = curr_relation->ideal_count;
-		if (num_ideals > NUM_IDEAL_BINS)
-			ideal_count_bins[NUM_IDEAL_BINS+1]++;
-		else
-			ideal_count_bins[num_ideals]++;
+
+		switch (num_ideals) {
+		case 0: bin0++; break;
+		case 1: bin1++; break;
+		case 2: bin2++; break;
+		case 3: bin3++; break;
+		case 4: bin4++; break;
+		case 5: bin5++; break;
+		case 6: bin6++; break;
+		default: bin7plus++; break;
+		}
 
 		if (num_ideals > 1) {
 			qsort(curr_relation->ideal_list, (size_t)num_ideals,
 					sizeof(uint32), compare_uint32);
 		}
-		curr_relation = next_relation_ptr(curr_relation);
 	}
+
+	ideal_count_bins[0] = bin0;
+	ideal_count_bins[1] = bin1;
+	ideal_count_bins[2] = bin2;
+	ideal_count_bins[3] = bin3;
+	ideal_count_bins[4] = bin4;
+	ideal_count_bins[5] = bin5;
+	ideal_count_bins[6] = bin6;
+	ideal_count_bins[7] = bin7plus;
 
 	for (i = 0; i < NUM_IDEAL_BINS+1; i++) {
 		logprintf(obj, "relations with %u large ideals: %u\n",
@@ -352,12 +431,7 @@ void filter_merge_2way(msieve_obj *obj, filter_t *filter,
 			ideal_map[ideal_list[j]].data++;
 		}
 	}
-	for (i = j = 0; i < num_ideals; i++) {
-		if (ideal_map_payload(ideal_map + i)) {
-			ideal_map_set_payload(ideal_map + i, j++);
-		}
-	}
-	num_ideals = j;
+	num_ideals = renumber_ideal_map(ideal_map, num_ideals);
 #pragma omp parallel for private(j)
 	for (i = 0; i < num_relset; i++) {
 		relation_set_t *r = relset_array + i;
