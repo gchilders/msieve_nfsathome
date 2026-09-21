@@ -113,7 +113,7 @@ static void dump_relation_numbers(msieve_obj *obj, filter_t *filter) {
 		have_map = 1;
 	}
 
-	sprintf(buf, "%s.d", obj->savefile.name);
+	get_filter_tmp_name(obj, buf, sizeof(buf), ".d");
 	relation_fp = fopen(buf, "wb");
 	if (relation_fp == NULL) {
 		logprintf(obj, "error: reldump can't open out file\n");
@@ -380,6 +380,11 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	logprintf(obj, "estimated available RAM is %.1lf MB\n",
 				(double)ram_size / 1048576);
 
+	/* with a scratch directory configured, work from a local
+	   decompressed copy of the savefile */
+
+	savefile_stage(obj);
+
 	/* delete duplicate relations */
 
 	filtmin_r = filtmin_a = nfs_purge_duplicates(obj, &fb,
@@ -464,7 +469,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 	/* filtering succeeded; delete the LP file */
 
-	sprintf(lp_filename, "%s.lp", obj->savefile.name);
+	get_filter_tmp_name(obj, lp_filename, sizeof(lp_filename), ".lp");
 	remove(lp_filename);
 
 	/* optimize and then save the collection of relation-sets */
@@ -475,6 +480,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	wall_time = time(NULL) - wall_time;
 	logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);
 finished:
+	savefile_unstage(obj);
+
 	mpz_poly_free(&fb.rfb.poly);
 	mpz_poly_free(&fb.afb.poly);
 	return relations_needed;

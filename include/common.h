@@ -59,6 +59,23 @@ extern "C" {
 
 void savefile_init(savefile_t *s, char *filename);
 void savefile_free(savefile_t *s);
+/* Build the path of a filtering intermediate (suffix includes the dot).
+   These files are written, re-read and deleted inside a single filtering
+   run, so when a scratch directory is configured they belong on
+   node-local storage. Outputs that outlive filtering -- .cyc, .rmap --
+   must not use this; they always sit beside the savefile. */
+
+void get_filter_tmp_name(msieve_obj *obj, char *buf,
+			size_t buf_len, const char *suffix);
+
+/* copy the savefile into obj->scratch_dir, decompressing it, and make
+   subsequent reads use that copy; returns nonzero if staging happened.
+   savefile_unstage() deletes it along with any filtering intermediates
+   still on scratch, and is safe to call unconditionally. */
+
+uint32 savefile_stage(msieve_obj *obj);
+void savefile_unstage(msieve_obj *obj);
+
 void savefile_open(savefile_t *s, uint32 flags);
 void savefile_close(savefile_t *s);
 uint32 savefile_eof(savefile_t *s);

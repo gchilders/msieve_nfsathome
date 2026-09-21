@@ -263,7 +263,7 @@ static uint64 purge_duplicates_pass2(msieve_obj *obj,
 		goto collisions_ready;
 	}
 
-	sprintf(buf, "%s.hc", savefile->name);
+	get_filter_tmp_name(obj, buf, sizeof(buf), ".hc");
 	collision_fp = fopen(buf, "rb");
 	if (collision_fp == NULL) {
 		logprintf(obj, "error: dup2 can't open collision file\n");
@@ -291,13 +291,13 @@ collisions_ready:
 
 	/* set up for reading the list of relations */
 
-	sprintf(buf, "%s.br", savefile->name);
+	get_filter_tmp_name(obj, buf, sizeof(buf), ".br");
 	bad_relation_fp = fopen(buf, "rb");
 	if (bad_relation_fp == NULL) {
 		logprintf(obj, "error: dup2 can't open rel file\n");
 		exit(-1);
 	}
-	sprintf(buf, "%s.d", savefile->name);
+	get_filter_tmp_name(obj, buf, sizeof(buf), ".d");
 	out_fp = fopen(buf, "wb");
 	if (out_fp == NULL) {
 		logprintf(obj, "error: dup2 can't open output file\n");
@@ -419,9 +419,9 @@ relations_done:
 		savefile_close(savefile);
 	fclose(bad_relation_fp);
 	dup_close_output(obj, out_fp, "duplicate relation list");
-	sprintf(buf, "%s.hc", savefile->name);
+	get_filter_tmp_name(obj, buf, sizeof(buf), ".hc");
 	remove(buf);
-	sprintf(buf, "%s.br", savefile->name);
+	get_filter_tmp_name(obj, buf, sizeof(buf), ".br");
 	remove(buf);
 
 	if (!use_cache)
@@ -521,13 +521,13 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	logprintf(obj, "commencing duplicate removal, pass 1\n");
 
 	savefile_open(savefile, SAVEFILE_READ);
-	sprintf(buf, "%s.br", savefile->name);
+	get_filter_tmp_name(obj, buf, LINE_BUF_SIZE, ".br");
 	bad_relation_fp = fopen(buf, "wb");
 	if (bad_relation_fp == NULL) {
 		logprintf(obj, "error: dup1 can't open relation file\n");
 		exit(-1);
 	}
-	sprintf(buf, "%s.hc", savefile->name);
+	get_filter_tmp_name(obj, buf, LINE_BUF_SIZE, ".hc");
 	collision_fp = fopen(buf, "wb");
 	if (collision_fp == NULL) {
 		logprintf(obj, "error: dup1 can't open collision file\n");
@@ -796,7 +796,9 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 			   cached pass 2 would silently ignore them */
 
 			nfree = add_free_relations(obj, fb, free_relation_bits,
-					ab_cache.active ? &free_primes : NULL);
+					(ab_cache.active ||
+					 savefile->staged_name != NULL) ?
+						&free_primes : NULL);
 			num_relations += nfree;
 
 			if (free_primes != NULL) {
@@ -806,8 +808,31 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 						curr_relation + 1 + k,
 						(int64)free_primes[k], 0);
 				}
-				free(free_primes);
 			}
+
+			/* add_free_relations() appended to the original
+			   savefile. A staged copy is read by every later
+			   pass, so it has to receive the same lines or
+			   those passes would not see the free relations */
+
+			if (nfree > 0 && savefile->staged_name != NULL) {
+				FILE *fp = fopen(savefile->staged_name, "ab");
+				uint32 k;
+
+				if (fp == NULL) {
+					logprintf(obj, "error: cannot mirror free "
+						"relations into the staged savefile\n");
+					exit(-1);
+				}
+				for (k = 0; k < nfree; k++)
+					fprintf(fp, "%u,0:\n", free_primes[k]);
+				if (fclose(fp) != 0) {
+					logprintf(obj, "error: write failed mirroring "
+						"free relations\n");
+					exit(-1);
+				}
+			}
+			free(free_primes);
 			num_free_added = nfree;
 		}
 	}
@@ -832,10 +857,10 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 		/* no duplicates; no second pass is necessary */
 
 		char buf2[256];
-		sprintf(buf, "%s.hc", savefile->name);
+		get_filter_tmp_name(obj, buf, LINE_BUF_SIZE, ".hc");
 		remove(buf);
-		sprintf(buf, "%s.br", savefile->name);
-		sprintf(buf2, "%s.d", savefile->name);
+		get_filter_tmp_name(obj, buf, LINE_BUF_SIZE, ".br");
+		get_filter_tmp_name(obj, buf2, sizeof(buf2), ".d");
 		if (rename(buf, buf2) != 0) {
 			logprintf(obj, "error: dup1 can't rename outfile\n");
 			exit(-1);

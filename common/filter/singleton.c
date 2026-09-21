@@ -291,7 +291,7 @@ static void filter_read_lp_file_1pass(msieve_obj *obj,
 
     logprintf(obj, "reading all ideals from disk\n");
 
-    sprintf(buf, "%s.lp", obj->savefile.name);
+    get_filter_tmp_name(obj, buf, sizeof(buf), ".lp");
     fp = fopen(buf, "rb");
     if (fp == NULL) {
         logprintf(obj, "error: can't open LP file\n");
@@ -423,7 +423,7 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
 
     logprintf(obj, "reading large ideals from disk\n");
 
-    sprintf(buf, "%s.lp", obj->savefile.name);
+    get_filter_tmp_name(obj, buf, sizeof(buf), ".lp");
     fp = fopen(buf, "rb");
     if (fp == NULL) {
         logprintf(obj, "error: singleton2 can't open LP file\n");
@@ -546,14 +546,14 @@ void filter_purge_lp_singletons(msieve_obj *obj,
     logprintf(obj, "start with %u relations and %u ideals\n",
             num_relations, num_ideals);
 
-    sprintf(buf, "%s.lp", obj->savefile.name);
+    get_filter_tmp_name(obj, buf, sizeof(buf), ".lp");
     in_fp = fopen(buf, "rb");
     if (in_fp == NULL) {
         logprintf(obj, "error: can't open LP file\n");
         exit(-1);
     }
     lp32_reader_init(&reader, in_fp);
-    sprintf(buf2, "%s.lp0", obj->savefile.name);
+    get_filter_tmp_name(obj, buf2, sizeof(buf2), ".lp0");
     out_fp = fopen(buf2, "wb");
     if (out_fp == NULL) {
         logprintf(obj, "error: can't open LP output file\n");

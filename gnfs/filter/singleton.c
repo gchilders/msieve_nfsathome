@@ -270,14 +270,14 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 	logprintf(obj, "commencing singleton removal, initial pass\n");
 
 	savefile_open(savefile, SAVEFILE_READ);
-	sprintf(buf, "%s.d", savefile->name);
+	get_filter_tmp_name(obj, buf, LINE_BUF_SIZE, ".d");
 	relation_fp = fopen(buf, "rb");
 	if (relation_fp == NULL) {
 		logprintf(obj, "error: can't open dup file\n");
 		exit(-1);
 	}
-	sprintf(lp_name, "%s.lp", savefile->name);
-	sprintf(lp_tmp_name, "%s.lp0", savefile->name);
+	get_filter_tmp_name(obj, lp_name, sizeof(lp_name), ".lp");
+	get_filter_tmp_name(obj, lp_tmp_name, sizeof(lp_tmp_name), ".lp0");
 	final_fp = fopen(lp_tmp_name, "wb");
 	if (final_fp == NULL) {
 		logprintf(obj, "error: can't open output LP file\n");
@@ -399,7 +399,7 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 
 	filter->lp_file_size = get_file_size(lp_name);
 
-	sprintf(buf, "%s.d", savefile->name);
+	get_filter_tmp_name(obj, buf, LINE_BUF_SIZE, ".d");
 	if (remove(buf) != 0) {
 		logprintf(obj, "error: can't delete dup file\n");
 		exit(-1);
@@ -521,8 +521,8 @@ void nfs_compact_lp_file(msieve_obj *obj, filter_t *filter,
 	logprintf(obj, "start with %" PRIu64 " relations and %" PRIu64
 			" ideals\n", num_relations, num_ideals);
 
-	sprintf(in_name, "%s.lp", obj->savefile.name);
-	sprintf(out_name, "%s.lp0", obj->savefile.name);
+	get_filter_tmp_name(obj, in_name, sizeof(in_name), ".lp");
+	get_filter_tmp_name(obj, out_name, sizeof(out_name), ".lp0");
 	sprintf(map_name, "%s.rmap", obj->savefile.name);
 	sprintf(map_tmp_name, "%s.rmap0", obj->savefile.name);
 	in_fp = fopen(in_name, "rb");
