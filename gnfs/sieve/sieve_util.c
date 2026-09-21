@@ -174,13 +174,24 @@ void write_last_line(msieve_obj *obj, mpz_t n, uint64 b) {
 
 /*------------------------------------------------------------------*/
 uint32 add_free_relations(msieve_obj *obj, 
-			factor_base_t *fb, uint8 *free_bits) {
+			factor_base_t *fb, uint8 *free_bits,
+			uint32 **primes_out) {
 
 	uint32 i, j;
 	uint32 num_relations = 0;
 	uint32 alg_degree = fb->afb.poly.degree;
 	uint32 rat_degree = fb->rfb.poly.degree;
 	uint32 free_bytes = (FREE_RELATION_LIMIT / 2 + 7) / 8;
+	uint32 primes_alloc = 0;
+	uint32 *primes = NULL;
+
+	/* the caller may want the list of relations we append, since it has
+	   no other way to learn their coordinates */
+
+	if (primes_out != NULL) {
+		primes_alloc = 1024;
+		primes = (uint32 *)xmalloc(primes_alloc * sizeof(uint32));
+	}
 
 	savefile_open(&obj->savefile, SAVEFILE_APPEND);
 
@@ -218,6 +229,15 @@ uint32 add_free_relations(msieve_obj *obj,
 					sprintf(buf, "%u,0:\n", p);
 					savefile_write_line(&obj->savefile, 
 								buf);
+					if (primes != NULL) {
+						if (num_relations == primes_alloc) {
+							primes_alloc *= 2;
+							primes = (uint32 *)xrealloc(
+								primes, primes_alloc *
+								sizeof(uint32));
+						}
+						primes[num_relations] = p;
+					}
 					num_relations++;
 				}
 			}
@@ -228,5 +248,7 @@ uint32 add_free_relations(msieve_obj *obj,
 		logprintf(obj, "added %u free relations\n", num_relations);
 	savefile_flush(&obj->savefile);
 	savefile_close(&obj->savefile);
+	if (primes_out != NULL)
+		*primes_out = primes;
 	return num_relations;
 }

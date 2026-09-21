@@ -228,7 +228,7 @@ uint32 do_line_sieving(msieve_obj *obj,
    that were added */
 
 uint32 add_free_relations(msieve_obj *obj, factor_base_t *fb,
-			  uint8 *free_bits);
+			  uint8 *free_bits, uint32 **primes_out);
 
 /*---------------------- filtering stuff --------------------------------*/
 

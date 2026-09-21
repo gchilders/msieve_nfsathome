@@ -383,7 +383,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	/* delete duplicate relations */
 
 	filtmin_r = filtmin_a = nfs_purge_duplicates(obj, &fb,
-					max_relations, &num_relations);
+					max_relations, ram_size,
+					&num_relations);
 	if (filter_bound > 0)
 		filtmin_r = filtmin_a = filter_bound;
 

@@ -52,6 +52,102 @@ $Id$
 static const uint8 hashmask[] = {0x01, 0x02, 0x04, 0x08,
 				 0x10, 0x20, 0x40, 0x80};
 
+/* Pass 2 exists only because the set of colliding hash bins is not known
+   until pass 1 has seen every relation. Its actual per-relation work is
+   trivial -- pull (a,b) off the line, hash it, test one bit -- so on a
+   machine whose relations live on a network share the pass is dominated by
+   reading the savefile a second time.
+
+   When there is memory to spare we therefore keep every relation's (a,b) in
+   core during pass 1 and let pass 2 walk that instead of the file. The cache
+   is segmented so that it never has to be reallocated or copied, and it is
+   sized from the same relation-count estimate used for the pass 1 hashtable;
+   if that estimate turns out to be too low the cache is dropped and pass 2
+   falls back to re-reading, which costs time but never correctness.
+
+   Storing the full 128-bit (a,b) rather than a digest is deliberate: it keeps
+   the "no false duplicates" guarantee that the two-hashtable scheme exists to
+   provide. */
+
+/* the rigorous second-stage key is the full 128-bit (a,b) pair */
+#define DUP_KEY_WORDS 4
+
+#define DUP_AB_SEGMENT_LOG2 20
+#define DUP_AB_SEGMENT_SIZE ((uint64)1 << DUP_AB_SEGMENT_LOG2)
+#define DUP_AB_SEGMENT_MASK (DUP_AB_SEGMENT_SIZE - 1)
+
+typedef struct {
+	uint32 active;          /* zero once the cache has been abandoned */
+	uint64 max_relations;   /* ordinals we are willing to store */
+	uint64 num_segments;
+	uint64 segment_alloc;
+	abpair_t **segments;
+} dup_ab_cache_t;
+
+static void dup_ab_cache_init(dup_ab_cache_t *c, uint64 max_relations) {
+
+	memset(c, 0, sizeof(*c));
+	if (max_relations == 0)
+		return;
+	c->max_relations = max_relations;
+	c->segment_alloc = (max_relations >> DUP_AB_SEGMENT_LOG2) + 2;
+	c->segments = (abpair_t **)calloc((size_t)c->segment_alloc,
+					sizeof(abpair_t *));
+	if (c->segments == NULL)
+		return;
+	c->active = 1;
+}
+
+static void dup_ab_cache_free(dup_ab_cache_t *c) {
+
+	uint64 i;
+
+	if (c->segments != NULL) {
+		for (i = 0; i < c->num_segments; i++)
+			free(c->segments[i]);
+		free(c->segments);
+	}
+	memset(c, 0, sizeof(*c));
+}
+
+/* record the coordinates of relation 'ordinal'; on any allocation failure or
+   overflow of the estimate, abandon the cache rather than the run */
+
+static void dup_ab_cache_store(dup_ab_cache_t *c, uint64 ordinal,
+				int64 a, uint64 b) {
+
+	uint64 seg = ordinal >> DUP_AB_SEGMENT_LOG2;
+	abpair_t *p;
+
+	if (!c->active)
+		return;
+	if (ordinal >= c->max_relations || seg >= c->segment_alloc) {
+		dup_ab_cache_free(c);
+		return;
+	}
+
+	while (c->num_segments <= seg) {
+		p = (abpair_t *)malloc((size_t)DUP_AB_SEGMENT_SIZE *
+					sizeof(abpair_t));
+		if (p == NULL) {
+			dup_ab_cache_free(c);
+			return;
+		}
+		c->segments[c->num_segments++] = p;
+	}
+
+	p = c->segments[seg] + (size_t)(ordinal & DUP_AB_SEGMENT_MASK);
+	p->a = a;
+	p->b = b;
+}
+
+static const abpair_t *dup_ab_cache_get(const dup_ab_cache_t *c,
+					uint64 ordinal) {
+
+	return c->segments[ordinal >> DUP_AB_SEGMENT_LOG2] +
+			(size_t)(ordinal & DUP_AB_SEGMENT_MASK);
+}
+
 static inline uint64 ror64(uint64 v, int r) {
     return (v >> r) | (v << (64 - r));
 }
@@ -92,9 +188,55 @@ static int dup_read_u64(FILE *fp, uint64 *value) {
 	return -1;
 }
 
+/* decide whether one relation is a duplicate, and record it if so. Shared
+   by the cached and the re-reading forms of pass 2 so the two cannot drift */
+
+static void dup2_classify(msieve_obj *obj, nfs_hashtable64_t *duplicates,
+			const uint8 *bit_table, uint32 log2_hashtable1_size,
+			int64 a, uint64 b, uint64 curr_relation, FILE *out_fp,
+			uint64 *num_relations, uint64 *num_duplicates) {
+
+	uint32 key[DUP_KEY_WORDS];
+	uint64 hashval;
+
+	key[0] = (uint32)(uint64)a;
+	key[1] = (uint32)((uint64)a >> 32);
+	key[2] = (uint32)b;
+	key[3] = (uint32)(b >> 32);
+
+	hashval = (rrxmrrxmsx_0((uint64)a) ^ rrxmrrxmsx_0((uint64)b)) >>
+					(64 - log2_hashtable1_size);
+
+	if (bit_table[hashval / 8] & hashmask[hashval % 8]) {
+
+		/* relation collides in the first hashtable; use the second
+		   hashtable to determine rigorously if it was seen before */
+
+		uint32 is_new;
+		nfs_hash64_find(obj, duplicates, key, &is_new);
+
+		if (is_new) {
+			(*num_relations)++;
+		}
+		else {
+			dup_write_u64(obj, out_fp, curr_relation,
+					"duplicate relation list");
+			(*num_duplicates)++;
+		}
+	}
+	else {
+		/* no collision; relation is unique */
+
+		(*num_relations)++;
+	}
+}
+
 static uint64 purge_duplicates_pass2(msieve_obj *obj,
 				uint32 log2_hashtable1_size,
-				uint64 max_relations) {
+				uint64 max_relations,
+				const dup_ab_cache_t *ab_cache,
+				uint8 *collision_bits,
+				uint64 total_relations) {
 
 	savefile_t *savefile = &obj->savefile;
 	FILE *bad_relation_fp;
@@ -108,11 +250,18 @@ static uint64 purge_duplicates_pass2(msieve_obj *obj,
 	uint64 curr_relation;
 	uint8 *bit_table;
 	nfs_hashtable64_t duplicates;
-	uint32 key[4];
+	uint32 use_cache = (ab_cache != NULL && ab_cache->active);
 
 	logprintf(obj, "commencing duplicate removal, pass 2\n");
 
-	/* fill in the list of hash collisions */
+	/* fill in the list of hash collisions. Pass 1 hands these over
+	   in memory whenever the relation cache survived; otherwise they
+	   are read back off disk */
+
+	if (use_cache) {
+		bit_table = collision_bits;
+		goto collisions_ready;
+	}
 
 	sprintf(buf, "%s.hc", savefile->name);
 	collision_fp = fopen(buf, "rb");
@@ -138,9 +287,10 @@ static uint64 purge_duplicates_pass2(msieve_obj *obj,
 	}
 	fclose(collision_fp);
 
+collisions_ready:
+
 	/* set up for reading the list of relations */
 
-	savefile_open(savefile, SAVEFILE_READ);
 	sprintf(buf, "%s.br", savefile->name);
 	bad_relation_fp = fopen(buf, "rb");
 	if (bad_relation_fp == NULL) {
@@ -153,7 +303,7 @@ static uint64 purge_duplicates_pass2(msieve_obj *obj,
 		logprintf(obj, "error: dup2 can't open output file\n");
 		exit(-1);
 	}
-	nfs_hash64_init(obj, &duplicates, (uint32)WORDS_IN(key));
+	nfs_hash64_init(obj, &duplicates, DUP_KEY_WORDS);
 
 	num_duplicates = 0;
 	num_relations = 0;
@@ -166,11 +316,49 @@ static uint64 purge_duplicates_pass2(msieve_obj *obj,
 			exit(-1);
 		}
 	}
+	if (use_cache) {
+
+		/* pass 1 kept every relation's coordinates, so the whole
+		   savefile read can be skipped */
+
+		for (curr_relation = 0; curr_relation < total_relations;
+							curr_relation++) {
+
+			const abpair_t *ab;
+
+			if (max_relations && curr_relation >= max_relations)
+				break;
+
+			if (curr_relation == next_bad_relation) {
+				dup_write_u64(obj, out_fp, curr_relation,
+						"duplicate relation list");
+				{
+					int rc = dup_read_u64(bad_relation_fp,
+							&next_bad_relation);
+					if (rc < 0) {
+						logprintf(obj, "error: truncated bad-relation file\n");
+						exit(-1);
+					}
+					if (rc == 0)
+						next_bad_relation = UINT64_MAX;
+				}
+				continue;
+			}
+
+			ab = dup_ab_cache_get(ab_cache, curr_relation);
+			dup2_classify(obj, &duplicates, bit_table,
+					log2_hashtable1_size, ab->a, ab->b,
+					curr_relation, out_fp,
+					&num_relations, &num_duplicates);
+		}
+		goto relations_done;
+	}
+
+	savefile_open(savefile, SAVEFILE_READ);
 	savefile_read_line(buf, sizeof(buf), savefile);
 
 	while (!savefile_eof(savefile)) {
 
-		uint64 hashval;
 		int64 a;
 		uint64 b;
 		char *next_field;
@@ -210,47 +398,15 @@ static uint64 purge_duplicates_pass2(msieve_obj *obj,
 
 		a = strtoll(buf, &next_field, 10);
 		b = strtoull(next_field + 1, NULL, 10);
-		key[0] = (uint32)(uint64)a;
-		key[1] = (uint32)((uint64)a >> 32);
-		key[2] = (uint32)b;
-		key[3] = (uint32)(b >> 32);
 
-		hashval = (rrxmrrxmsx_0((uint64)a) ^ rrxmrrxmsx_0((uint64)b)) >>
-                                        (64 - log2_hashtable1_size);
-
-		if (bit_table[hashval/8] & hashmask[hashval % 8]) {
-
-			/* relation collides in the first hashtable;
-			   use the second hashtable to determine
-			   rigorously if the relation was previously seen */
-
-			uint32 is_new;
-			nfs_hash64_find(obj, &duplicates, key, &is_new);
-
-			if (is_new) {
-
-				/* relation was seen for the first time;
-				   doesn't count as a duplicate */
-
-				num_relations++;
-			}
-			else {
-				/* relation was previously seen; this
-				   time it's a duplicate */
-
-				dup_write_u64(obj, out_fp, curr_relation, "duplicate relation list");
-				num_duplicates++;
-			}
-		}
-		else {
-			/* no collision; relation is unique */
-
-			num_relations++;
-		}
+		dup2_classify(obj, &duplicates, bit_table, log2_hashtable1_size,
+				a, b, curr_relation, out_fp,
+				&num_relations, &num_duplicates);
 
 		savefile_read_line(buf, sizeof(buf), savefile);
 	}
 
+relations_done:
 	logprintf(obj, "found %" PRIu64 " duplicates and %" PRIu64
 			" unique relations\n", num_duplicates, num_relations);
 	logprintf(obj, "memory use: %.1f MB\n",
@@ -259,7 +415,8 @@ static uint64 purge_duplicates_pass2(msieve_obj *obj,
 
 	/* clean up and finish */
 
-	savefile_close(savefile);
+	if (!use_cache)
+		savefile_close(savefile);
 	fclose(bad_relation_fp);
 	dup_close_output(obj, out_fp, "duplicate relation list");
 	sprintf(buf, "%s.hc", savefile->name);
@@ -267,7 +424,8 @@ static uint64 purge_duplicates_pass2(msieve_obj *obj,
 	sprintf(buf, "%s.br", savefile->name);
 	remove(buf);
 
-	free(bit_table);
+	if (!use_cache)
+		free(bit_table);
 	nfs_hash64_free(&duplicates);
 	return num_relations;
 }
@@ -306,7 +464,7 @@ static double estimate_rel_size(savefile_t *savefile) {
 #define TARGET_HITS_PER_PRIME 40.0
 
 uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
-				uint64 max_relations,
+				uint64 max_relations, uint64 ram_size,
 				uint64 *num_relations_out) {
 
 	uint32 i;
@@ -323,6 +481,11 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	uint8 *hashtable;
 	uint32 log2_hashtable1_size;
 	double rel_size = estimate_rel_size(savefile);
+	double est_num_rels = 0.0;
+	dup_ab_cache_t ab_cache;
+	uint8 *collision_bits = NULL;
+	uint64 cache_bytes = 0;
+	uint64 num_free_added = 0;
 	mpz_t *scratch;
 
 	uint8 *free_relation_bits;
@@ -379,9 +542,8 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 
 	log2_hashtable1_size = 28;
 	if (rel_size > 0.0) {
-		double num_rels; /* estimated */
-		num_rels = get_file_size(savefile->name) / rel_size;
-		log2_hashtable1_size = log(num_rels * 10.0) / M_LN2 + 0.5;
+		est_num_rels = get_file_size(savefile->name) / rel_size;
+		log2_hashtable1_size = log(est_num_rels * 10.0) / M_LN2 + 0.5;
 	}
 	if (log2_hashtable1_size < 25)
 		log2_hashtable1_size = 25;
@@ -392,6 +554,36 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 				(log2_hashtable1_size - 3), sizeof(uint8));
 	prime_bins = (uint64 *)xcalloc((size_t)1 << (32 - LOG2_BIN_SIZE),
 					sizeof(uint64));
+
+	/* If the coordinates of every relation fit comfortably in memory,
+	   keep them, so that pass 2 can skip re-reading the savefile. That
+	   read is the dominant cost of pass 2 whenever the relations live on
+	   a network filesystem. The estimate is deliberately generous -- if
+	   it is still too low the cache is dropped mid-pass and pass 2 falls
+	   back to reading the file. Budget half of RAM, which leaves room for
+	   pass 2's own bit table and collision hashtable. */
+
+	memset(&ab_cache, 0, sizeof(ab_cache));
+	if (est_num_rels > 0.0 && ram_size > 0) {
+		/* tolerate a 50% underestimate of the relation count; the
+		   budget below is checked against this cap, so the memory
+		   promise holds even if the estimate was low */
+
+		uint64 cache_limit = (uint64)(est_num_rels * 1.5) + 1024;
+		uint64 bits_bytes = (uint64)1 << (log2_hashtable1_size - 3);
+
+		cache_bytes = cache_limit * sizeof(abpair_t) + bits_bytes;
+		if (cache_bytes <= ram_size / 2) {
+			collision_bits = (uint8 *)calloc((size_t)bits_bytes, 1);
+			if (collision_bits != NULL) {
+				dup_ab_cache_init(&ab_cache, cache_limit);
+				if (!ab_cache.active) {
+					free(collision_bits);
+					collision_bits = NULL;
+				}
+			}
+		}
+	}
 
 	/* set up the structures for tracking free relations */
 
@@ -445,6 +637,17 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 			uint64 hashval;
 			uint64 blob[2];
 
+			/* keep the coordinates for pass 2. Relations that
+			   failed to parse get a placeholder: they are listed
+			   in the .br file and pass 2 skips them without
+			   looking at the cache */
+
+			if (ab_cache.active) {
+				dup_ab_cache_store(&ab_cache, my_curr_relation[i],
+						status[i] ? 0 : tmp_rel[i].a,
+						status[i] ? 0 : tmp_rel[i].b);
+			}
+
 			if (my_curr_relation[i] > 0 && (my_curr_relation[i] % 10000000 == 0)) {
 				printf("read %" PRIu64 "M relations\n", curr_relation / 1000000);
 			}
@@ -489,6 +692,15 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 						"collision list");
 					num_collisions++;
 					hashtable[hashval / 8] &= ~hashmask[hashval % 8];
+
+					/* the .hc file is still written, so that
+					   pass 2 can fall back to it; this is the
+					   same set of bins, kept in memory */
+
+					if (collision_bits != NULL) {
+						collision_bits[hashval / 8] |=
+							hashmask[hashval % 8];
+					}
 				}
 				else {
 					hashtable[hashval / 8] |= hashmask[hashval % 8];
@@ -553,6 +765,12 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 				num_malformed);
 	logprintf(obj, "found %" PRIu64 " hash collisions in %" PRIu64
 			" relations\n", num_collisions, num_relations);
+	if (ab_cache.active) {
+		logprintf(obj, "cached %" PRIu64 " relation coordinates for pass 2 (%.1f MB)\n",
+				curr_relation + 1,
+				(double)((curr_relation + 1) * sizeof(abpair_t) +
+				((uint64)1 << (log2_hashtable1_size - 3))) / 1048576);
+	}
 
 	if (max_relations == 0 || max_relations > curr_relation + 1) {
 
@@ -568,8 +786,30 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 				free_relation_bits[p / 8] &= ~hashmask[p % 8];
 			}
 		}
-		num_relations += add_free_relations(obj, fb,
-					free_relation_bits);
+		{
+			uint32 *free_primes = NULL;
+			uint32 nfree;
+
+			/* these are appended to the savefile, so pass 2 will
+			   see them as relations following everything pass 1
+			   read. The cache has to be extended to match, or the
+			   cached pass 2 would silently ignore them */
+
+			nfree = add_free_relations(obj, fb, free_relation_bits,
+					ab_cache.active ? &free_primes : NULL);
+			num_relations += nfree;
+
+			if (free_primes != NULL) {
+				uint32 k;
+				for (k = 0; k < nfree; k++) {
+					dup_ab_cache_store(&ab_cache,
+						curr_relation + 1 + k,
+						(int64)free_primes[k], 0);
+				}
+				free(free_primes);
+			}
+			num_free_added = nfree;
+		}
 	}
 	free(free_relations);
 	free(free_relation_bits);
@@ -604,9 +844,13 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	else {
 		num_relations = purge_duplicates_pass2(obj,
 					log2_hashtable1_size,
-					max_relations);
+					max_relations, &ab_cache,
+					collision_bits,
+					curr_relation + 1 + num_free_added);
 	}
 
+	dup_ab_cache_free(&ab_cache);
+	free(collision_bits);
 	free(buf);
 
 	/* the large prime cutoff for the rest of the filtering
