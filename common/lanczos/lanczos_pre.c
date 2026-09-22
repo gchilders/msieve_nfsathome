@@ -160,10 +160,12 @@ static void combine_cliques(uint32 num_dense_rows,
 	   starting value cannot win, and the prologue's row sort leaves
 	   index holding a stale permutation, so clear it first. */
 
-	{
+#if defined(__GNUC__) || defined(__clang__)
+	if (ncols <= 0x7fffffffu && num_rows <= 0x7fffffffu) {
+
 		int32 ci;
-		int32 num_cols = (int32)ncols;
 		int32 ri;
+		int32 num_cols = (int32)ncols;
 		int32 nrows = (int32)num_rows;
 
 #pragma omp parallel for schedule(static)
@@ -180,16 +182,28 @@ static void combine_cliques(uint32 num_dense_rows,
 				uint32 seen = *p;
 
 				while (seen < (uint32)ci) {
-#if defined(__GNUC__) || defined(__clang__)
 					if (__sync_bool_compare_and_swap(p,
 							seen, (uint32)ci))
 						break;
 					seen = *p;
-#else
-					*p = (uint32)ci;
-					break;
-#endif
 				}
+			}
+		}
+	}
+	else
+#endif
+	{
+		/* The maximum is only available in parallel through an atomic
+		   compare-and-swap, and a signed induction variable cannot
+		   carry a count past 2^31. Without both, do it the original
+		   way: writing in increasing order leaves the same answer, and
+		   needs no clearing pass because every row in a column is
+		   written and no other row is ever read. */
+
+		for (i = 0; i < ncols; i++) {
+			la_col_t *c = cols + i;
+			for (j = 0; j < c->weight; j++) {
+				counts[c->data[j]].index = i;
 			}
 		}
 	}
@@ -417,7 +431,13 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 	/* each column is renumbered and sorted independently of every
 	   other, and old_counts is only read here */
 
-	{
+	/* witness[row] is the XOR of the columns holding that row. Once only
+	   one is left the XOR is that column, which is what lets a singleton
+	   row name its own column without a reverse index. */
+
+#if defined(__GNUC__) || defined(__clang__)
+	if (reduced_cols <= 0x7fffffffu) {
+
 		int32 ci;
 		int32 num_cols = (int32)reduced_cols;
 
@@ -430,18 +450,25 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 				uint32 r = old_counts[col->data[k2]].index;
 
 				col->data[k2] = r;
-
-				/* XOR of the columns holding this row. Once only
-				   one is left the XOR is that column, which is
-				   what makes a singleton row name its own
-				   column without a reverse index */
-
-#if defined(__GNUC__) || defined(__clang__)
 				__sync_fetch_and_xor(witness + r, (uint32)ci);
-#else
-#pragma omp atomic update
-				witness[r] ^= (uint32)ci;
+			}
+			sort_uint32(col->data, col->weight);
+		}
+	}
+	else
 #endif
+	{
+		/* no atomic XOR to build the witnesses with, or more columns
+		   than a signed induction variable can count */
+
+		for (i = 0; i < reduced_cols; i++) {
+			la_col_t *col = cols + i;
+
+			for (j = 0; j < col->weight; j++) {
+				uint32 r = old_counts[col->data[j]].index;
+
+				col->data[j] = r;
+				witness[r] ^= i;
 			}
 			sort_uint32(col->data, col->weight);
 		}

@@ -502,8 +502,9 @@ static void build_matrix_core(msieve_obj *obj, la_col_t *cycle_list,
 						(uint64)(loc - small_ideals);
 					if (idx64 >= num_dense_rows ||
 							idx64 > UINT32_MAX) {
-						printf("error: dense matrix "
-							"row index overflow\n");
+						logprintf(obj, "error: dense "
+							"matrix row index "
+							"overflow\n");
 						exit(-1);
 					}
 					ideal_ids[j] = (uint32)idx64;
@@ -706,6 +707,25 @@ static void build_matrix(msieve_obj *obj, mpz_t n) {
 }
 
 /*------------------------------------------------------------------*/
+/* whether the matrix the build wrote is the same file the finished matrix
+   lives in, i.e. whether there is no separate scratch copy to throw away.
+   A savefile path too long to append ".mat" to cannot be that file, since
+   the work path was already checked to fit, so it is safe to answer no --
+   and much safer than formatting it into a fixed buffer unchecked */
+
+static uint32 matrix_work_is_final(msieve_obj *obj, const char *work_matrix) {
+
+	char final_matrix[256];
+	int len = snprintf(final_matrix, sizeof(final_matrix), "%s.mat",
+				obj->savefile.name);
+
+	if (len < 0 || (size_t)len >= sizeof(final_matrix))
+		return 0;
+
+	return strcmp(work_matrix, final_matrix) == 0;
+}
+
+/*------------------------------------------------------------------*/
 void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 
 	/* convert the list of relations from the sieving
@@ -886,7 +906,8 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 			logprintf(obj, "matrix is corrupt; skipping "
 					"linear algebra\n");
 			free(cols);
-			remove(work_matrix);
+			if (!matrix_work_is_final(obj, work_matrix))
+				remove(work_matrix);
 			savefile_unstage(obj);
 			return;
 		}
@@ -901,14 +922,8 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 		/* the unreduced copy has served its purpose; when it lived on
 		   scratch it is a separate file from the one just written */
 
-		{
-			char final_matrix[256];
-
-			sprintf(final_matrix, "%s.mat", obj->savefile.name);
-			if (strcmp(work_matrix, final_matrix) != 0)
-				remove(work_matrix);
-		}
-		savefile_unstage(obj);
+		if (!matrix_work_is_final(obj, work_matrix))
+			remove(work_matrix);
 
 		/* free the matrix */
 		for (i = 0; i < ncols; i++) {
@@ -957,6 +972,15 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 		MPI_TRY(MPI_Barrier(obj->mpi_la_grid))
 #endif
 	}
+
+	/* Outside the block on purpose. Filtering leaves its staged savefile
+	   in place when the matrix build is going to run in this same
+	   invocation, and the build is exactly what skip_matbuild and a
+	   restart skip -- so leaving this inside would strand a savefile the
+	   size of the uncompressed relations on the scratch directory. It is
+	   a no-op when nothing was staged. */
+
+	savefile_unstage(obj);
 
 	if (!only_matbuild) {
 		/* read the matrix in; if configured for MPI, this reads
