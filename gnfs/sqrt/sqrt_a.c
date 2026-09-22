@@ -166,10 +166,21 @@ static void mpz_poly_mul(mpz_poly_t *p1, mpz_poly_t *p2,
 		/* add in the product of p1(x) and coefficient
 		   i of p2 */
 
-		mpz_mul(tmp[0], p1->coeff[0], p2->coeff[i]);
+		/* Coefficient 0 is assigned rather than accumulated -- the
+		   shift above bubbles a stale value into tmp[0] -- but it is
+		   the same size of multiplication as the rest, and leaving it
+		   outside the loop left one full-width multiply running on
+		   its own while every other core waited. Each of these writes
+		   its own tmp[j], so folding it in is just a wider loop. */
+
 #pragma omp parallel for
-		for (j = 1; j <= d1; j++) {
-			mpz_addmul(tmp[j], p1->coeff[j], p2->coeff[i]);
+		for (j = 0; j <= d1; j++) {
+			if (j == 0)
+				mpz_mul(tmp[0], p1->coeff[0],
+						p2->coeff[i]);
+			else
+				mpz_addmul(tmp[j], p1->coeff[j],
+						p2->coeff[i]);
 		}
 		if (free_p2) {
 			mpz_realloc2(p2->coeff[i], 1);
