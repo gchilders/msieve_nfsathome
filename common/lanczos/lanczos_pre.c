@@ -140,7 +140,8 @@ uint64 count_matrix_nonzero(msieve_obj *obj,
 
 static void combine_cliques(uint32 num_dense_rows, 
 			uint32 *ncols_out, la_col_t *cols, 
-			row_count_t *counts) {
+			row_count_t *counts, uint32 num_rows,
+			uint32 *witness, uint32 *col_id, uint8 *col_bad) {
 
 	uint32 i, j;
 	uint32 ncols = *ncols_out;
@@ -148,14 +149,48 @@ static void combine_cliques(uint32 num_dense_rows,
 
 	uint32 num_merged;
 	uint32 merge_array[MAX_COL_WEIGHT];
+	uint32 touched[MAX_COL_WEIGHT];
+	uint32 num_touched;
+	uint32 id0, id1;
 
-	/* for each row, mark the last column encountered 
-	   that contains a nonzero entry in that row */
+	/* For each row, mark the last column encountered that contains a
+	   nonzero entry in that row. Writing i in increasing order leaves
+	   each row holding the largest column that contains it, so the
+	   same answer comes out of a parallel maximum -- but only if the
+	   starting value cannot win, and the prologue's row sort leaves
+	   index holding a stale permutation, so clear it first. */
 
-	for (i = 0; i < ncols; i++) {
-		la_col_t *c = cols + i;
-		for (j = 0; j < c->weight; j++) {
-			counts[c->data[j]].index = i;
+	{
+		int32 ci;
+		int32 num_cols = (int32)ncols;
+		int32 ri;
+		int32 nrows = (int32)num_rows;
+
+#pragma omp parallel for schedule(static)
+		for (ri = 0; ri < nrows; ri++)
+			counts[ri].index = 0;
+
+#pragma omp parallel for schedule(dynamic, 256)
+		for (ci = 0; ci < num_cols; ci++) {
+			la_col_t *c = cols + ci;
+			uint32 k2;
+
+			for (k2 = 0; k2 < c->weight; k2++) {
+				uint32 *p = &counts[c->data[k2]].index;
+				uint32 seen = *p;
+
+				while (seen < (uint32)ci) {
+#if defined(__GNUC__) || defined(__clang__)
+					if (__sync_bool_compare_and_swap(p,
+							seen, (uint32)ci))
+						break;
+					seen = *p;
+#else
+					*p = (uint32)ci;
+					break;
+#endif
+				}
+			}
 		}
 	}
 
@@ -189,12 +224,23 @@ static void combine_cliques(uint32 num_dense_rows,
 		    c0->weight + c1->weight >= MAX_COL_WEIGHT)
 			continue;
 
-		/* remove c0 and c1 from the row counts */
+		/* remove c0 and c1 from the row counts. Both columns stop
+		   holding these rows, so both drop out of their witnesses;
+		   note which rows to look at once the counts have settled */
 
-		for (j = 0; j < c0->weight; j++)
+		id0 = col_id[clique_base];
+		id1 = col_id[i];
+		num_touched = 0;
+		for (j = 0; j < c0->weight; j++) {
 			counts[c0->data[j]].count--;
-		for (j = 0; j < c1->weight; j++)
+			witness[c0->data[j]] ^= id0;
+			touched[num_touched++] = c0->data[j];
+		}
+		for (j = 0; j < c1->weight; j++) {
 			counts[c1->data[j]].count--;
+			witness[c1->data[j]] ^= id1;
+			touched[num_touched++] = c1->data[j];
+		}
 
 		/* merge column c1 into column c0. First merge the
 		   nonzero entries */
@@ -229,6 +275,39 @@ static void combine_cliques(uint32 num_dense_rows,
 			row_count_t *curr_row = counts + c0->data[j];
 			curr_row->count++;
 			curr_row->index = clique_base;
+			witness[c0->data[j]] ^= id0;
+		}
+
+		/* the counts have settled: a row left with one column makes
+		   that column deletable, and its witness names it. c0 also
+		   has different rows now, so its own test has to be redone */
+
+		for (j = 0; j < num_touched; j++) {
+			uint32 r = touched[j];
+			if (counts[r].count == 1)
+				col_bad[witness[r]] = 1;
+		}
+
+		/* c0's flag is recomputed rather than added to. Marks made
+		   from row counts can never go stale, because a count only
+		   ever falls, but the test on c0's largest row can: a column
+		   marked for holding nothing past POST_LANCZOS_ROWS stops
+		   qualifying the moment a merge gives it a larger row, and
+		   leaving the mark set would delete a column the original
+		   would have kept */
+
+		col_bad[id0] = 0;
+		if (c0->weight == 0 ||
+		    c0->data[c0->weight - 1] < POST_LANCZOS_ROWS) {
+			col_bad[id0] = 1;
+		}
+		else {
+			for (j = 0; j < c0->weight; j++) {
+				if (counts[c0->data[j]].count == 1) {
+					col_bad[id0] = 1;
+					break;
+				}
+			}
 		}
 
 		/* kill off c1 */
@@ -243,8 +322,10 @@ static void combine_cliques(uint32 num_dense_rows,
 	/* squeeze out the merged columns from the list */
 
 	for (i = j = 0; i < ncols; i++) {
-		if (cols[i].data != NULL)
+		if (cols[i].data != NULL) {
+			col_id[j] = col_id[i];
 			cols[j++] = cols[i];
+		}
 	}
 	*ncols_out = j;
 }
@@ -277,6 +358,9 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 	row_count_t *counts, *old_counts;
 	uint32 reduced_rows;
 	uint32 reduced_cols;
+	uint32 *witness;
+	uint32 *col_id;
+	uint8 *col_bad;
 	uint32 prune_cliques = (*ncols >= MIN_POST_LANCZOS_DIM);
 	uint64 sparse_weight;
 
@@ -289,6 +373,12 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 	reduced_rows = *nrows;
 	reduced_cols = *ncols;
 	passes = 0;
+
+	witness = (uint32 *)xcalloc((size_t)reduced_rows, sizeof(uint32));
+	col_id = (uint32 *)xmalloc((size_t)reduced_cols * sizeof(uint32));
+	col_bad = (uint8 *)xcalloc((size_t)reduced_cols, sizeof(uint8));
+	for (i = 0; i < reduced_cols; i++)
+		col_id[i] = i;
 
 	old_counts = (row_count_t *)xmalloc((size_t)reduced_rows *
 					sizeof(row_count_t));
@@ -337,13 +427,42 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 			uint32 k2;
 
 			for (k2 = 0; k2 < col->weight; k2++) {
-				col->data[k2] =
-					old_counts[col->data[k2]].index;
+				uint32 r = old_counts[col->data[k2]].index;
+
+				col->data[k2] = r;
+
+				/* XOR of the columns holding this row. Once only
+				   one is left the XOR is that column, which is
+				   what makes a singleton row name its own
+				   column without a reverse index */
+
+#if defined(__GNUC__) || defined(__clang__)
+				__sync_fetch_and_xor(witness + r, (uint32)ci);
+#else
+#pragma omp atomic update
+				witness[r] ^= (uint32)ci;
+#endif
 			}
 			sort_uint32(col->data, col->weight);
 		}
 	}
 	free(old_counts);
+
+	/* seed the deletable set: a row held by exactly one column makes
+	   that column deletable, and so do the two tests that depend only
+	   on a column's own contents */
+
+	for (i = 0; i < *nrows; i++) {
+		if (counts[i].count == 1)
+			col_bad[witness[i]] = 1;
+	}
+	for (i = 0; i < reduced_cols; i++) {
+		la_col_t *col = cols + i;
+
+		if (col->weight == 0 || (prune_cliques &&
+		    col->data[col->weight - 1] < POST_LANCZOS_ROWS))
+			col_bad[col_id[i]] = 1;
+	}
 
 	/* prune rows and columns iteratively until the matrix 
 	   has the correct aspect ratio */
@@ -361,30 +480,35 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 			/* delete columns that are empty or contain 
 			   a singleton row */
 
+			/* Which columns these are is already known: a column
+			   became deletable at the moment one of its rows was
+			   left with nowhere else to live, and that row named it
+			   through its witness. Counts here only ever fall, so a
+			   column that was marked stays deletable, and the marks
+			   made behind the sweep are picked up on the next one --
+			   which is how the original, re-reading every entry,
+			   behaved as well */
+
 			for (i = j = 0; i < reduced_cols; i++) {
 				la_col_t *col = cols + i;
 				uint32 weight = col->weight;
+				uint32 id = col_id[i];
 
-				for (k = 0; k < weight; k++) {
-					if (counts[col->data[k]].count < 2)
-						break;
-				}
-	
-				/* also delete columns that only contain
-				   entries that would be removed from the
-				   matrix before the Lanczos solver starts */
-
-				if (weight == 0 || k < weight ||
-				    (prune_cliques && col->data[weight - 1] < 
-				     			POST_LANCZOS_ROWS)) {
+				if (col_bad[id]) {
 
 					for (k = 0; k < weight; k++) {
-						counts[col->data[k]].count--;
+						uint32 r = col->data[k];
+
+						counts[r].count--;
+						witness[r] ^= id;
+						if (counts[r].count == 1)
+							col_bad[witness[r]] = 1;
 					}
 					free(col->data);
 					free(col->cycle.list);
 				}
 				else {
+					col_id[j] = id;
 					cols[j++] = cols[i];
 				}
 			}
@@ -396,7 +520,8 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 			if (prune_cliques) {
 				combine_cliques(num_dense_rows, 
 						&reduced_cols, 
-						cols, counts);
+						cols, counts, *nrows,
+						witness, col_id, col_bad);
 			}
 		} while (c != reduced_cols);
 	
@@ -422,8 +547,15 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 					i < reduced_cols; i++) {
 
 				la_col_t *col = cols + i;
+				uint32 id = col_id[i];
+
 				for (j = 0; j < col->weight; j++) {
-					counts[col->data[j]].count--;
+					uint32 r = col->data[j];
+
+					counts[r].count--;
+					witness[r] ^= id;
+					if (counts[r].count == 1)
+						col_bad[witness[r]] = 1;
 				}
 				free(col->data);
 				free(col->cycle.list);
@@ -447,6 +579,9 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 
 	if (reduced_cols == 0) {
 		free(counts);
+		free(witness);
+		free(col_id);
+		free(col_bad);
 		*nrows = reduced_rows;
 		*ncols = reduced_cols;
 		return 0;
@@ -479,6 +614,9 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 	}
 
 	free(counts);
+	free(witness);
+	free(col_id);
+	free(col_bad);
 	*nrows = reduced_rows;
 	*ncols = reduced_cols;
 	return sparse_weight;
