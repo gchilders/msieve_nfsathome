@@ -48,6 +48,43 @@ static uint32 *nfs_hash64_key_ptr(nfs_hashtable64_t *h, uint64 entry) {
 		(size_t)(entry & NFS_HASH64_SEGMENT_MASK) * h->key_words;
 }
 
+/* Look a key up without inserting it.
+
+   nfs_hash64_find() has to run serially, because the entry number it hands
+   back doubles as the ideal's identifier and those must be handed out in
+   order of first appearance. The lookup itself is only reads, though, and
+   it is where all the cache misses are, so it can be hoisted out of the
+   serial loop and run over a whole batch in parallel. Callers then only
+   need the serial pass for the keys this reports as absent.
+
+   An entry number, once assigned, never changes -- entries are only ever
+   appended and a rehash moves bucket heads, not entries -- so a result
+   from here stays valid for as long as the caller needs it. */
+
+#define NFS_HASH64_NOT_FOUND ((uint64)(-1))
+
+static uint64 nfs_hash64_probe(nfs_hashtable64_t *h, const void *blob) {
+
+	uint32 i;
+	const uint32 *key = (const uint32 *)blob;
+	uint32 bucket = nfs_hash64_bucket(key, h->key_words,
+					h->log2_bucket_count);
+	uint64 link = h->buckets[bucket];
+
+	while (link != 0) {
+		uint64 entry_num = link - 1;
+		uint32 *entry = nfs_hash64_key_ptr(h, entry_num);
+		for (i = 0; i < h->key_words; i++) {
+			if (entry[i] != key[i])
+				break;
+		}
+		if (i == h->key_words)
+			return entry_num;
+		link = *nfs_hash64_next_ptr(h, entry_num);
+	}
+	return NFS_HASH64_NOT_FOUND;
+}
+
 static void nfs_hash64_rehash(msieve_obj *obj, nfs_hashtable64_t *h,
 			      uint32 new_log2) {
 	uint64 i;

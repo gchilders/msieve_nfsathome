@@ -244,6 +244,7 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 	uint32 have_skip_list = (pass == 0);
 	mpz_t *scratch;
 	relation_lp_t *tmp_ideal;
+	uint64 *probed_ids;
 	uint64 packed_ideal_ids[TEMP_FACTOR_LIST_SIZE];
 
 	uint32 batch = 1024 * obj->num_threads;
@@ -259,6 +260,8 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 	tmp_factor_size = (uint32 *)malloc(batch * sizeof(uint32));
 	tmp_relation = (relation_t *)malloc(batch * sizeof(relation_t));
 	tmp_ideal = (relation_lp_t *)malloc(batch * sizeof(relation_lp_t));
+	probed_ids = (uint64 *)malloc((size_t)batch *
+				TEMP_FACTOR_LIST_SIZE * sizeof(uint64));
 	status = (int32 *)malloc(batch * sizeof(int32));
 
 	for (i = 0; i < batch; i++) {
@@ -342,11 +345,45 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 						filter->filtmin_r, filter->filtmin_a);
 		}
 
+		/* The identifier an ideal gets is its entry number in the
+		   hashtable, so those have to be handed out in order of first
+		   appearance and the loop below has to stay serial. The lookup
+		   is only reads though, and it is where the cache misses are,
+		   so do it for the whole batch in parallel first. The serial
+		   loop then only has to touch the table for ideals it has not
+		   seen before. */
+
+#pragma omp parallel for
+		for (i = 0; i < num_relations_read; i++) {
+			uint32 j;
+			uint64 *slot = probed_ids +
+					(size_t)i * TEMP_FACTOR_LIST_SIZE;
+
+			if (status[i] != 0)
+				continue;
+			for (j = 0; j < tmp_ideal[i].ideal_count; j++) {
+				slot[j] = nfs_hash64_probe(&unique_ideals,
+						tmp_ideal[i].ideal_list + j);
+			}
+		}
+
 		for (i = 0; i < num_relations_read; i++) {
 			if (status[i] == 0) {
 				uint32 j;
+				uint64 *slot = probed_ids +
+						(size_t)i * TEMP_FACTOR_LIST_SIZE;
 				num_relations++;
 				for (j = 0; j < tmp_ideal[i].ideal_count; j++) {
+
+					/* an ideal the parallel pass found keeps its
+					   entry number; anything else still has to go
+					   through the real lookup, which also covers
+					   two equal new ideals in the same batch */
+
+					if (slot[j] != NFS_HASH64_NOT_FOUND) {
+						packed_ideal_ids[j] = slot[j];
+						continue;
+					}
 					packed_ideal_ids[j] = nfs_hash64_find(obj,
 							&unique_ideals,
 							tmp_ideal[i].ideal_list + j, NULL);
@@ -371,6 +408,7 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 	free(tmp_factor_size);
 	free(tmp_relation);
 	free(tmp_ideal);
+	free(probed_ids);
 	free(status);
 
 	filter->lp_num_relations = num_relations;
