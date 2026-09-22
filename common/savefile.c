@@ -51,12 +51,27 @@ static const char *savefile_basename(const char *path) {
 void get_filter_tmp_name(msieve_obj *obj, char *buf,
 			size_t buf_len, const char *suffix) {
 
+	int len;
+
 	if (obj->scratch_dir == NULL) {
-		snprintf(buf, buf_len, "%s%s", obj->savefile.name, suffix);
-		return;
+		len = snprintf(buf, buf_len, "%s%s", obj->savefile.name,
+				suffix);
 	}
-	snprintf(buf, buf_len, "%s/%s%s", obj->scratch_dir,
-			savefile_basename(obj->savefile.name), suffix);
+	else {
+		len = snprintf(buf, buf_len, "%s/%s%s", obj->scratch_dir,
+				savefile_basename(obj->savefile.name), suffix);
+	}
+
+	/* truncation is not survivable here: several of these names differ
+	   only in their last characters, so a truncated .lp0 can come out
+	   equal to .lp and the rename that installs one over the other
+	   would quietly destroy the file */
+
+	if (len < 0 || (size_t)len >= buf_len) {
+		printf("error: filtering path for '%s' does not fit in %u "
+			"bytes\n", suffix, (uint32)buf_len);
+		exit(-1);
+	}
 }
 
 /*--------------------------------------------------------------------*/
@@ -94,27 +109,36 @@ uint32 savefile_stage(msieve_obj *obj) {
 	if (strcmp(staged, obj->savefile.name) == 0)
 		return 0;
 
-	sprintf(name_gz, "%s.gz", obj->savefile.name);
+	if (snprintf(name_gz, sizeof(name_gz), "%s.gz",
+			obj->savefile.name) >= (int)sizeof(name_gz)) {
+		logprintf(obj, "error: savefile path too long to stage\n");
+		exit(-1);
+	}
 #if defined(WIN32) || defined(_WIN64)
 	if (_stati64(obj->savefile.name, &dummy) == 0)
 #else
 	if (stat(obj->savefile.name, &dummy) == 0)
 #endif
-		sprintf(src, "%s", obj->savefile.name);
+		snprintf(src, sizeof(src), "%s", obj->savefile.name);
 	else
-		sprintf(src, "%s", name_gz);
+		snprintf(src, sizeof(src), "%s", name_gz);
+
+	/* Failing here cannot be shrugged off: the filtering intermediates
+	   are routed to the same directory whether or not the savefile was
+	   staged, so carrying on would only fail later with a message about
+	   some unrelated file. Say which directory is at fault instead. */
 
 	in = gzopen(src, "rb");
 	if (in == NULL) {
-		logprintf(obj, "warning: cannot stage '%s', using it in place\n", src);
-		return 0;
+		logprintf(obj, "error: cannot read '%s' to stage it\n", src);
+		exit(-1);
 	}
 	out = fopen(staged, "wb");
 	if (out == NULL) {
-		logprintf(obj, "warning: cannot write '%s', "
-				"using the savefile in place\n", staged);
+		logprintf(obj, "error: cannot write to scratch directory '%s'\n",
+				obj->scratch_dir);
 		gzclose(in);
-		return 0;
+		exit(-1);
 	}
 
 	buf = (char *)xmalloc(SAVEFILE_STAGE_BUF);
@@ -124,16 +148,32 @@ uint32 savefile_stage(msieve_obj *obj) {
 			logprintf(obj, "error: write failed staging savefile\n");
 			free(buf); fclose(out); gzclose(in);
 			remove(staged);
-			return 0;
+			exit(-1);
 		}
 		total += (uint64)n;
+	}
+
+	/* gzread reports both end of stream and failure by returning a
+	   value that is not positive. Treating a failure as the end would
+	   leave a truncated copy that every later pass reads as the whole
+	   dataset, quietly filtering a subset of the relations. */
+
+	if (n < 0) {
+		int zerr = 0;
+		const char *msg = gzerror(in, &zerr);
+
+		logprintf(obj, "error: read failed staging '%s': %s\n",
+				src, msg ? msg : "unknown");
+		free(buf); fclose(out); gzclose(in);
+		remove(staged);
+		exit(-1);
 	}
 	free(buf);
 	gzclose(in);
 	if (fclose(out) != 0) {
 		logprintf(obj, "error: cannot finalize staged savefile\n");
 		remove(staged);
-		return 0;
+		exit(-1);
 	}
 
 	obj->savefile.staged_name = strdup(staged);

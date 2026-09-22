@@ -734,6 +734,9 @@ void filter_purge_singletons_core(msieve_obj *obj,
 
 	logprintf(obj, "begin with %u relations and %u unique ideals\n",
 					num_relations, num_ideals);
+	logprintf(obj, "memory use: %.1f MB\n",
+			(double)((uint64)num_ideals * 2 * sizeof(uint32) +
+			(uint64)pending_alloc * sizeof(uint32)) / 1048576);
 
 	/* while singletons were found */
 
@@ -753,7 +756,7 @@ void filter_purge_singletons_core(msieve_obj *obj,
 		pending_num = 0;
 		pending_overflow = 0;
 
-#pragma omp parallel for private(j) reduction(+:new_num_relations) 				reduction(+:deleted_this_pass)
+#pragma omp parallel for private(j) reduction(+:new_num_relations) reduction(+:deleted_this_pass)
 		for (i = 0; i < orig_num_relations; i++) {
 			relation_ideal_t *my_relation = relation_ptr[i];
 			uint32 curr_num_ideals = my_relation->ideal_count;

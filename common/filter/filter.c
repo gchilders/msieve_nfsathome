@@ -30,7 +30,14 @@ $Id$
    with a magic number carrying a layout tag so a stale file is rejected
    rather than misread. */
 
-#define MERGE_CKPT_MAGIC "MSVMRG01"
+/* The payload is a raw dump of relation_set_t fields and pool-allocated
+   arrays, so a file written by a build with a different layout must be
+   refused rather than reinterpreted. The magic alone cannot do that -- it
+   is a constant nobody remembers to change -- so the header also carries
+   the sizes and packing the reader depends on. */
+
+#define MERGE_CKPT_MAGIC "MSVMRG"
+#define MERGE_CKPT_VERSION 1
 #define MERGE_CKPT_BUFSIZE (4 * 1024 * 1024)
 
 typedef struct {
@@ -111,7 +118,16 @@ int32 filter_merge_checkpoint_save(msieve_obj *obj, merge_t *merge,
 	io.avail = 0;
 	io.failed = 0;
 
-	ckpt_write(&io, MERGE_CKPT_MAGIC, 8);
+	{
+		uint32 layout[4];
+
+		layout[0] = MERGE_CKPT_VERSION;
+		layout[1] = (uint32)sizeof(relation_set_t);
+		layout[2] = RELSET_ACTIVE_BITS;
+		layout[3] = (uint32)sizeof(uint32);
+		ckpt_write(&io, MERGE_CKPT_MAGIC, 6);
+		ckpt_write(&io, layout, sizeof(layout));
+	}
 	ckpt_write(&io, &merge->num_relsets, sizeof(uint32));
 	ckpt_write(&io, &merge->num_ideals, sizeof(uint32));
 	ckpt_write(&io, &merge->num_extra_relations, sizeof(uint32));
@@ -154,7 +170,8 @@ int32 filter_merge_checkpoint_load(msieve_obj *obj, merge_t *merge,
 
 	uint32 i;
 	ckpt_io_t io;
-	char magic[8];
+	char magic[6];
+	uint32 layout[4];
 	uint32 num_relsets;
 	time_t start = time(NULL);
 
@@ -167,10 +184,22 @@ int32 filter_merge_checkpoint_load(msieve_obj *obj, merge_t *merge,
 	io.avail = 0;
 	io.failed = 0;
 
-	if (!ckpt_read(&io, magic, 8) ||
-	    memcmp(magic, MERGE_CKPT_MAGIC, 8) != 0) {
-		logprintf(obj, "error: '%s' is not a merge checkpoint "
-				"for this build\n", path);
+	if (!ckpt_read(&io, magic, 6) ||
+	    memcmp(magic, MERGE_CKPT_MAGIC, 6) != 0 ||
+	    !ckpt_read(&io, layout, sizeof(layout))) {
+		logprintf(obj, "error: '%s' is not a merge checkpoint\n",
+				path);
+		free(io.buf);
+		fclose(io.fp);
+		return -1;
+	}
+	if (layout[0] != MERGE_CKPT_VERSION ||
+	    layout[1] != (uint32)sizeof(relation_set_t) ||
+	    layout[2] != RELSET_ACTIVE_BITS ||
+	    layout[3] != (uint32)sizeof(uint32)) {
+		logprintf(obj, "error: '%s' was written by a build with a "
+				"different relation-set layout; delete it and "
+				"let it be rebuilt\n", path);
 		free(io.buf);
 		fclose(io.fp);
 		return -1;
@@ -346,12 +375,21 @@ int32 filter_make_relsets(msieve_obj *obj, filter_t *filter,
 	filter_merge_init(obj, filter);
 	filter_merge_2way(obj, filter, merge);
 
-	/* this is the last point at which the merge input is still
-	   exactly reproducible, so it is what a checkpoint records */
+	/* This is the last point at which the merge input is still exactly
+	   reproducible, so it is what a checkpoint records. do_partial_
+	   filtering() calls this routine again for each retry at a higher
+	   max_weight, and rewriting a multi-gigabyte dump every time would
+	   cost minutes for nothing, so only write one if there is none. */
 
-	if (ckpt_path != NULL)
-		filter_merge_checkpoint_save(obj, merge, min_cycles,
-				ckpt_path);
+	if (ckpt_path != NULL) {
+		FILE *probe = fopen(ckpt_path, "rb");
+
+		if (probe != NULL)
+			fclose(probe);
+		else
+			filter_merge_checkpoint_save(obj, merge, min_cycles,
+					ckpt_path);
+	}
 
 	return filter_merge_full(obj, merge, min_cycles);
 }
