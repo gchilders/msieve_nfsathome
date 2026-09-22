@@ -622,6 +622,75 @@ static uint64 *load_source_relation_numbers(msieve_obj *obj,
 	return source_relidx;
 }
 
+/* Inflating the savefile is the bulk of this phase -- about 50 s of the 64 s
+   it takes on the C159 medium job -- and zlib cannot be split across threads.
+   It does not have to sit between the parallel parses though, only stay ahead
+   of them, so the sequential reader state lives here and one thread fills the
+   next batch while the rest parse the batch already in hand. */
+
+typedef struct {
+	savefile_t *savefile;
+	uint32 *relidx_list;
+	uint64 *source_relidx_list;
+	uint32 num_unique_relidx;
+	uint32 next_idx;        /* relations handed out so far */
+	uint64 curr_relation;   /* ordinal of the last line examined */
+	uint32 batch;
+	uint32 done;
+} cyc_reader_t;
+
+static void cyc_read_batch(msieve_obj *obj, cyc_reader_t *r, char *buf,
+			uint32 *dense, uint64 *source, uint32 *count_out) {
+
+	uint32 i;
+	uint32 count = 0;
+
+	if (r->done) {
+		*count_out = 0;
+		return;
+	}
+
+	for (i = 0; i < r->batch; i++) {
+		char *buf_i = buf + i * LINE_BUF_SIZE;
+		uint64 target;
+
+		savefile_read_line(buf_i, LINE_BUF_SIZE * sizeof(char),
+				r->savefile);
+		if (savefile_eof(r->savefile)) {
+			r->done = 1;
+			break;
+		}
+		if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
+			i--;
+			continue;
+		}
+
+		r->curr_relation++;
+		target = r->source_relidx_list[r->next_idx + count];
+		if (r->curr_relation < target) {
+			i--;
+			continue;
+		}
+		if (r->curr_relation > target) {
+			logprintf(obj, "error: cannot locate source relation %" PRIu64 "\n",
+					target);
+			exit(-1);
+		}
+
+		dense[i] = r->relidx_list[r->next_idx + count];
+		source[i] = r->curr_relation;
+		count++;
+		if (r->next_idx + count == r->num_unique_relidx) {
+			r->done = 1;
+			break;
+		}
+	}
+
+	r->next_idx += count;
+	*count_out = count;
+}
+
+/*--------------------------------------------------------------------*/
 static void nfs_get_cycle_relations(msieve_obj *obj,
 				factor_base_t *fb, uint32 num_cycles,
 				la_col_t *cycle_list,
@@ -643,7 +712,13 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 
 	uint32 *my_dense_relation;
 	uint64 *my_source_relation;
-	uint64 curr_relation;
+	uint32 *my_dense_relation2;
+	uint64 *my_source_relation2;
+	char *buf2;
+	char *buf_cur, *buf_nxt, *tmp_buf;
+	uint32 *dense_cur, *dense_nxt, *tmp_dense;
+	uint64 *source_cur, *source_nxt, *tmp_source;
+	cyc_reader_t rd;
 	uint32 *tmp_factor_size;
 	relation_t *tmp_relation;
 	mpz_t *scratch;
@@ -656,6 +731,12 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 	my_dense_relation = (uint32 *)malloc(batch * sizeof(uint32));
 	my_source_relation = (uint64 *)malloc(batch * sizeof(uint64));
 	buf = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
+	my_dense_relation2 = (uint32 *)malloc(batch * sizeof(uint32));
+	my_source_relation2 = (uint64 *)malloc(batch * sizeof(uint64));
+	buf2 = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
+	buf_cur = buf; buf_nxt = buf2;
+	dense_cur = my_dense_relation; dense_nxt = my_dense_relation2;
+	source_cur = my_source_relation; source_nxt = my_source_relation2;
 	scratch = (mpz_t *)malloc(batch * sizeof(mpz_t));
 	tmp_factor_size = (uint32 *)malloc(batch * sizeof(uint32));
 	tmp_relation = (relation_t *)malloc(batch * sizeof(relation_t));
@@ -713,10 +794,13 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 		}
 		free(my_dense_relation);
 		free(my_source_relation);
+		free(my_dense_relation2);
+		free(my_source_relation2);
 		free(scratch);
 		free(tmp_factor_size);
 		free(tmp_relation);
 		free(buf);
+		free(buf2);
 		return;
 	}
 
@@ -726,65 +810,69 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 	savefile_open(savefile, SAVEFILE_READ);
 	rlist = (relation_t *)xmalloc((size_t)num_unique_relidx * sizeof(relation_t));
 
-	curr_relation = UINT64_MAX;
 	j = 0;
 	expected_relidx = num_unique_relidx;
 
-	do {
-		num_relations_read = 0;
-		for (i = 0; i < batch; i++) {
-			char *buf_i = buf + i * LINE_BUF_SIZE;
-			uint64 target;
-			savefile_read_line(buf_i, LINE_BUF_SIZE * sizeof(char), savefile);
-			if (savefile_eof(savefile))
-				break;
-			if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
-				i--;
-				continue;
-			}
+	rd.savefile = savefile;
+	rd.relidx_list = relidx_list;
+	rd.source_relidx_list = source_relidx_list;
+	rd.num_unique_relidx = num_unique_relidx;
+	rd.next_idx = 0;
+	rd.curr_relation = UINT64_MAX;
+	rd.batch = batch;
+	rd.done = 0;
 
-			curr_relation++;
-			target = source_relidx_list[j + num_relations_read];
-			if (curr_relation < target) {
-				i--;
-				continue;
-			}
-			if (curr_relation > target) {
-				logprintf(obj, "error: cannot locate source relation %" PRIu64 "\n",
-						target);
-				exit(-1);
-			}
+	cyc_read_batch(obj, &rd, buf_cur, dense_cur, source_cur,
+			&num_relations_read);
 
-			my_dense_relation[i] = relidx_list[j + num_relations_read];
-			my_source_relation[i] = curr_relation;
-			num_relations_read++;
-			if (j + num_relations_read == num_unique_relidx)
-				break;
-		}
+	while (num_relations_read > 0) {
 
-#pragma omp parallel for
-		for (i = 0; i < num_relations_read; i++) {
-			int32 status;
-			char *buf_i = buf + i * LINE_BUF_SIZE;
-			status = nfs_read_relation(buf_i, fb, &tmp_relation[i],
+		uint32 next_count = 0;
+
+#pragma omp parallel
+		{
+			/* one thread runs ahead into the other buffer while
+			   the rest parse this batch; the barrier ending the
+			   worksharing loop keeps them in step */
+
+#pragma omp single nowait
+			cyc_read_batch(obj, &rd, buf_nxt, dense_nxt,
+					source_nxt, &next_count);
+
+#pragma omp for schedule(dynamic, 64)
+			for (i = 0; i < num_relations_read; i++) {
+				int32 status;
+				char *buf_i = buf_cur + i * LINE_BUF_SIZE;
+
+				status = nfs_read_relation(buf_i, fb,
+						&tmp_relation[i],
 						&tmp_factor_size[i], compress,
 						scratch[i], 0);
-			if (status) {
-				logprintf(obj, "error: relation %" PRIu64 " corrupt\n",
-						my_source_relation[i]);
-				exit(-1);
+				if (status) {
+					logprintf(obj, "error: relation %" PRIu64 " corrupt\n",
+							source_cur[i]);
+					exit(-1);
+				}
 			}
 		}
 
 		for (i = 0; i < num_relations_read; i++) {
 			relation_t *r = rlist + j++;
 			*r = tmp_relation[i];
-			r->rel_index = my_dense_relation[i];
+			r->rel_index = dense_cur[i];
 			r->factors = (uint8 *)xmalloc(tmp_factor_size[i] * sizeof(uint8));
 			memcpy(r->factors, tmp_relation[i].factors,
 				tmp_factor_size[i] * sizeof(uint8));
 		}
-	} while (num_relations_read == batch && j < num_unique_relidx);
+
+		/* swap the views, not the allocations; buf/my_* stay the
+		   owning pointers so the frees below cannot double up */
+
+		tmp_buf = buf_cur; buf_cur = buf_nxt; buf_nxt = tmp_buf;
+		tmp_dense = dense_cur; dense_cur = dense_nxt; dense_nxt = tmp_dense;
+		tmp_source = source_cur; source_cur = source_nxt; source_nxt = tmp_source;
+		num_relations_read = next_count;
+	}
 
 	if (j != expected_relidx) {
 		logprintf(obj, "error: only read %u of %u relations required by cycles\n",
@@ -805,10 +893,13 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 	}
 	free(my_dense_relation);
 	free(my_source_relation);
+	free(my_dense_relation2);
+	free(my_source_relation2);
 	free(scratch);
 	free(tmp_factor_size);
 	free(tmp_relation);
 	free(buf);
+	free(buf2);
 }
 
 /*--------------------------------------------------------------------*/
