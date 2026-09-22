@@ -109,12 +109,26 @@ typedef struct {
 	uint64 count;
 } rat_prime_t;
 
+/* Both of the tallies below walk every relation of the dependency doing
+   one hashtable_find() per factor -- on a C223 dependency that is on the
+   order of 600 million of them each, and every one is two dependent cache
+   misses issued by itself. Resolve them in chunks instead: a parallel pass
+   probes the table read-only for the keys it already holds, and the serial
+   pass that follows only has to insert the ones that were missing. Neither
+   tally cares about insertion order -- one checks that every count is even,
+   the other builds a product modulo n, and multiplication commutes -- so
+   the result does not depend on how the work was split. */
+
+#define SQRT_TALLY_CHUNK 8192
+
+/* relation_t.num_factors_r is a uint8 */
+#define SQRT_MAX_RAT_FACTORS 256
+
 static uint32 rat_square_root(relation_t *rlist, uint32 num_relations,
 				mpz_t n, mpz_t sqrt_r) {
-	uint32 i, j, num_primes;
+	uint32 i, num_primes;
 	hashtable_t h;
 	uint32 already_seen;
-	uint32 array_size;
 	uint32 status = 0;
 	rat_prime_t *curr;
 	rat_prime_t **curr_array;
@@ -125,18 +139,76 @@ static uint32 rat_square_root(relation_t *rlist, uint32 num_relations,
 	hashtable_init(&h, (uint32)WORDS_IN(rat_prime_t), 
 				(uint32)WORDS_IN(uint64));
 
-	for (i = 0; i < num_relations; i++) {
-		relation_t *r = rlist + i;
+	{
+		uint64 *keys = (uint64 *)xmalloc((size_t)SQRT_TALLY_CHUNK *
+					SQRT_MAX_RAT_FACTORS *
+					sizeof(uint64));
+		uint32 *ords = (uint32 *)xmalloc((size_t)SQRT_TALLY_CHUNK *
+					SQRT_MAX_RAT_FACTORS *
+					sizeof(uint32));
+		uint32 chunk_start;
 
-		for (j = array_size = 0; j < r->num_factors_r; j++) {
-			uint64 p = decompress_p(r->factors, &array_size);
-			curr = (rat_prime_t *)hashtable_find(&h, &p, NULL,
-							    &already_seen);
-			if (!already_seen)
-				curr->count = 1;
-			else
-				curr->count++;
+		for (chunk_start = 0; chunk_start < num_relations;
+					chunk_start += SQRT_TALLY_CHUNK) {
+
+			int32 ci;
+			int32 chunk_size = MIN(SQRT_TALLY_CHUNK,
+					num_relations - chunk_start);
+
+#pragma omp parallel for schedule(dynamic, 64)
+			for (ci = 0; ci < chunk_size; ci++) {
+
+				relation_t *r = rlist + chunk_start + ci;
+				uint64 *my_keys = keys +
+					(size_t)ci * SQRT_MAX_RAT_FACTORS;
+				uint32 *my_ords = ords +
+					(size_t)ci * SQRT_MAX_RAT_FACTORS;
+				uint32 k, my_size = 0;
+
+				for (k = 0; k < r->num_factors_r; k++) {
+					uint64 p = decompress_p(r->factors,
+								&my_size);
+
+					my_keys[k] = p;
+					my_ords[k] = hashtable_probe(&h, &p);
+				}
+			}
+
+			for (ci = 0; ci < chunk_size; ci++) {
+
+				relation_t *r = rlist + chunk_start + ci;
+				uint64 *my_keys = keys +
+					(size_t)ci * SQRT_MAX_RAT_FACTORS;
+				uint32 *my_ords = ords +
+					(size_t)ci * SQRT_MAX_RAT_FACTORS;
+				uint32 k;
+
+				for (k = 0; k < r->num_factors_r; k++) {
+					uint32 ord = my_ords[k];
+
+					if (ord == HASHTABLE_NOT_FOUND) {
+						curr = (rat_prime_t *)
+							hashtable_find(&h,
+								my_keys + k,
+								NULL,
+								&already_seen);
+						if (!already_seen)
+							curr->count = 1;
+						else
+							curr->count++;
+					}
+					else {
+						curr = (rat_prime_t *)
+							hashtable_entry(&h,
+									ord);
+						curr->count++;
+					}
+				}
+			}
 		}
+
+		free(keys);
+		free(ords);
 	}
 
 	/* verify all such counts are even, and form the 
@@ -212,7 +284,7 @@ static uint32 verify_alg_ideal_powers(relation_t *rlist,
 					uint32 num_relations,
 					uint32 *num_free_relations) {
 
-	uint32 i, j, num_ideals;
+	uint32 i, num_ideals;
 	hashtable_t h;
 	uint32 already_seen;
 	alg_prime_t *curr;
@@ -226,29 +298,93 @@ static uint32 verify_alg_ideal_powers(relation_t *rlist,
 	hashtable_init(&h, (uint32)WORDS_IN(alg_prime_t),
 			(uint32)WORDS_IN(ideal_t));
 
-	for (i = 0; i < num_relations; i++) {
-		relation_t *r = rlist + i;
-		relation_lp_t rlp;
+	{
+		ideal_t *keys = (ideal_t *)xmalloc((size_t)SQRT_TALLY_CHUNK *
+					TEMP_FACTOR_LIST_SIZE *
+					sizeof(ideal_t));
+		uint32 *ords = (uint32 *)xmalloc((size_t)SQRT_TALLY_CHUNK *
+					TEMP_FACTOR_LIST_SIZE *
+					sizeof(uint32));
+		uint32 *nkeys = (uint32 *)xmalloc((size_t)SQRT_TALLY_CHUNK *
+					sizeof(uint32));
+		uint32 chunk_start;
+		uint32 free_rels = 0;
 
-		find_large_ideals(r, &rlp, 0, 0);
+		for (chunk_start = 0; chunk_start < num_relations;
+					chunk_start += SQRT_TALLY_CHUNK) {
 
-		for (j = 0; j < rlp.ideal_count; j++) {
-			ideal_t *curr_ideal = rlp.ideal_list + j;
+			int32 ci;
+			int32 chunk_size = MIN(SQRT_TALLY_CHUNK,
+					num_relations - chunk_start);
 
-			if (curr_ideal->rat_or_alg == RATIONAL_IDEAL)
-				continue;
+#pragma omp parallel for schedule(dynamic, 64) reduction(+:free_rels)
+			for (ci = 0; ci < chunk_size; ci++) {
 
-			curr = (alg_prime_t *)hashtable_find(&h, curr_ideal, 
-						NULL, &already_seen);
+				relation_t *r = rlist + chunk_start + ci;
+				ideal_t *my_keys = keys +
+					(size_t)ci * TEMP_FACTOR_LIST_SIZE;
+				uint32 *my_ords = ords +
+					(size_t)ci * TEMP_FACTOR_LIST_SIZE;
+				relation_lp_t rlp;
+				uint32 k, n2 = 0;
 
-			if (!already_seen)
-				curr->count = 1;
-			else
-				curr->count++;
+				find_large_ideals(r, &rlp, 0, 0);
+
+				for (k = 0; k < rlp.ideal_count; k++) {
+					ideal_t *curr_ideal =
+						rlp.ideal_list + k;
+
+					if (curr_ideal->rat_or_alg ==
+							RATIONAL_IDEAL)
+						continue;
+
+					my_keys[n2] = *curr_ideal;
+					my_ords[n2] = hashtable_probe(&h,
+							curr_ideal);
+					n2++;
+				}
+				nkeys[ci] = n2;
+
+				if (r->b == 0)
+					free_rels++;
+			}
+
+			for (ci = 0; ci < chunk_size; ci++) {
+
+				ideal_t *my_keys = keys +
+					(size_t)ci * TEMP_FACTOR_LIST_SIZE;
+				uint32 *my_ords = ords +
+					(size_t)ci * TEMP_FACTOR_LIST_SIZE;
+				uint32 k;
+
+				for (k = 0; k < nkeys[ci]; k++) {
+					uint32 ord = my_ords[k];
+
+					if (ord == HASHTABLE_NOT_FOUND) {
+						curr = (alg_prime_t *)
+							hashtable_find(&h,
+								my_keys + k,
+								NULL,
+								&already_seen);
+						if (!already_seen)
+							curr->count = 1;
+						else
+							curr->count++;
+					}
+					else {
+						curr = (alg_prime_t *)
+							hashtable_entry(&h,
+									ord);
+						curr->count++;
+					}
+				}
+			}
 		}
 
-		if (r->b == 0)
-			(*num_free_relations)++;
+		*num_free_relations = free_rels;
+		free(keys);
+		free(ords);
+		free(nkeys);
 	}
 
 	/* verify each ideal occurs an even number of times */
@@ -388,6 +524,17 @@ uint32 nfs_find_factors(msieve_obj *obj, mpz_t n,
 		uint32 num_free_relations;
 		relation_t *rlist;
 		abpair_t *abpairs;
+
+		/* Every dependency re-reads the whole savefile, and reading
+		   a compressed one off a network share is the largest single
+		   cost in this phase. Staging it on scratch pays for itself
+		   across repeated reads but not across one, and the first
+		   dependency yields a factor about half the time -- so wait
+		   until one has actually failed before paying for it. This
+		   is a no-op without -scratch, and after the first time. */
+
+		if (i > dep_lower)
+			savefile_stage(obj);
 
 		logprintf(obj, "reading relations for dependency %u\n", i);
 
@@ -557,6 +704,8 @@ uint32 nfs_find_factors(msieve_obj *obj, mpz_t n,
 	}
 
 finished:
+	savefile_unstage(obj);
+
 	cpu_time = time(NULL) - cpu_time;
 	logprintf(obj, "sqrtTime: %u\n", (uint32)cpu_time);
 

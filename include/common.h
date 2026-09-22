@@ -244,6 +244,14 @@ static INLINE uint32 hash_function(uint32 *data, uint32 num_words) {
 
 uint32 hashtable_probe(hashtable_t *h, void *blob);
 
+/* the entry an ordinal refers to. Only valid until the next insertion,
+   which may move match_array */
+
+static INLINE void *hashtable_entry(hashtable_t *h, uint32 ordinal) {
+	return h->match_array +
+		(size_t)(ordinal + 1) * (h->blob_words + 1);
+}
+
 void *hashtable_find(hashtable_t *h, void *blob, 
 		uint32 *ordinal_id, uint32 *present);
 
