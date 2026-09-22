@@ -616,6 +616,18 @@ void heap_remove_relset(heap_t *active_heap,
 	/* remove the relation set by removing each of its
 	   large ideals from the heap */
 
+	/* Each iteration below unlinks the ideal from its heap bucket, edits
+	   its adjacency list and relinks it under a new Markowitz key, which
+	   is several dependent random accesses into structures far larger
+	   than cache -- about 1200 cycles per ideal. The ideals themselves
+	   are all listed here though, so start their loads together. */
+
+#if defined(__GNUC__) || defined(__clang__)
+	for (i = 0; i < r->num_large_ideals; i++)
+		__builtin_prefetch(ideal_list->list +
+				r->data[r->num_relations + i]);
+#endif
+
 	for (i = 0; i < r->num_large_ideals; i++) {
 		uint32 ideal = r->data[r->num_relations + i];
 		ideal_set_t *ideal_set = ideal_list->list + ideal;
