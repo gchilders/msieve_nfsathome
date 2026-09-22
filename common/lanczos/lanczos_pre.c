@@ -19,26 +19,78 @@ typedef struct {
 	uint32 count;
 } row_count_t;
 
+
 static int compare_row_count(const void *x, const void *y) {
 	row_count_t *xx = (row_count_t *)x;
 	row_count_t *yy = (row_count_t *)y;
 	return yy->count - xx->count;
 }
 
-static int compare_uint32(const void *x, const void *y) {
-	uint32 *xx = (uint32 *)x;
-	uint32 *yy = (uint32 *)y;
-	if (*xx > *yy)
-		return 1;
-	if (*xx < *yy)
-		return -1;
-	return 0;
-}
-
 static int compare_weight(const void *x, const void *y) {
 	la_col_t *xx = (la_col_t *)x;
 	la_col_t *yy = (la_col_t *)y;
 	return xx->weight - yy->weight;
+}
+
+/* Sorting each column's row numbers is the single most expensive thing
+   reduce_matrix() does: qsort() costs about 7000 cycles to order the ~90
+   entries of one column, nearly all of it the indirect call per comparison
+   and the size-generic element swap. A specialised sort of uint32 with the
+   comparison inlined does the same job for a fraction of that, and the
+   result is identical -- these are just row numbers in increasing order. */
+
+#define SORT_INSERT_CUTOFF 20
+
+static void sort_uint32(uint32 *a, uint32 n) {
+
+	while (n > SORT_INSERT_CUTOFF) {
+		uint32 pivot, i, j;
+		uint32 m = n / 2;
+
+		/* median of first, middle and last, moved to a[0] */
+
+		if (a[m] < a[0]) { pivot = a[m]; a[m] = a[0]; a[0] = pivot; }
+		if (a[n-1] < a[0]) { pivot = a[n-1]; a[n-1] = a[0]; a[0] = pivot; }
+		if (a[m] < a[n-1]) { pivot = a[m]; a[m] = a[n-1]; a[n-1] = pivot; }
+		pivot = a[n-1];
+
+		i = 0;
+		j = n - 1;
+		for (;;) {
+			while (a[++i] < pivot)
+				;
+			while (a[--j] > pivot)
+				;
+			if (i >= j)
+				break;
+			{ uint32 t = a[i]; a[i] = a[j]; a[j] = t; }
+		}
+		{ uint32 t = a[i]; a[i] = a[n-1]; a[n-1] = t; }
+
+		/* recurse into the smaller side, loop on the larger, so the
+		   stack stays O(log n) whatever the input looks like */
+
+		if (i < n - i - 1) {
+			sort_uint32(a, i);
+			a += i + 1;
+			n -= i + 1;
+		}
+		else {
+			sort_uint32(a + i + 1, n - i - 1);
+			n = i;
+		}
+	}
+
+	{
+		uint32 i, j;
+
+		for (i = 1; i < n; i++) {
+			uint32 v = a[i];
+			for (j = i; j > 0 && a[j-1] > v; j--)
+				a[j] = a[j-1];
+			a[j] = v;
+		}
+	}
 }
 
 /*------------------------------------------------------------------*/
@@ -187,6 +239,7 @@ static void combine_cliques(uint32 num_dense_rows,
 		c1->cycle.list = NULL;
 	}
 
+
 	/* squeeze out the merged columns from the list */
 
 	for (i = j = 0; i < ncols; i++) {
@@ -249,7 +302,6 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 		for (j = 0; j < cols[i].weight; j++)
 			old_counts[cols[i].data[j]].count++;
 	}
-
 	/* permute the row numbers so that the most dense rows
 	   are first, empty rows are squeezed out, and the remaining
 	   rows are sorted within each column. Doing this here is 
@@ -272,13 +324,24 @@ uint64 reduce_matrix(msieve_obj *obj, uint32 *nrows,
 	}
 	reduced_rows = j;
 
-	for (i = 0; i < reduced_cols; i++) {
-		la_col_t *col = cols + i;
-		for (j = 0; j < col->weight; j++) {
-			col->data[j] = old_counts[col->data[j]].index;
+	/* each column is renumbered and sorted independently of every
+	   other, and old_counts is only read here */
+
+	{
+		int32 ci;
+		int32 num_cols = (int32)reduced_cols;
+
+#pragma omp parallel for schedule(dynamic, 256)
+		for (ci = 0; ci < num_cols; ci++) {
+			la_col_t *col = cols + ci;
+			uint32 k2;
+
+			for (k2 = 0; k2 < col->weight; k2++) {
+				col->data[k2] =
+					old_counts[col->data[k2]].index;
+			}
+			sort_uint32(col->data, col->weight);
 		}
-		qsort(col->data, (size_t)col->weight, 
-				sizeof(uint32), compare_uint32);
 	}
 	free(old_counts);
 
