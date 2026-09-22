@@ -16,6 +16,223 @@ $Id$
 #include "merge_util.h"
 
 /*--------------------------------------------------------------------*/
+/* Checkpointing the merge input.
+
+   Everything before the full merge -- duplicate removal, the singleton
+   passes, clique removal, the 2-way merge -- is deterministic and takes
+   the large majority of a filtering run, while the full merge is the
+   part worth experimenting on. Writing the relation sets out once, just
+   before the full merge starts, lets later runs restart from there and
+   iterate on the merge in isolation.
+
+   This is a developer tool, so the format is whatever is fastest to read
+   back on the same machine: native byte order and native struct widths,
+   with a magic number carrying a layout tag so a stale file is rejected
+   rather than misread. */
+
+#define MERGE_CKPT_MAGIC "MSVMRG01"
+#define MERGE_CKPT_BUFSIZE (4 * 1024 * 1024)
+
+typedef struct {
+	FILE *fp;
+	uint8 *buf;
+	size_t used;
+	size_t avail;
+	uint32 failed;
+} ckpt_io_t;
+
+static void ckpt_flush(ckpt_io_t *io) {
+
+	if (io->used && fwrite(io->buf, 1, io->used, io->fp) != io->used)
+		io->failed = 1;
+	io->used = 0;
+}
+
+static void ckpt_write(ckpt_io_t *io, const void *src, size_t len) {
+
+	const uint8 *p = (const uint8 *)src;
+
+	while (len) {
+		size_t n = MERGE_CKPT_BUFSIZE - io->used;
+
+		if (n == 0) {
+			ckpt_flush(io);
+			continue;
+		}
+		if (n > len)
+			n = len;
+		memcpy(io->buf + io->used, p, n);
+		io->used += n;
+		p += n;
+		len -= n;
+	}
+}
+
+static uint32 ckpt_read(ckpt_io_t *io, void *dst, size_t len) {
+
+	uint8 *p = (uint8 *)dst;
+
+	while (len) {
+		size_t n = io->avail - io->used;
+
+		if (n == 0) {
+			io->avail = fread(io->buf, 1, MERGE_CKPT_BUFSIZE, io->fp);
+			io->used = 0;
+			if (io->avail == 0)
+				return 0;
+			continue;
+		}
+		if (n > len)
+			n = len;
+		memcpy(p, io->buf + io->used, n);
+		io->used += n;
+		p += n;
+		len -= n;
+	}
+	return 1;
+}
+
+/*--------------------------------------------------------------------*/
+int32 filter_merge_checkpoint_save(msieve_obj *obj, merge_t *merge,
+				uint32 min_cycles, const char *path) {
+
+	uint32 i;
+	ckpt_io_t io;
+	uint64 total_words = 0;
+	time_t start = time(NULL);
+
+	io.fp = fopen(path, "wb");
+	if (io.fp == NULL) {
+		logprintf(obj, "error: cannot create merge checkpoint '%s'\n", path);
+		return -1;
+	}
+	io.buf = (uint8 *)xmalloc(MERGE_CKPT_BUFSIZE);
+	io.used = 0;
+	io.avail = 0;
+	io.failed = 0;
+
+	ckpt_write(&io, MERGE_CKPT_MAGIC, 8);
+	ckpt_write(&io, &merge->num_relsets, sizeof(uint32));
+	ckpt_write(&io, &merge->num_ideals, sizeof(uint32));
+	ckpt_write(&io, &merge->num_extra_relations, sizeof(uint32));
+	ckpt_write(&io, &min_cycles, sizeof(uint32));
+	ckpt_write(&io, &merge->target_density, sizeof(double));
+
+	for (i = 0; i < merge->num_relsets; i++) {
+		relation_set_t *r = merge->relset_array + i;
+		uint16 active = (uint16)relation_set_num_active(r);
+		uint32 words = (uint32)r->num_relations + r->num_large_ideals;
+
+		ckpt_write(&io, &r->num_relations, sizeof(uint16));
+		ckpt_write(&io, &r->num_small_ideals, sizeof(uint16));
+		ckpt_write(&io, &r->num_large_ideals, sizeof(uint16));
+		ckpt_write(&io, &active, sizeof(uint16));
+		if (words)
+			ckpt_write(&io, r->data, words * sizeof(uint32));
+		total_words += words;
+	}
+	ckpt_flush(&io);
+	free(io.buf);
+
+	if (io.failed || fclose(io.fp) != 0) {
+		logprintf(obj, "error: write failed on merge checkpoint\n");
+		remove(path);
+		return -1;
+	}
+
+	logprintf(obj, "saved merge checkpoint: %u relation sets, "
+			"%.1f MB in %u sec\n", merge->num_relsets,
+			(double)(total_words * sizeof(uint32) +
+			(uint64)merge->num_relsets * 8) / 1048576,
+			(uint32)(time(NULL) - start));
+	return 0;
+}
+
+/*--------------------------------------------------------------------*/
+int32 filter_merge_checkpoint_load(msieve_obj *obj, merge_t *merge,
+				uint32 *min_cycles, const char *path) {
+
+	uint32 i;
+	ckpt_io_t io;
+	char magic[8];
+	uint32 num_relsets;
+	time_t start = time(NULL);
+
+	io.fp = fopen(path, "rb");
+	if (io.fp == NULL)
+		return -1;
+
+	io.buf = (uint8 *)xmalloc(MERGE_CKPT_BUFSIZE);
+	io.used = 0;
+	io.avail = 0;
+	io.failed = 0;
+
+	if (!ckpt_read(&io, magic, 8) ||
+	    memcmp(magic, MERGE_CKPT_MAGIC, 8) != 0) {
+		logprintf(obj, "error: '%s' is not a merge checkpoint "
+				"for this build\n", path);
+		free(io.buf);
+		fclose(io.fp);
+		return -1;
+	}
+
+	memset(merge, 0, sizeof(*merge));
+	if (!ckpt_read(&io, &num_relsets, sizeof(uint32)) ||
+	    !ckpt_read(&io, &merge->num_ideals, sizeof(uint32)) ||
+	    !ckpt_read(&io, &merge->num_extra_relations, sizeof(uint32)) ||
+	    !ckpt_read(&io, min_cycles, sizeof(uint32)) ||
+	    !ckpt_read(&io, &merge->target_density, sizeof(double))) {
+		logprintf(obj, "error: truncated merge checkpoint\n");
+		exit(-1);
+	}
+
+	merge->num_relsets = num_relsets;
+	merge->data_pool = merge_mem_pool_create();
+	merge->relset_array = (relation_set_t *)xcalloc((size_t)num_relsets,
+					sizeof(relation_set_t));
+
+	for (i = 0; i < num_relsets; i++) {
+		relation_set_t *r = merge->relset_array + i;
+		uint16 active;
+		uint32 words;
+
+		if (!ckpt_read(&io, &r->num_relations, sizeof(uint16)) ||
+		    !ckpt_read(&io, &r->num_small_ideals, sizeof(uint16)) ||
+		    !ckpt_read(&io, &r->num_large_ideals, sizeof(uint16)) ||
+		    !ckpt_read(&io, &active, sizeof(uint16))) {
+			logprintf(obj, "error: truncated merge checkpoint\n");
+			exit(-1);
+		}
+
+		/* the payload is re-allocated here, so its pool class comes
+		   from this allocation rather than from the file */
+
+		words = (uint32)r->num_relations + r->num_large_ideals;
+		r->num_active_ideals = 0;
+
+		/* merge_relset_alloc() stamps the pool class into the relset
+		   but hands the payload back rather than storing it */
+
+		r->data = merge_relset_alloc(merge->data_pool, r, words);
+		if (words) {
+			if (!ckpt_read(&io, r->data, words * sizeof(uint32))) {
+				logprintf(obj, "error: truncated merge "
+						"checkpoint\n");
+				exit(-1);
+			}
+		}
+		relation_set_set_num_active(r, active);
+	}
+
+	free(io.buf);
+	fclose(io.fp);
+	logprintf(obj, "loaded merge checkpoint: %u relation sets, "
+			"%u ideals in %u sec\n", merge->num_relsets,
+			merge->num_ideals, (uint32)(time(NULL) - start));
+	return 0;
+}
+
+/*--------------------------------------------------------------------*/
 void filter_free_relsets(merge_t *merge) {
 
 	uint32 i;
@@ -122,10 +339,19 @@ void filter_dump_relsets(msieve_obj *obj, merge_t *merge) {
 
 /*--------------------------------------------------------------------*/
 int32 filter_make_relsets(msieve_obj *obj, filter_t *filter,
-				merge_t *merge, uint32 min_cycles) {
+				merge_t *merge, uint32 min_cycles,
+				const char *ckpt_path) {
 
 	filter_purge_cliques(obj, filter);
 	filter_merge_init(obj, filter);
 	filter_merge_2way(obj, filter, merge);
+
+	/* this is the last point at which the merge input is still
+	   exactly reproducible, so it is what a checkpoint records */
+
+	if (ckpt_path != NULL)
+		filter_merge_checkpoint_save(obj, merge, min_cycles,
+				ckpt_path);
+
 	return filter_merge_full(obj, merge, min_cycles);
 }

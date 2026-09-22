@@ -187,12 +187,23 @@ void filter_purge_singletons_core(msieve_obj *obj, filter_t *filter);
    relation sets that are required */
 
 int32 filter_make_relsets(msieve_obj *obj, filter_t *filter,
-			merge_t *merge, uint32 min_cycles);
+			merge_t *merge, uint32 min_cycles,
+			const char *ckpt_path);
 
 /* perform post-processing optimizations on the collection of cycles
    found by the merge phase */
 
 void filter_postproc_relsets(msieve_obj *obj, merge_t *merge);
+
+/* Save the relation sets as they stand just before the full merge, and
+   restore them later. Everything ahead of the full merge is deterministic
+   and dominates a filtering run, so this lets the merge be re-run on its
+   own. The format is native-endian and tied to this build. */
+
+int32 filter_merge_checkpoint_save(msieve_obj *obj, merge_t *merge,
+				uint32 min_cycles, const char *path);
+int32 filter_merge_checkpoint_load(msieve_obj *obj, merge_t *merge,
+				uint32 *min_cycles, const char *path);
 
 void filter_free_relsets(merge_t *merge);
 

@@ -190,7 +190,8 @@ static void set_filtering_bounds(msieve_obj *obj, factor_base_t *fb,
 #define DEFAULT_TARGET_DENSITY 90.0
 
 static uint32 do_merge(msieve_obj *obj, filter_t *filter,
-			merge_t *merge, double target_density) {
+			merge_t *merge, double target_density,
+			const char *ckpt_path) {
 
 	uint32 relations_needed;
 	uint32 extra_needed = filter->target_excess;
@@ -222,7 +223,8 @@ static uint32 do_merge(msieve_obj *obj, filter_t *filter,
 	if (target_density != 0)
 		merge->target_density = target_density;
 
-	if (filter_make_relsets(obj, filter, merge, extra_needed) != 0) {
+	if (filter_make_relsets(obj, filter, merge, extra_needed,
+				ckpt_path) != 0) {
 		if (merge->relset_array != NULL || merge->data_pool != NULL)
 			filter_free_relsets(merge);
 		return 1000000;
@@ -237,7 +239,7 @@ static uint32 do_merge(msieve_obj *obj, filter_t *filter,
 static uint32 do_partial_filtering(msieve_obj *obj, filter_t *filter,
 				merge_t *merge, uint32 entries_r,
 				uint32 entries_a, double target_density,
-				uint32 max_weight) {
+				uint32 max_weight, const char *ckpt_path) {
 
 	uint32 relations_needed;
 	uint32 num_relations = filter->num_relations;
@@ -257,7 +259,8 @@ static uint32 do_partial_filtering(msieve_obj *obj, filter_t *filter,
 		filter_read_lp_file(obj, filter, max_weight);
 
 		if ((relations_needed = do_merge(obj, filter,
-						merge, target_density)) > 0)
+						merge, target_density,
+						ckpt_path)) > 0)
 			return relations_needed;
 
 		/* accept the collection of generated cycles
@@ -288,6 +291,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	time_t wall_time = time(NULL);
 	uint64 savefile_size = get_file_size(obj->savefile.name);
 	uint64 ram_size = 0;
+	char ckpt_buf[256];
+	const char *ckpt_path = NULL;
 	uint64 max_relations = 0;
 	uint32 filter_bound = 0;
 	double target_density = 0;
@@ -302,6 +307,24 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	if (obj->nfs_args != NULL) {
 
 		const char *tmp;
+
+		/* merge_ckpt=<path> records the relation sets just before the
+		   full merge, or restarts from that file when it exists, so the
+		   merge can be iterated on without repeating the hours of
+		   deterministic work in front of it */
+
+		tmp = strstr(obj->nfs_args, "merge_ckpt=");
+		if (tmp != NULL) {
+			size_t k = 0;
+
+			tmp += 11;
+			while (*tmp && *tmp != ',' && !isspace((int)(unsigned char)*tmp) &&
+					k < sizeof(ckpt_buf) - 1)
+				ckpt_buf[k++] = *tmp++;
+			ckpt_buf[k] = 0;
+			if (k > 0)
+				ckpt_path = ckpt_buf;
+		}
 
 		tmp = strstr(obj->nfs_args, "filter_mem_mb=");
 		if (tmp != NULL) {
@@ -380,6 +403,26 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	logprintf(obj, "estimated available RAM is %.1lf MB\n",
 				(double)ram_size / 1048576);
 
+	/* a checkpoint makes everything below redundant: it already holds
+	   the relation sets the full merge starts from */
+
+	if (ckpt_path != NULL) {
+		uint32 ckpt_min_cycles = 0;
+
+		if (filter_merge_checkpoint_load(obj, &merge,
+				&ckpt_min_cycles, ckpt_path) == 0) {
+			if (target_density != 0)
+				merge.target_density = target_density;
+			if (filter_merge_full(obj, &merge,
+					ckpt_min_cycles) != 0) {
+				filter_free_relsets(&merge);
+				relations_needed = 1000000;
+				goto finished;
+			}
+			goto merge_done;
+		}
+	}
+
 	/* with a scratch directory configured, work from a local
 	   decompressed copy of the savefile */
 
@@ -416,7 +459,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 		   big datasets may get to do this */
 
 		if ((relations_needed = do_merge(obj, &filter,
-						&merge, target_density)) > 0)
+						&merge, target_density,
+						ckpt_path)) > 0)
 			goto finished;
 	}
 	else {
@@ -446,7 +490,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 			filter_read_lp_file(obj, &filter, 0);
 			if ((relations_needed = do_merge(obj, &filter,
-						&merge, target_density)) > 0) {
+						&merge, target_density,
+						ckpt_path)) > 0) {
 				goto finished;
 			}
 		}
@@ -461,7 +506,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 			if ((relations_needed = do_partial_filtering(obj,
 						&filter, &merge, entries_r,
 						entries_a, target_density,
-						max_weight)) > 0) {
+						max_weight, ckpt_path)) > 0) {
 				goto finished;
 			}
 		}
@@ -473,6 +518,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	remove(lp_filename);
 
 	/* optimize and then save the collection of relation-sets */
+
+merge_done:
 
 	filter_postproc_relsets(obj, &merge);
 	filter_dump_relsets(obj, &merge);
