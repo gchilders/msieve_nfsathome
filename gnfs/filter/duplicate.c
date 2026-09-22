@@ -466,6 +466,62 @@ static double estimate_rel_size(savefile_t *savefile) {
 #define BIN_SIZE (1 << (LOG2_BIN_SIZE))
 #define TARGET_HITS_PER_PRIME 40.0
 
+/* Reading the savefile is one gzgets per line and cannot be split across
+   threads, but it does not have to sit between the parallel passes: it
+   only has to stay ahead of them. Holding the sequential reader state
+   here lets one thread fill the next batch's buffer while the rest of the
+   team parses the batch already in hand. */
+
+typedef struct {
+	savefile_t *savefile;
+	uint64 max_relations;
+	uint32 batch;
+	uint64 curr_relation;   /* ordinal of the last relation handed out */
+	uint32 done;
+} dup_reader_t;
+
+static void dup_read_batch(dup_reader_t *r, char *buf, uint64 *ords,
+			uint32 *count_out) {
+
+	uint32 i;
+	uint32 count = 0;
+
+	if (r->done) {
+		*count_out = 0;
+		return;
+	}
+
+	for (i = 0; i < r->batch; i++) {
+		char *buf_i = buf + i * LINE_BUF_SIZE;
+
+		savefile_read_line(buf_i, LINE_BUF_SIZE * sizeof(char),
+				r->savefile);
+		if (savefile_eof(r->savefile)) {
+			r->done = 1;
+			break;
+		}
+		if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
+
+			/* no relation on this line */
+
+			i--;
+			continue;
+		}
+		ords[i] = r->curr_relation + i + 1;
+		count++;
+	}
+
+	r->curr_relation += count;
+	if (r->max_relations && r->curr_relation >= r->max_relations) {
+		uint64 excess = r->curr_relation - r->max_relations + 1;
+
+		r->curr_relation -= excess;
+		count -= (uint32)excess;
+		r->done = 1;
+	}
+	*count_out = count;
+}
+
 uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 				uint64 max_relations, uint64 ram_size,
 				uint64 *num_relations_out) {
@@ -498,6 +554,11 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 
 	uint64 *prime_bins;
 	uint64 *thread_bins;
+	char *buf2;
+	uint64 *ord2;
+	char *buf_cur, *buf_nxt, *tmp_buf;
+	uint64 *ord_cur, *ord_nxt, *tmp_ord;
+	dup_reader_t rd;
 	uint32 num_bins;
 	uint32 nthreads;
 	uint32 t;
@@ -515,6 +576,16 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	/* per thread variables */
 	my_curr_relation = (uint64 *)xcalloc((size_t)batch, sizeof(uint64));
 	buf = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
+
+	/* the second pair is what the reader fills while the team works
+	   on the first */
+
+	buf2 = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
+	ord2 = (uint64 *)malloc(batch * sizeof(uint64));
+	buf_cur = buf;
+	buf_nxt = buf2;
+	ord_cur = my_curr_relation;
+	ord_nxt = ord2;
 	scratch = (mpz_t *)malloc(batch * sizeof(mpz_t));
 	array_size = (uint32 *)malloc(batch * sizeof(uint32));
 	tmp_rel = (relation_t *)malloc(batch * sizeof(relation_t));
@@ -627,36 +698,71 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	num_composite = 0;
 	num_malformed = 0;
 
-	do {
-		num_relations_read = 0;
-		for(i = 0; i < batch; i++) {
-			char *buf_i = buf + i * LINE_BUF_SIZE;
-			savefile_read_line(buf_i,
-					LINE_BUF_SIZE * sizeof(char), savefile);
-			if (savefile_eof(savefile)) break;
-			if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
-				/* no relation on this line */
-				i--;
-				continue;
+	rd.savefile = savefile;
+	rd.max_relations = max_relations;
+	rd.batch = batch;
+	rd.curr_relation = curr_relation;
+	rd.done = 0;
+
+	/* prime the pipeline with the first batch */
+
+	dup_read_batch(&rd, buf_cur, ord_cur, &num_relations_read);
+
+	while (num_relations_read > 0) {
+		uint32 next_count = 0;
+
+#pragma omp parallel
+		{
+			/* one thread runs ahead into the other buffer while the
+			   rest parse and tally this batch; the barrier ending
+			   each worksharing loop keeps them in step */
+
+#pragma omp single nowait
+				dup_read_batch(&rd, buf_nxt, ord_nxt, &next_count);
+
+#pragma omp for schedule(dynamic, 64)
+			for (i = 0; i < num_relations_read; i++) {
+				char *buf_i = buf_cur + i * LINE_BUF_SIZE;
+				status[i] = nfs_read_relation(buf_i, fb,
+						&tmp_rel[i], &array_size[i], 1,
+						scratch[i], 1);
 			}
-			num_relations_read++;
-			my_curr_relation[i] = curr_relation + i + 1;
-		}
 
-		/* read and verify the relation */
+#pragma omp for schedule(dynamic, 64)
+			for (i = 0; i < num_relations_read; i++) {
+				uint32 num_r, num_a, k, asize = 0;
+				uint64 *my_bins;
 
-		curr_relation += num_relations_read;
-		if (max_relations && curr_relation >= max_relations) {
-			uint64 max_exceeded = curr_relation - max_relations + 1;
-			curr_relation -= max_exceeded;
-			num_relations_read -= (uint32)max_exceeded;
-		}
+				if (status[i] != 0 || tmp_rel[i].b == 0)
+					continue;
 
-#pragma omp parallel for
-		for (i = 0; i < num_relations_read; i++) {
-			char *buf_i = buf + i * LINE_BUF_SIZE;
-			status[i] = nfs_read_relation(buf_i, fb, &tmp_rel[i],
-					&array_size[i], 1, scratch[i], 1);
+#ifdef HAVE_OMP
+				my_bins = thread_bins +
+					(size_t)omp_get_thread_num() * num_bins;
+#else
+				my_bins = thread_bins;
+#endif
+				num_r = tmp_rel[i].num_factors_r;
+				num_a = tmp_rel[i].num_factors_a;
+
+				for (k = 0; k < num_r + num_a; k++) {
+					uint64 p = decompress_p(tmp_rel[i].factors,
+								&asize);
+
+					if (p >= ((uint64)1 << 32))
+						continue;
+
+					my_bins[p / BIN_SIZE]++;
+
+					if (k >= num_r && p > MAX_PACKED_PRIME &&
+							p < FREE_RELATION_LIMIT) {
+						uint64 h = p / 2;
+#pragma omp atomic update
+						free_relation_bits[h / 8] |=
+								hashmask[h % 8];
+					}
+				}
+			}
 		}
 
 		for (i = 0; i < num_relations_read; i++) {
@@ -669,12 +775,12 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 			   looking at the cache */
 
 			if (ab_cache.active) {
-				dup_ab_cache_store(&ab_cache, my_curr_relation[i],
+				dup_ab_cache_store(&ab_cache, ord_cur[i],
 						status[i] ? 0 : tmp_rel[i].a,
 						status[i] ? 0 : tmp_rel[i].b);
 			}
 
-			if (my_curr_relation[i] > 0 && (my_curr_relation[i] % 10000000 == 0)) {
+			if (ord_cur[i] > 0 && (ord_cur[i] % 10000000 == 0)) {
 				printf("read %" PRIu64 "M relations\n", curr_relation / 1000000);
 			}
 			if (status[i] != 0) {
@@ -682,7 +788,7 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 				/* save the line number of bad relations (hopefully
 			   		there are very few of them) */
 
-				dup_write_u64(obj, bad_relation_fp, my_curr_relation[i],
+				dup_write_u64(obj, bad_relation_fp, ord_cur[i],
 					"bad relation list");
 				if (status[i] == -98)
 					num_composite++;
@@ -690,7 +796,7 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 					num_malformed++;
 				else
 				logprintf(obj, "error %d reading relation %" PRIu64 "\n",
-						status[i], my_curr_relation[i]);
+						status[i], ord_cur[i]);
 			} else {
 
 				/* relation is good; find the value to which it
@@ -749,40 +855,13 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 			}
 		}
 
-#pragma omp parallel for private(i)
-		for (i = 0; i < num_relations_read; i++) {
-			uint32 num_r, num_a, k, asize = 0;
-			uint64 *my_bins;
+		/* the lookahead already filled the other buffer */
 
-			if (status[i] != 0 || tmp_rel[i].b == 0)
-				continue;
-
-#ifdef HAVE_OMP
-			my_bins = thread_bins + (size_t)omp_get_thread_num() *
-							num_bins;
-#else
-			my_bins = thread_bins;
-#endif
-			num_r = tmp_rel[i].num_factors_r;
-			num_a = tmp_rel[i].num_factors_a;
-
-			for (k = 0; k < num_r + num_a; k++) {
-				uint64 p = decompress_p(tmp_rel[i].factors, &asize);
-
-				if (p >= ((uint64)1 << 32))
-					continue;
-
-				my_bins[p / BIN_SIZE]++;
-
-				if (k >= num_r && p > MAX_PACKED_PRIME &&
-						p < FREE_RELATION_LIMIT) {
-					uint64 h = p / 2;
-#pragma omp atomic update
-					free_relation_bits[h / 8] |= hashmask[h % 8];
-				}
-			}
-		}
-	} while (num_relations_read == batch);
+		tmp_buf = buf_cur; buf_cur = buf_nxt; buf_nxt = tmp_buf;
+		tmp_ord = ord_cur; ord_cur = ord_nxt; ord_nxt = tmp_ord;
+		num_relations_read = next_count;
+	}
+	curr_relation = rd.curr_relation;
 
 	/* fold the per-thread histograms together, once */
 
@@ -890,6 +969,8 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 	}
 
 	free(my_curr_relation);
+	free(ord2);
+	free(buf2);
 	free(scratch);
 	free(array_size);
 	free(tmp_rel);
