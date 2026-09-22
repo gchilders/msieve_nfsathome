@@ -222,6 +222,87 @@ static void read_relation_number_checked(msieve_obj *obj, FILE *fp,
 }
 
 /*--------------------------------------------------------------------*/
+/* Reading the savefile is one gzgets per line and cannot be split across
+   threads, but it does not have to sit between the parallel passes either.
+   Holding the sequential reader state in one place lets a single thread
+   fill the next batch's buffer while the rest of the team works on the
+   batch already in hand. */
+
+typedef struct {
+	msieve_obj *obj;
+	savefile_t *savefile;
+	FILE *relation_fp;      /* the .d skip- or keep-list */
+	uint32 have_skip_list;
+	uint64 max_relations;
+	uint32 batch;
+	uint64 curr_relation;   /* ordinal of the last line examined */
+	uint64 next_relation;   /* next entry from relation_fp */
+	uint32 needs_rmap;
+	uint32 done;            /* savefile exhausted, or max_relations hit */
+} lp_reader_t;
+
+static void lp_read_batch(lp_reader_t *r, char *buf, uint64 *ords,
+			uint32 *count_out) {
+
+	uint32 i;
+	uint32 count = 0;
+
+	if (r->done) {
+		*count_out = 0;
+		return;
+	}
+
+	for (i = 0; i < r->batch; i++) {
+		char *buf_i = buf + i * LINE_BUF_SIZE;
+
+		savefile_read_line(buf_i, LINE_BUF_SIZE * sizeof(char),
+				r->savefile);
+		if (savefile_eof(r->savefile)) {
+			r->done = 1;
+			break;
+		}
+		if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
+			i--;
+			continue;
+		}
+		r->curr_relation++;
+		if (r->max_relations &&
+				r->curr_relation >= r->max_relations) {
+			r->done = 1;
+			break;
+		}
+
+		if (r->have_skip_list) {
+			if (r->curr_relation == r->next_relation) {
+				read_relation_number_checked(r->obj,
+					r->relation_fp, &r->next_relation,
+					"relation selection file");
+				i--;
+				continue;
+			}
+		}
+		else {
+			if (r->curr_relation < r->next_relation) {
+				i--;
+				continue;
+			}
+			if (r->curr_relation != r->next_relation) {
+				logprintf(r->obj, "error: relation keep-list "
+						"is out of order\n");
+				exit(-1);
+			}
+			read_relation_number_checked(r->obj, r->relation_fp,
+				&r->next_relation, "relation selection file");
+		}
+
+		ords[i] = r->curr_relation;
+		if (r->curr_relation > UINT32_MAX)
+			r->needs_rmap = 1;
+		count++;
+	}
+	*count_out = count;
+}
+
 void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 			filter_t *filter, uint64 max_relations,
 			uint32 pass) {
@@ -245,6 +326,11 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 	mpz_t *scratch;
 	relation_lp_t *tmp_ideal;
 	uint64 *probed_ids;
+	char *buf2;             /* owns the second line buffer */
+	uint64 *ord2;           /* owns the second ordinal array */
+	char *buf_cur, *buf_nxt, *tmp_buf;
+	uint64 *ord_cur, *ord_nxt, *tmp_ord;
+	lp_reader_t rd;
 	uint64 packed_ideal_ids[TEMP_FACTOR_LIST_SIZE];
 
 	uint32 batch = 1024 * obj->num_threads;
@@ -256,6 +342,16 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 
 	my_curr_relation = (uint64 *)malloc(batch * sizeof(uint64));
 	buf = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
+
+	/* the second pair is what the reader fills while the team works
+	   on the first */
+
+	buf2 = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
+	ord2 = (uint64 *)malloc(batch * sizeof(uint64));
+	buf_cur = buf;
+	buf_nxt = buf2;
+	ord_cur = my_curr_relation;
+	ord_nxt = ord2;
 	scratch = (mpz_t *)malloc(batch * sizeof(mpz_t));
 	tmp_factor_size = (uint32 *)malloc(batch * sizeof(uint32));
 	tmp_relation = (relation_t *)malloc(batch * sizeof(relation_t));
@@ -295,75 +391,68 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 	num_relations = 0;
 	read_relation_number_checked(obj, relation_fp, &next_relation, "relation selection file");
 
-	do {
-		num_relations_read = 0;
-		for (i = 0; i < batch; i++) {
-			char *buf_i = buf + i * LINE_BUF_SIZE;
-			savefile_read_line(buf_i, LINE_BUF_SIZE * sizeof(char), savefile);
-			if (savefile_eof(savefile))
-				break;
-			if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
-				i--;
-				continue;
-			}
-			curr_relation++;
-			if (max_relations && curr_relation >= max_relations)
-				break;
+	rd.obj = obj;
+	rd.savefile = savefile;
+	rd.relation_fp = relation_fp;
+	rd.have_skip_list = have_skip_list;
+	rd.max_relations = max_relations;
+	rd.batch = batch;
+	rd.curr_relation = curr_relation;
+	rd.next_relation = next_relation;
+	rd.needs_rmap = 0;
+	rd.done = 0;
 
-			if (have_skip_list) {
-				if (curr_relation == next_relation) {
-					read_relation_number_checked(obj, relation_fp, &next_relation, "relation selection file");
-					i--;
+	/* prime the pipeline with the first batch */
+
+	lp_read_batch(&rd, buf_cur, ord_cur, &num_relations_read);
+
+	while (num_relations_read > 0) {
+
+		uint32 next_count = 0;
+
+#pragma omp parallel
+		{
+			/* one thread runs ahead and fills the other buffer
+			   while the rest of the team parses this batch. The
+			   barrier ending the first worksharing loop keeps the
+			   two in step, so the read costs only whatever it
+			   takes beyond the parse. */
+
+#pragma omp single nowait
+				lp_read_batch(&rd, buf_nxt, ord_nxt, &next_count);
+
+#pragma omp for schedule(dynamic, 64)
+			for (i = 0; i < num_relations_read; i++) {
+				char *buf_i = buf_cur + i * LINE_BUF_SIZE;
+				status[i] = nfs_read_relation(buf_i, fb,
+						&tmp_relation[i],
+						&tmp_factor_size[i], 1,
+						scratch[i], 0);
+				if (status[i] == 0)
+					find_large_ideals(&tmp_relation[i],
+						&tmp_ideal[i], filter->filtmin_r,
+						filter->filtmin_a);
+			}
+
+			/* The identifier an ideal gets is its entry number in
+			   the hashtable, so those have to be handed out in
+			   order of first appearance and the loop after this
+			   parallel region has to stay serial. The lookup is
+			   only reads though, and it carries the cache misses,
+			   so do it for the whole batch here. */
+
+#pragma omp for schedule(dynamic, 64)
+			for (i = 0; i < num_relations_read; i++) {
+				uint32 j;
+				uint64 *slot = probed_ids +
+						(size_t)i * TEMP_FACTOR_LIST_SIZE;
+
+				if (status[i] != 0)
 					continue;
+				for (j = 0; j < tmp_ideal[i].ideal_count; j++) {
+					slot[j] = nfs_hash64_probe(&unique_ideals,
+							tmp_ideal[i].ideal_list + j);
 				}
-			}
-			else {
-				if (curr_relation < next_relation) {
-					i--;
-					continue;
-				}
-				if (curr_relation != next_relation) {
-					logprintf(obj, "error: relation keep-list is out of order\n");
-					exit(-1);
-				}
-				read_relation_number_checked(obj, relation_fp, &next_relation, "relation selection file");
-			}
-
-			my_curr_relation[i] = curr_relation;
-			if (curr_relation > UINT32_MAX)
-				needs_rmap = 1;
-			num_relations_read++;
-		}
-
-#pragma omp parallel for
-		for (i = 0; i < num_relations_read; i++) {
-			char *buf_i = buf + i * LINE_BUF_SIZE;
-			status[i] = nfs_read_relation(buf_i, fb, &tmp_relation[i],
-					&tmp_factor_size[i], 1, scratch[i], 0);
-			if (status[i] == 0)
-				find_large_ideals(&tmp_relation[i], &tmp_ideal[i],
-						filter->filtmin_r, filter->filtmin_a);
-		}
-
-		/* The identifier an ideal gets is its entry number in the
-		   hashtable, so those have to be handed out in order of first
-		   appearance and the loop below has to stay serial. The lookup
-		   is only reads though, and it is where the cache misses are,
-		   so do it for the whole batch in parallel first. The serial
-		   loop then only has to touch the table for ideals it has not
-		   seen before. */
-
-#pragma omp parallel for
-		for (i = 0; i < num_relations_read; i++) {
-			uint32 j;
-			uint64 *slot = probed_ids +
-					(size_t)i * TEMP_FACTOR_LIST_SIZE;
-
-			if (status[i] != 0)
-				continue;
-			for (j = 0; j < tmp_ideal[i].ideal_count; j++) {
-				slot[j] = nfs_hash64_probe(&unique_ideals,
-						tmp_ideal[i].ideal_list + j);
 			}
 		}
 
@@ -388,7 +477,7 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 							&unique_ideals,
 							tmp_ideal[i].ideal_list + j, NULL);
 				}
-				if (write_lp64_record(&final_writer, my_curr_relation[i],
+				if (write_lp64_record(&final_writer, ord_cur[i],
 						tmp_ideal[i].ideal_count,
 						tmp_ideal[i].gf2_factors,
 						packed_ideal_ids) != 0) {
@@ -397,13 +486,25 @@ void nfs_write_lp_file(msieve_obj *obj, factor_base_t *fb,
 				}
 			}
 		}
-	} while (num_relations_read == batch);
+
+		/* the lookahead already filled the other buffer; make it
+		   current and hand its pair back to the reader */
+
+		tmp_buf = buf_cur; buf_cur = buf_nxt; buf_nxt = tmp_buf;
+		tmp_ord = ord_cur; ord_cur = ord_nxt; ord_nxt = tmp_ord;
+		num_relations_read = next_count;
+	}
+
+	needs_rmap = rd.needs_rmap;
+	curr_relation = rd.curr_relation;
 
 	for (i = 0; i < batch; i++) {
 		free(tmp_relation[i].factors);
 		mpz_clear(scratch[i]);
 	}
 	free(my_curr_relation);
+	free(ord2);
+	free(buf2);
 	free(scratch);
 	free(tmp_factor_size);
 	free(tmp_relation);
