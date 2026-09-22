@@ -370,6 +370,12 @@ void savefile_open(savefile_t *s, uint32 flags) {
 		printf("error: cannot open '%s'\n", nm);
 		exit(-1);
 	}
+
+	/* zlib defaults to an 8KB buffer, and refills it a great many
+	   times over a savefile of tens of gigabytes */
+
+	if (!s->is_a_FILE)
+		gzbuffer((gzFile)s->fp, 1 << 20);
 #endif
 
 	s->buf_off = 0;
