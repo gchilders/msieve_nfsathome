@@ -75,6 +75,19 @@ void get_filter_tmp_name(msieve_obj *obj, char *buf,
 }
 
 /*--------------------------------------------------------------------*/
+/* The matrix is written once by the build, read back, reduced, and only
+   then written out in the form the linear algebra consumes. The first two
+   of those touch a file the size of the finished matrix -- 15.7 GB on a
+   C223 -- and it is thrown away afterwards, so with a scratch directory
+   configured it belongs there. The reduced matrix still goes beside the
+   savefile, where the linear algebra and any restart expect it. */
+
+void get_matrix_work_name(msieve_obj *obj, char *buf, size_t buf_len) {
+
+	get_filter_tmp_name(obj, buf, buf_len, ".mat");
+}
+
+/*--------------------------------------------------------------------*/
 /* Filtering reads the savefile three times and re-reads its own
    intermediates several more times. When those sit on a network
    filesystem that traffic dominates the run, so given a scratch
@@ -187,7 +200,7 @@ uint32 savefile_stage(msieve_obj *obj) {
 /* remove the staged savefile and any filtering intermediates left on
    scratch. Safe to call when nothing was staged. */
 
-void savefile_unstage(msieve_obj *obj) {
+void savefile_unstage_tmp(msieve_obj *obj) {
 
 	static const char *suffixes[] = { ".d", ".br", ".hc", ".lp", ".lp0" };
 	char buf[256];
@@ -200,7 +213,14 @@ void savefile_unstage(msieve_obj *obj) {
 		get_filter_tmp_name(obj, buf, sizeof(buf), suffixes[i]);
 		remove(buf);
 	}
-	if (obj->savefile.staged_name != NULL) {
+}
+
+/*--------------------------------------------------------------------*/
+void savefile_unstage(msieve_obj *obj) {
+
+	savefile_unstage_tmp(obj);
+
+	if (obj->scratch_dir != NULL && obj->savefile.staged_name != NULL) {
 		remove(obj->savefile.staged_name);
 		free(obj->savefile.staged_name);
 		obj->savefile.staged_name = NULL;

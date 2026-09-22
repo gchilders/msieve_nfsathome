@@ -376,6 +376,10 @@ static uint32 combine_relations(la_col_t *col, relation_t *rlist,
 /*------------------------------------------------------------------*/
 #define MAX_DENSE_ROW_WORDS 32
 
+/* cycles handled per parallel pass; each one reserves a worst-case
+   slot in the pool, so this also sets the scratch footprint */
+#define MATBUILD_CHUNK 4096
+
 static void build_matrix_core(msieve_obj *obj, la_col_t *cycle_list,
 			uint32 num_cycles, relation_t *rlist,
 			uint32 num_relations, uint32 num_dense_rows,
@@ -385,9 +389,14 @@ static void build_matrix_core(msieve_obj *obj, la_col_t *cycle_list,
 	uint32 i, j, k;
 	hashtable_t unique_ideals;
 	uint32 max_small_ideal;
-	uint32 dense_rows[MAX_DENSE_ROW_WORDS];
 	uint32 dense_row_words;
 	size_t mem_use;
+	uint32 mapped_ideals[MAX_COL_IDEALS];
+	ideal_t *pool;
+	uint32 *pool_id;
+	uint32 *chunk_merged;
+	uint32 *chunk_dense;
+	uint32 chunk_start;
 
 	logprintf(obj, "building initial matrix\n");
 
@@ -410,84 +419,162 @@ static void build_matrix_core(msieve_obj *obj, la_col_t *cycle_list,
 		exit(-1);
 	}
 
-	/* for each cycle */
+	/* Walk the cycles in chunks. Everything that only reads shared
+	   state -- unpacking each cycle's relations, and looking up the
+	   ideals that the hashtable already holds -- runs in parallel over
+	   a chunk; the serial pass that follows inserts the ideals that
+	   were missing and writes the columns. The hashtable is only ever
+	   grown by that serial pass, so the parallel probes see a table
+	   that cannot move under them, and the insertions still happen in
+	   cycle order, which is what fixes the row numbering. */
 
-	for (i = 0; i < num_cycles; i++) {
-		la_col_t *c = cycle_list + i;
-		ideal_t merged_ideals[MAX_COL_IDEALS];
-		uint32 mapped_ideals[MAX_COL_IDEALS];
-		uint32 num_merged;
+	pool = (ideal_t *)xmalloc((size_t)MATBUILD_CHUNK *
+				MAX_COL_IDEALS * sizeof(ideal_t));
+	pool_id = (uint32 *)xmalloc((size_t)MATBUILD_CHUNK *
+				MAX_COL_IDEALS * sizeof(uint32));
+	chunk_merged = (uint32 *)xmalloc((size_t)MATBUILD_CHUNK *
+				sizeof(uint32));
+	chunk_dense = (uint32 *)xmalloc((size_t)MATBUILD_CHUNK *
+				MAX_DENSE_ROW_WORDS * sizeof(uint32));
 
-		/* dense rows start off empty */
+	for (chunk_start = 0; chunk_start < num_cycles;
+					chunk_start += MATBUILD_CHUNK) {
 
-		for (j = 0; j < dense_row_words; j++)
-			dense_rows[j] = 0;
+		int32 ci;
+		int32 chunk_size = MIN(MATBUILD_CHUNK,
+					num_cycles - chunk_start);
 
-		/* merge the relations and quadratic characters
-		   in the cycle */
 
-		num_merged = combine_relations(c, rlist, merged_ideals,
-						dense_rows, num_dense_rows,
-						qcb_size);
+#ifdef HAVE_OMP
+#pragma omp parallel for schedule(dynamic, 8) private(j)
+#endif
+		for (ci = 0; ci < chunk_size; ci++) {
 
-		/* assign a unique number to each ideal in
-		   the cycle. This will automatically ignore
-		   empty rows in the matrix */
+			la_col_t *c = cycle_list + chunk_start + ci;
+			ideal_t *merged_ideals = pool +
+					(size_t)ci * MAX_COL_IDEALS;
+			uint32 *ideal_ids = pool_id +
+					(size_t)ci * MAX_COL_IDEALS;
+			uint32 *dense_row = chunk_dense +
+					(size_t)ci * MAX_DENSE_ROW_WORDS;
+			uint32 num_merged;
 
-		for (j = k = 0; j < num_merged; j++) {
-			ideal_t *ideal = merged_ideals + j;
-			uint64 p = (uint64)ideal->p_hi << 32 | ideal->p_lo;
+			/* dense rows start off empty */
 
-			if (max_small_ideal > 0 && (p == IDEAL_MINUS_ONE ||
-					p <= max_small_ideal) ) {
-				/* dense ideal; store in compressed format */
-				ideal_t *loc = (ideal_t *)bsearch(ideal,
-						small_ideals,
+			for (j = 0; j < dense_row_words; j++)
+				dense_row[j] = 0;
+
+			/* merge the relations and quadratic characters
+			   in the cycle */
+
+			num_merged = combine_relations(c, rlist, merged_ideals,
+							dense_row,
+							num_dense_rows,
+							qcb_size);
+			chunk_merged[ci] = num_merged;
+
+			/* resolve every ideal that can be resolved without
+			   changing anything: dense ideals are a search of a
+			   fixed table, and sparse ideals that the hashtable
+			   already knows about keep the id they have */
+
+			for (j = 0; j < num_merged; j++) {
+				ideal_t *ideal = merged_ideals + j;
+				uint64 p = (uint64)ideal->p_hi << 32 |
+						ideal->p_lo;
+
+				if (max_small_ideal > 0 &&
+				    (p == IDEAL_MINUS_ONE ||
+				     p <= max_small_ideal)) {
+					ideal_t *loc = (ideal_t *)bsearch(
+						ideal, small_ideals,
 						(size_t)num_small_ideals,
 						sizeof(ideal_t),
 						compare_ideals);
-				uint32 idx;
-				if (loc == NULL) {
-					printf("error: unexpected dense "
-						"ideal found\n");
-					exit(-1);
-				}
-				{
-					uint64 idx64 = (uint64)qcb_size + 1 +
-						(uint64)(loc - small_ideals);
-					if (idx64 >= num_dense_rows || idx64 > UINT32_MAX) {
-						logprintf(obj, "error: dense matrix row index overflow\n");
+					uint64 idx64;
+
+					if (loc == NULL) {
+						printf("error: unexpected "
+							"dense ideal found\n");
 						exit(-1);
 					}
-					idx = (uint32)idx64;
+					idx64 = (uint64)qcb_size + 1 +
+						(uint64)(loc - small_ideals);
+					if (idx64 >= num_dense_rows ||
+							idx64 > UINT32_MAX) {
+						printf("error: dense matrix "
+							"row index overflow\n");
+						exit(-1);
+					}
+					ideal_ids[j] = (uint32)idx64;
 				}
-				dense_rows[idx / 32] |= 1 << (idx % 32);
-			}
-			else {
-				uint32 idx;
-				uint64 row;
-				hashtable_find(&unique_ideals,
-						ideal, &idx, NULL);
-				row = (uint64)num_dense_rows + idx;
-				if (row > UINT32_MAX) {
-					logprintf(obj, "error: sparse matrix row index exceeds 32 bits\n");
-					exit(-1);
+				else {
+					ideal_ids[j] = hashtable_probe(
+						&unique_ideals, ideal);
 				}
-				mapped_ideals[k++] = (uint32)row;
 			}
 		}
 
-		/* save the matrix entries to disk */
+		/* the serial pass: assign ids to the ideals seen for the
+		   first time, and emit the columns in order */
 
-		if (fwrite(&k, sizeof(uint32), 1, matrix_fp) != 1 ||
-		    fwrite(mapped_ideals, sizeof(uint32), (size_t)k, matrix_fp) != k ||
-		    fwrite(dense_rows, sizeof(uint32), (size_t)dense_row_words,
-				matrix_fp) != dense_row_words) {
-			logprintf(obj, "error: can't write initial matrix column %u\n", i);
-			exit(-1);
+		for (ci = 0; ci < chunk_size; ci++) {
+
+			ideal_t *merged_ideals = pool +
+					(size_t)ci * MAX_COL_IDEALS;
+			uint32 *ideal_ids = pool_id +
+					(size_t)ci * MAX_COL_IDEALS;
+			uint32 *dense_row = chunk_dense +
+					(size_t)ci * MAX_DENSE_ROW_WORDS;
+			uint32 num_merged = chunk_merged[ci];
+
+			for (j = k = 0; j < num_merged; j++) {
+				ideal_t *ideal = merged_ideals + j;
+				uint64 p = (uint64)ideal->p_hi << 32 |
+						ideal->p_lo;
+
+				if (max_small_ideal > 0 &&
+				    (p == IDEAL_MINUS_ONE ||
+				     p <= max_small_ideal)) {
+					uint32 idx = ideal_ids[j];
+					dense_row[idx / 32] |= 1 << (idx % 32);
+				}
+				else {
+					uint32 idx = ideal_ids[j];
+					uint64 row;
+
+					if (idx == HASHTABLE_NOT_FOUND) {
+						hashtable_find(&unique_ideals,
+							ideal, &idx, NULL);
+					}
+					row = (uint64)num_dense_rows + idx;
+					if (row > UINT32_MAX) {
+						logprintf(obj, "error: sparse matrix row index exceeds 32 bits\n");
+						exit(-1);
+					}
+					mapped_ideals[k++] = (uint32)row;
+				}
+			}
+
+			/* save the matrix entries to disk */
+
+			if (fwrite(&k, sizeof(uint32), 1, matrix_fp) != 1 ||
+			    fwrite(mapped_ideals, sizeof(uint32), (size_t)k,
+					matrix_fp) != k ||
+			    fwrite(dense_row, sizeof(uint32),
+					(size_t)dense_row_words,
+					matrix_fp) != dense_row_words) {
+				logprintf(obj, "error: can't write initial matrix column %u\n",
+						chunk_start + ci);
+				exit(-1);
+			}
 		}
 	}
 
+	free(pool);
+	free(pool_id);
+	free(chunk_merged);
+	free(chunk_dense);
 	/* save the matrix dimensions to disk */
 
 	{
@@ -551,7 +638,7 @@ static void build_matrix(msieve_obj *obj, mpz_t n) {
 	char buf[256];
 	factor_base_t fb;
 
-	sprintf(buf, "%s.mat", obj->savefile.name);
+	get_matrix_work_name(obj, buf, sizeof(buf));
 	matrix_fp = fopen(buf, "w+b");
 	if (matrix_fp == NULL) {
 		logprintf(obj, "error: can't open matrix file '%s'\n", buf);
@@ -763,6 +850,17 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 		if (obj->mpi_la_row_rank + obj->mpi_la_col_rank == 0) {
 #endif
 		uint64 sparse_weight;
+		char work_matrix[256];
+
+		/* The build reads every relation the cycles name, which is
+		   one more full pass over the savefile -- but only one, so
+		   there is nothing here to stage for. Copying a gzipped
+		   savefile to scratch costs an inflate plus a write of the
+		   full expanded size, which is more than the single pass it
+		   would save. When filtering ran in this same invocation it
+		   has already left its staged copy in place (see the end of
+		   nfs_filter_relations), and savefile_open() picks that up on
+		   its own; the unstage below is what finally removes it. */
 
 		/* build the initial matrix that is the output from
 		   the filtering */
@@ -772,8 +870,10 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 		/* read the matrix and the list of cycles into memory
 		   again, now that the underlying relations have been freed */
 
-		read_matrix(obj, &nrows, NULL, NULL, &num_dense_rows,
-				&ncols, NULL, NULL, &cols, NULL, NULL);
+		get_matrix_work_name(obj, work_matrix, sizeof(work_matrix));
+		read_matrix_from(obj, work_matrix, &nrows, NULL, NULL,
+				&num_dense_rows, &ncols, NULL, NULL, &cols,
+				NULL, NULL);
 		read_cycles(obj, &ncols, &cols, 0, NULL);
 
 		count_matrix_nonzero(obj, nrows, num_dense_rows, ncols, cols);
@@ -786,6 +886,8 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 			logprintf(obj, "matrix is corrupt; skipping "
 					"linear algebra\n");
 			free(cols);
+			remove(work_matrix);
+			savefile_unstage(obj);
 			return;
 		}
 
@@ -795,6 +897,18 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 
 		dump_matrix(obj, nrows, num_dense_rows,
 				ncols, cols, sparse_weight);
+
+		/* the unreduced copy has served its purpose; when it lived on
+		   scratch it is a separate file from the one just written */
+
+		{
+			char final_matrix[256];
+
+			sprintf(final_matrix, "%s.mat", obj->savefile.name);
+			if (strcmp(work_matrix, final_matrix) != 0)
+				remove(work_matrix);
+		}
+		savefile_unstage(obj);
 
 		/* free the matrix */
 		for (i = 0; i < ncols; i++) {

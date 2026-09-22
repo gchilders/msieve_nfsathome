@@ -527,7 +527,15 @@ merge_done:
 	wall_time = time(NULL) - wall_time;
 	logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);
 finished:
-	savefile_unstage(obj);
+
+	/* the matrix build reads the savefile once more. When it is going
+	   to run in this same invocation, leave the staged copy in place
+	   for it rather than decompressing the whole thing twice. */
+
+	if (relations_needed == 0 && (obj->flags & MSIEVE_FLAG_NFS_LA))
+		savefile_unstage_tmp(obj);
+	else
+		savefile_unstage(obj);
 
 	mpz_poly_free(&fb.rfb.poly);
 	mpz_poly_free(&fb.afb.poly);

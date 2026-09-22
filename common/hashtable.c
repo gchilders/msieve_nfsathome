@@ -65,6 +65,41 @@ void hashtable_close(hashtable_t *h) {
 }
 
 /*--------------------------------------------------------------------*/
+/* Read-only counterpart to hashtable_find(). Any number of threads may
+   call this at once, so long as none of them is inserting: the lookup
+   touches h->hashtable and h->match_array and nothing else, and an
+   insertion can both move match_array and relink the chains. Ordinals
+   themselves are stable, so a hit stays valid across later insertions. */
+
+uint32 hashtable_probe(hashtable_t *h, void *blob) {
+
+	uint32 i;
+	uint32 offset, hashval;
+	uint32 *key = (uint32 *)blob;
+	uint32 *entry;
+	uint32 *hashtable = h->hashtable;
+	uint32 *match_array = h->match_array;
+	uint32 blob_words = h->blob_words;
+	uint32 hash_words = h->hash_words;
+
+	hashval = hash_function(key, hash_words);
+	hashval = hashval >> (32 - h->log2_hashtable_size);
+
+	offset = hashtable[hashval];
+	while (offset != 0) {
+		entry = match_array + (size_t)offset * (blob_words + 1);
+		for (i = 0; i < hash_words; i++) {
+			if (entry[i] != key[i])
+				break;
+		}
+		if (i == hash_words)
+			return offset - 1;
+		offset = entry[blob_words];
+	}
+	return HASHTABLE_NOT_FOUND;
+}
+
+/*--------------------------------------------------------------------*/
 void *hashtable_find(hashtable_t *h, void *blob, 
 		     uint32 *ordinal_id, uint32 *present) {
 

@@ -73,8 +73,14 @@ void get_filter_tmp_name(msieve_obj *obj, char *buf,
    savefile_unstage() deletes it along with any filtering intermediates
    still on scratch, and is safe to call unconditionally. */
 
+/* path of the throwaway matrix the build writes and reads back;
+   the reduced matrix that dump_matrix() writes is not this file */
+
+void get_matrix_work_name(msieve_obj *obj, char *buf, size_t buf_len);
+
 uint32 savefile_stage(msieve_obj *obj);
 void savefile_unstage(msieve_obj *obj);
+void savefile_unstage_tmp(msieve_obj *obj);
 
 void savefile_open(savefile_t *s, uint32 flags);
 void savefile_close(savefile_t *s);
@@ -231,6 +237,13 @@ static INLINE uint32 hash_function(uint32 *data, uint32 num_words) {
    matching blob[] is output in *ordinal_id (if non-NULL) */
 
 
+#define HASHTABLE_NOT_FOUND ((uint32)(-1))
+
+/* look up a blob without inserting it; returns its ordinal id or
+   HASHTABLE_NOT_FOUND. Safe to call concurrently (see hashtable.c) */
+
+uint32 hashtable_probe(hashtable_t *h, void *blob);
+
 void *hashtable_find(hashtable_t *h, void *blob, 
 		uint32 *ordinal_id, uint32 *present);
 
@@ -346,7 +359,14 @@ void dump_matrix(msieve_obj *obj,
 		uint32 ncols, la_col_t *cols,
 		uint64 num_nonzero);
 
-void read_matrix(msieve_obj *obj, 
+void read_matrix(msieve_obj *obj,
+		uint32 *nrows, uint32 *max_nrows, uint32 *start_row,
+		uint32 *num_dense_rows_out,
+		uint32 *ncols, uint32 *max_ncols, uint32 *start_col,
+		la_col_t **cols_out,
+		uint32 *rowperm, uint32 *colperm);
+
+void read_matrix_from(msieve_obj *obj, const char *path, 
 		uint32 *nrows, uint32 *max_nrows, uint32 *start_row,
 		uint32 *num_dense_rows_out,
 		uint32 *ncols, uint32 *max_ncols, uint32 *start_col,

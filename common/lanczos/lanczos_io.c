@@ -626,6 +626,22 @@ void read_matrix(msieve_obj *obj,
 		uint32 *start_col_out,
 		la_col_t **cols_out, uint32 *rowperm, uint32 *colperm) {
 
+	/* the matrix the linear algebra consumes, beside the savefile */
+
+	read_matrix_from(obj, NULL, nrows_out, max_nrows_out, start_row_out,
+			dense_rows_out, ncols_out, max_ncols_out, start_col_out,
+			cols_out, rowperm, colperm);
+}
+
+/*--------------------------------------------------------------------*/
+void read_matrix_from(msieve_obj *obj, const char *path,
+		uint32 *nrows_out, uint32 *max_nrows_out,
+		uint32 *start_row_out,
+		uint32 *dense_rows_out,
+		uint32 *ncols_out, uint32 *max_ncols_out,
+		uint32 *start_col_out,
+		la_col_t **cols_out, uint32 *rowperm, uint32 *colperm) {
+
 	uint32 i, j, k;
 	uint32 dense_rows, dense_row_words;
 	uint32 ncols, max_ncols, start_col;
@@ -646,10 +662,14 @@ void read_matrix(msieve_obj *obj,
 		exit(-1);
 	}
 
-	sprintf(buf, "%s.mat", obj->savefile.name);
+	if (path != NULL)
+		snprintf(buf, sizeof(buf), "%s", path);
+	else
+		sprintf(buf, "%s.mat", obj->savefile.name);
+
 	matrix_fp = fopen(buf, "rb");
 	if (matrix_fp == NULL) {
-		logprintf(obj, "error: cannot open matrix file\n");
+		logprintf(obj, "error: cannot open matrix file '%s'\n", buf);
 		exit(-1);
 	}
 
