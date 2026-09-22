@@ -681,6 +681,12 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	uint32 num_relations;
 	uint32 num_ideals;
 	uint32 orig_num_relations, new_num_relations;
+	uint32 *witness;
+	uint32 *pending;
+	uint32 pending_alloc;
+	uint32 pending_num;
+	uint32 pending_overflow;
+	uint32 use_frontier;
 
 	logprintf(obj, "commencing in-memory singleton removal\n");
 
@@ -689,6 +695,24 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	relation_array = filter->relation_array;
 	relation_ptr = filter->relation_ptr;
 	freqtable = (uint32 *)xcalloc((size_t)num_ideals, sizeof(uint32));
+
+	/* Repeatedly rescanning every relation to find the few that have
+	   become singletons is most of this routine's cost: on a 660M
+	   relation dataset the later invocations average 264 pass
+	   iterations per relation actually deleted. A relation can only
+	   turn into a singleton when one of its ideals drops to a count of
+	   one, and the single relation still holding such an ideal can be
+	   identified without a reverse index: keep the exclusive-or of the
+	   indices of all relations containing each ideal, and remove each
+	   index again as its relation is deleted. Once the count reaches
+	   one, what is left is the surviving relation. */
+
+	witness = (uint32 *)xcalloc((size_t)num_ideals, sizeof(uint32));
+	pending_alloc = MIN(num_ideals, (uint32)(4 * 1024 * 1024));
+	pending = (uint32 *)xmalloc((size_t)pending_alloc * sizeof(uint32));
+	pending_num = 0;
+	pending_overflow = 0;
+	use_frontier = 0;
 
 	/* count the number of times each ideal occurs. Note
 	   that since we know the exact number of ideals, we
@@ -703,6 +727,8 @@ void filter_purge_singletons_core(msieve_obj *obj,
 			uint32 ideal = my_relation->ideal_list[j];
 #pragma omp atomic update
 			freqtable[ideal]++;
+#pragma omp atomic update
+			witness[ideal] ^= i;
 		}
 	}
 
@@ -714,10 +740,20 @@ void filter_purge_singletons_core(msieve_obj *obj,
 	num_passes = 0;
 	orig_num_relations = new_num_relations = num_relations;
 	do {
+		uint32 deleted_this_pass;
+
 		num_relations = new_num_relations;
 		new_num_relations = 0;
+		deleted_this_pass = 0;
 
-#pragma omp parallel for private(j) reduction(+:new_num_relations)
+		/* only the most recent pass's list is of interest: anything
+		   that dropped to one earlier was either resolved by a later
+		   full pass or produced a fresh drop that this pass records */
+
+		pending_num = 0;
+		pending_overflow = 0;
+
+#pragma omp parallel for private(j) reduction(+:new_num_relations) 				reduction(+:deleted_this_pass)
 		for (i = 0; i < orig_num_relations; i++) {
 			relation_ideal_t *my_relation = relation_ptr[i];
 			uint32 curr_num_ideals = my_relation->ideal_count;
@@ -740,19 +776,123 @@ void filter_purge_singletons_core(msieve_obj *obj,
 				   	count of each of its ideals and skip it */
 
 					for (j = 0; j < curr_num_ideals; j++) {
+						uint32 old_count;
+
 						ideal = my_relation->ideal_list[j];
+#pragma omp atomic capture
+						{ old_count = freqtable[ideal];
+						  freqtable[ideal]--; }
 #pragma omp atomic update
-						freqtable[ideal]--;
+						witness[ideal] ^= i;
+
+						/* the ideal now has one relation
+						   left, which witness identifies */
+
+						if (old_count == 2) {
+							uint32 slot;
+#pragma omp atomic capture
+							slot = pending_num++;
+							if (slot < pending_alloc)
+								pending[slot] = ideal;
+							else {
+#pragma omp atomic write
+								pending_overflow = 1;
+							}
+						}
 					}
 
 					my_relation->connected = 1;
+					deleted_this_pass++;
 				}
 				else new_num_relations++;
 			}
 		}
 
 		num_passes++;
+
+		/* once a pass stops finding much, the remaining singletons are
+		   far cheaper to chase through the witnesses than to keep
+		   rescanning every relation for */
+
+		if (new_num_relations != num_relations &&
+		    (uint64)deleted_this_pass * 64 < (uint64)new_num_relations) {
+			use_frontier = 1;
+			break;
+		}
 	} while (new_num_relations != num_relations);
+
+	/* Finish off through the witnesses. Each ideal in the queue has, or
+	   had, exactly one relation left holding it, which makes that
+	   relation a singleton; deleting it can drop further ideals to one.
+	   Singleton removal converges on the same set of relations whatever
+	   order the deletions happen in, so this reaches the fixed point the
+	   rescanning loop would have. */
+
+	if (use_frontier) {
+		uint32 qhead = 0;
+		uint32 qtail;
+
+		if (pending_overflow) {
+
+			/* the queue could not hold one pass's worth of drops,
+			   so rebuild it from the counts directly */
+
+			pending_num = 0;
+			for (i = 0; i < orig_num_ideals; i++) {
+				if (freqtable[i] != 1)
+					continue;
+				if (pending_num == pending_alloc) {
+					pending_alloc *= 2;
+					pending = (uint32 *)xrealloc(pending,
+						(size_t)pending_alloc *
+						sizeof(uint32));
+				}
+				pending[pending_num++] = i;
+			}
+		}
+		qtail = pending_num;
+
+		while (qhead < qtail) {
+			uint32 ideal = pending[qhead++];
+			relation_ideal_t *my_relation;
+			uint32 rel;
+
+			if (freqtable[ideal] != 1)
+				continue;
+
+			rel = witness[ideal];
+			if (rel >= orig_num_relations) {
+				printf("error: singleton witness out of range\n");
+				exit(-1);
+			}
+			my_relation = relation_ptr[rel];
+			if (my_relation->connected)
+				continue;
+
+			my_relation->connected = 1;
+			new_num_relations--;
+
+			for (j = 0; j < my_relation->ideal_count; j++) {
+				uint32 id2 = my_relation->ideal_list[j];
+
+				freqtable[id2]--;
+				witness[id2] ^= rel;
+				if (freqtable[id2] != 1)
+					continue;
+				if (qtail == pending_alloc) {
+					pending_alloc *= 2;
+					pending = (uint32 *)xrealloc(pending,
+						(size_t)pending_alloc *
+						sizeof(uint32));
+				}
+				pending[qtail++] = id2;
+			}
+		}
+		num_relations = new_num_relations;
+	}
+
+	free(witness);
+	free(pending);
 
 	/* Now remove the relations that were marked for deletion */
 
