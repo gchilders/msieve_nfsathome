@@ -328,7 +328,18 @@ static uint32 verify_alg_ideal_powers(relation_t *rlist,
 				relation_lp_t rlp;
 				uint32 k, n2 = 0;
 
-				find_large_ideals(r, &rlp, 0, 0);
+				/* the overflow path of find_large_ideals()
+				   returns before it sets ideal_count, so the
+				   count is only meaningful once the return
+				   value says the list fit. Trusting it blind
+				   would walk off a stack value of up to 255
+				   and write past this relation's slot. */
+
+				if (find_large_ideals(r, &rlp, 0, 0) >
+						TEMP_FACTOR_LIST_SIZE) {
+					printf("error: overflow reading ideals\n");
+					exit(-1);
+				}
 
 				for (k = 0; k < rlp.ideal_count; k++) {
 					ideal_t *curr_ideal =

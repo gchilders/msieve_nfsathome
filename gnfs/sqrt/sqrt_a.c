@@ -177,6 +177,17 @@ static void mpz_mul_par(mpz_t r, mpz_t a, mpz_t b) {
 
 	n = ((na > nb ? na : nb) + 1) / 2;
 
+	/* the largest shift below is 2 * n * GMP_NUMB_BITS bits, and it is
+	   passed as mp_bitcnt_t, which GMP defines as unsigned long -- 32
+	   bits on an LLP64 build. The expression is computed in size_t, so
+	   it would be truncated on the way in and shift by the wrong
+	   amount, silently returning a wrong product. */
+
+	if (n > (size_t)((mp_bitcnt_t)-1) / (2 * GMP_NUMB_BITS)) {
+		mpz_mul(r, a, b);
+		return;
+	}
+
 	mpz_init(a0); mpz_init(a1); mpz_init(b0); mpz_init(b1);
 	mpz_init(z0); mpz_init(z1); mpz_init(z2);
 	mpz_init(t1); mpz_init(t2);
@@ -237,7 +248,8 @@ static void mpz_addmul_par(mpz_t r, mpz_t a, mpz_t b) {
 
 /*-------------------------------------------------------------------*/
 static void mpz_poly_mul(mpz_poly_t *p1, mpz_poly_t *p2,
-			mpz_poly_t *mod, uint32 free_p2) {
+			mpz_poly_t *mod, uint32 free_p2,
+			uint32 allow_split) {
 
 	/* multiply p1(x) by p2(x) modulo mod(x) (assumed monic)
 	   If free_p2 is nonzero the coefficients of p2(x) are 
@@ -249,7 +261,7 @@ static void mpz_poly_mul(mpz_poly_t *p1, mpz_poly_t *p2,
 	uint32 d2 = p2->degree;
 	uint32 prod_degree;
 	mpz_t tmp[MAX_POLY_DEGREE + 1];
-	int split = poly_mul_should_split(d1 + 1);
+	int split = allow_split && poly_mul_should_split(d1 + 1);
 
 	/* initialize */
 
@@ -490,8 +502,14 @@ static void multiply_relations(relation_prod_t *prodinfo,
 		}
 	}
 
-	/* multiply them together and save the result */
-	mpz_poly_mul(&prod1, &prod2, prodinfo->monic_poly, 1);
+	/* Multiply them together and save the result. No splitting: the
+	   top level of this recursion runs outside any parallel region,
+	   so it would qualify, but it is also the point where prod1,
+	   prod2 and the accumulator are all live at full size -- the
+	   memory peak of the whole square root. One multiply out of a
+	   tree of millions is not worth several GB there. */
+
+	mpz_poly_mul(&prod1, &prod2, prodinfo->monic_poly, 1, 0);
 
 	for (i = 0; i <= prod1.degree; i++)
 		mpz_swap(prod->coeff[i], prod1.coeff[i]);
@@ -611,9 +629,9 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 
 		mpz_poly_init(&tmp_poly);
 		mpz_poly_mod_q(prod, q, &tmp_poly);
-		mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 0);
+		mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 0, 1);
 		mpz_poly_mod_q(&tmp_poly, q, &tmp_poly);
-		mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 0);
+		mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 0, 1);
 		mpz_poly_mod_q(&tmp_poly, q, &tmp_poly);
 
 		/* compute ( (3 - that) / 2 ) mod q */
@@ -637,7 +655,7 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 		/* finally, compute the new R(x) by multiplying the
 		   result above by the old R(x) */
 
-		mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 1);
+		mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 1, 1);
 		mpz_poly_mod_q(&tmp_poly, q, isqrt_mod_q);
 		mpz_poly_free(&tmp_poly);
 	}
@@ -646,7 +664,7 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	   First multiply R(x) by prod(x), deleting prod(x) 
 	   since we won't need it beyond this point */
 
-	mpz_poly_mul(isqrt_mod_q, prod, alg_poly, 1);
+	mpz_poly_mul(isqrt_mod_q, prod, alg_poly, 1, 1);
 	mpz_poly_mod_q(isqrt_mod_q, q, isqrt_mod_q);
 
 	/* this is a little tricky. Up until now we've
@@ -797,8 +815,8 @@ void alg_square_root(msieve_obj *obj, mpz_poly_t *alg_poly,
 	   iteration not converging */
 
 	mpz_poly_monic_derivative(alg_poly, &d_alg_poly);
-	mpz_poly_mul(&d_alg_poly, &d_alg_poly, alg_poly, 0);
-	mpz_poly_mul(&prod, &d_alg_poly, alg_poly, 1);
+	mpz_poly_mul(&d_alg_poly, &d_alg_poly, alg_poly, 0, 0);
+	mpz_poly_mul(&prod, &d_alg_poly, alg_poly, 1, 0);
 
 	/* pick the initial small prime to start the Newton iteration.
 	   To save both time and memory, choose an initial prime 
