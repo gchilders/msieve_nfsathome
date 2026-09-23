@@ -780,8 +780,14 @@ uint32 nfs_purge_duplicates(msieve_obj *obj, factor_base_t *fb,
 						status[i] ? 0 : tmp_rel[i].b);
 			}
 
+			/* ord_cur[i] is this relation's own ordinal. The outer
+			   curr_relation used to track it, but the sequential
+			   reader owns that counter now and runs a batch ahead,
+			   so it is still UINT64_MAX here on the first pass. */
+
 			if (ord_cur[i] > 0 && (ord_cur[i] % 10000000 == 0)) {
-				printf("read %" PRIu64 "M relations\n", curr_relation / 1000000);
+				printf("read %" PRIu64 "M relations\n",
+						ord_cur[i] / 1000000);
 			}
 			if (status[i] != 0) {
 
