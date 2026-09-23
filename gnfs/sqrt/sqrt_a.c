@@ -123,6 +123,119 @@ static void mpz_poly_monic_derivative(mpz_poly_t *src, mpz_poly_t *dest) {
 }
 
 /*-------------------------------------------------------------------*/
+/* GMP multiplies on one thread, and the Newton iteration below only has
+   as many multiplications to offer at a time as the algebraic polynomial
+   has coefficients -- six for a sextic. On a node with many more cores
+   than that, most of them sit idle through the part of the square root
+   that costs the most. One level of Karatsuba splits each multiplication
+   into three of half the size, which can go to the same OpenMP team:
+   1.5x the total work for up to 3x the multiplications in flight.
+
+   Whether that trade wins depends on how many cores are going spare, so
+   poly_mul_should_split() decides per call. Six in flight reach 4.45x of
+   single-thread multiply throughput on 8 cores and eighteen only reach
+   6.24x -- a gain of 1.40x against 1.5x more work, so splitting loses
+   there. On 48 cores the same two figures are 5.61x and 14.02x, a gain
+   of 2.50x, so it wins. (bench/mulscale.c measures this.) */
+
+#define MUL_PAR_MIN_LIMBS 60000
+
+static int poly_mul_should_split(uint32 num_concurrent) {
+
+#ifdef HAVE_OMP
+	/* inside a parallel region we are being called from the relation
+	   product tree, which already offers more independent multiplies
+	   than any machine has cores; splitting there only adds work */
+
+	if (omp_in_parallel())
+		return 0;
+
+	/* A level of Karatsuba triples the multiplications in flight, so
+	   ask for room for all of them before paying for the extra work.
+	   Two thirds would be the break-even if threads were cores, but
+	   omp_get_max_threads() counts SMT siblings, which buy very little
+	   on this kind of arithmetic: the 8-core machine where splitting
+	   loses reports 16. */
+
+	return omp_get_max_threads() >= (int)(3 * num_concurrent);
+#else
+	return 0;
+#endif
+}
+
+static void mpz_mul_par(mpz_t r, mpz_t a, mpz_t b) {
+
+	size_t na = mpz_size(a);
+	size_t nb = mpz_size(b);
+	size_t n;
+	mpz_t a0, a1, b0, b1, z0, z1, z2, t1, t2;
+
+	if (na < MUL_PAR_MIN_LIMBS || nb < MUL_PAR_MIN_LIMBS) {
+		mpz_mul(r, a, b);
+		return;
+	}
+
+	n = ((na > nb ? na : nb) + 1) / 2;
+
+	mpz_init(a0); mpz_init(a1); mpz_init(b0); mpz_init(b1);
+	mpz_init(z0); mpz_init(z1); mpz_init(z2);
+	mpz_init(t1); mpz_init(t2);
+
+	/* truncating division keeps a == a1 * 2^k + a0 for negative a too,
+	   and the square root's coefficients do go negative */
+
+	mpz_tdiv_q_2exp(a1, a, n * GMP_NUMB_BITS);
+	mpz_tdiv_r_2exp(a0, a, n * GMP_NUMB_BITS);
+	mpz_tdiv_q_2exp(b1, b, n * GMP_NUMB_BITS);
+	mpz_tdiv_r_2exp(b0, b, n * GMP_NUMB_BITS);
+
+	mpz_add(t1, a1, a0);
+	mpz_add(t2, b1, b0);
+
+	/* two of the three go to the team and the third stays here, so the
+	   thread that got this far keeps working instead of blocking. No
+	   task writes anything another task or this thread reads. */
+
+#pragma omp task shared(z0, a0, b0)
+	mpz_mul(z0, a0, b0);
+#pragma omp task shared(z1, t1, t2)
+	mpz_mul(z1, t1, t2);
+	mpz_mul(z2, a1, b1);
+#pragma omp taskwait
+
+	mpz_clear(a0); mpz_clear(a1); mpz_clear(b0); mpz_clear(b1);
+	mpz_clear(t1); mpz_clear(t2);
+
+	/* z1 holds (a1+a0)(b1+b0); the middle term is that less the ends */
+
+	mpz_sub(z1, z1, z0);
+	mpz_sub(z1, z1, z2);
+
+	mpz_mul_2exp(r, z2, 2 * n * GMP_NUMB_BITS);
+	mpz_clear(z2);
+	mpz_mul_2exp(z1, z1, n * GMP_NUMB_BITS);
+	mpz_add(r, r, z1);
+	mpz_clear(z1);
+	mpz_add(r, r, z0);
+	mpz_clear(z0);
+}
+
+static void mpz_addmul_par(mpz_t r, mpz_t a, mpz_t b) {
+
+	mpz_t p;
+
+	if (mpz_size(a) < MUL_PAR_MIN_LIMBS ||
+	    mpz_size(b) < MUL_PAR_MIN_LIMBS) {
+		mpz_addmul(r, a, b);
+		return;
+	}
+	mpz_init(p);
+	mpz_mul_par(p, a, b);
+	mpz_add(r, r, p);
+	mpz_clear(p);
+}
+
+/*-------------------------------------------------------------------*/
 static void mpz_poly_mul(mpz_poly_t *p1, mpz_poly_t *p2,
 			mpz_poly_t *mod, uint32 free_p2) {
 
@@ -136,6 +249,7 @@ static void mpz_poly_mul(mpz_poly_t *p1, mpz_poly_t *p2,
 	uint32 d2 = p2->degree;
 	uint32 prod_degree;
 	mpz_t tmp[MAX_POLY_DEGREE + 1];
+	int split = poly_mul_should_split(d1 + 1);
 
 	/* initialize */
 
@@ -146,7 +260,10 @@ static void mpz_poly_mul(mpz_poly_t *p1, mpz_poly_t *p2,
 
 #pragma omp parallel for
 	for (i = 0; i <= d1; i++) {
-		mpz_mul(tmp[i], p1->coeff[i], p2->coeff[d2]);
+		if (split)
+			mpz_mul_par(tmp[i], p1->coeff[i], p2->coeff[d2]);
+		else
+			mpz_mul(tmp[i], p1->coeff[i], p2->coeff[d2]);
 	}
 	prod_degree = d1;
 	if (free_p2) {
@@ -175,12 +292,22 @@ static void mpz_poly_mul(mpz_poly_t *p1, mpz_poly_t *p2,
 
 #pragma omp parallel for
 		for (j = 0; j <= d1; j++) {
-			if (j == 0)
-				mpz_mul(tmp[0], p1->coeff[0],
-						p2->coeff[i]);
-			else
-				mpz_addmul(tmp[j], p1->coeff[j],
-						p2->coeff[i]);
+			if (j == 0) {
+				if (split)
+					mpz_mul_par(tmp[0], p1->coeff[0],
+							p2->coeff[i]);
+				else
+					mpz_mul(tmp[0], p1->coeff[0],
+							p2->coeff[i]);
+			}
+			else {
+				if (split)
+					mpz_addmul_par(tmp[j], p1->coeff[j],
+							p2->coeff[i]);
+				else
+					mpz_addmul(tmp[j], p1->coeff[j],
+							p2->coeff[i]);
+			}
 		}
 		if (free_p2) {
 			mpz_realloc2(p2->coeff[i], 1);
