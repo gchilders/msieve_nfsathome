@@ -43,6 +43,10 @@ NFS options are passed as a quoted string:
 
 `setup_job.sh` prepares a working directory from downloaded NFS@Home job files: looks for `*.gz`, `*.fb`, and `*.ini` files, renames them to `msieve.dat.gz`, `msieve.fb`, `worktodo.ini`, and decompresses the `.gz`.
 
+### LA benchmark script
+
+`bench_la.sh` times Lanczos on a prebuilt matrix: `./bench_la.sh -d 90 -a "single_copy=1"` runs `-nc2 "skip_matbuild=1 ..."` on `msieve.dat.mat.90` in its own `bench/<name>-<stamp>/` directory (symlinks to the matrix, so the real job files are never written), measures dims/sec after warmup, stops msieve with SIGTERM (which runs the Lanczos integrity check) and appends a row to `bench/results.tsv`. `-F` instead lets the solve finish and runs `-nc3` in the same directory.
+
 ## Architecture
 
 This is a C library (`libmsieve.a`) plus a thin demo binary (`demo.c` → `msieve`). The library interface is in `include/msieve.h`.
@@ -92,6 +96,10 @@ Extensions added for NFS@Home distributed factoring workflows, all controlled vi
 
 **Density selection for LA** (`gnfs/gf2.c`):
 - `select_density=100` — renames `msieve.dat.cyc.100` → `msieve.dat.cyc` and `msieve.dat.mat.100` → `msieve.dat.mat` (and `.mat.idx`), then skips the matrix build and runs Lanczos directly
+
+**Single-copy GPU matrix** (`common/lanczos/gpu/lanczos_matmul_gpu.c`, `cub/spmv_engine.cu`):
+- `single_copy=1` — stores only A on the GPU, not A^T; the transpose product scatters through A's column-slice blocks with atomic XOR (`spmv_engine_run_trans`). Its block_nnz default is a third of L2 worth of columns, floored at 2×nrows so the per-block row-pointer arrays stay under half the column indices; that saves ~40% of sparse-matrix VRAM on large-L2 cards (less on small-L2 ones) and was faster than the two-copy layout on an RTX 5070
+- `spmv_kernel=auto|segscan|warpmerge` — kernel for all gather SpMV launches (everything but the single-copy scatter). `auto` (default) picks per block: `segscan` (groups of VWORDS lanes per nonzero plus a segmented scan) below 8 nonzeros per row, else `warpmerge` (one warp per row segment)
 
 ### Key data structures
 

@@ -63,10 +63,15 @@ typedef struct {
 	spmv_engine_init_func spmv_engine_init;
 	spmv_engine_free_func spmv_engine_free;
 	spmv_engine_run_func spmv_engine_run;
+	spmv_engine_run_func spmv_engine_run_trans;
+	spmv_engine_set_kernel_func spmv_engine_set_kernel;
 	void * spmv_engine;
 
 	/* use managed memory to store the matrix data */
 	uint32 use_cudamanaged;
+
+	/* store only A on the card; A^T * x scatters through A's blocks */
+	uint32 single_copy;
 
 } gpudata_t;
 

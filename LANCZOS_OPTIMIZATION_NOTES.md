@@ -699,3 +699,81 @@ whitelist). Predictions to check, written before measurement:
 
 Commands: 5070: build VBITS=512, run plain skip_matbuild (formula picks
 block size). V100: ./vbits_block_sweep.sh 70 512 with the NNZ_LIST above.
+
+## 2026-09-24: Single-copy Matrix, segscan Forward Kernel, 4-bit Vector Tables
+
+Setup: RTX 5070 (12GB, 48MB L2, WSL2 — ~1-4.5GB of VRAM held by Windows),
+VBITS=256, C170 job, TD=90 matrix 13170233 x 13170412 (1132M sparse nnz,
+958M after GPU dense-row packing) and TD=110 matrix 12307226 x 12307402.
+Numbers from `bench_la.sh` (90-120s windows after warmup; ~5% noise).
+
+1. `single_copy=1`: skip the transposed CSR entirely; A^T x scatters
+   through A's column-slice blocks (csr_spmv_xor_scatter_kernel: groups
+   of VWORDS lanes per nonzero, one 64-bit atomicXor per lane, so each
+   warp-wide RED covers whole 32B v_t entries). The block's column range
+   is the scatter's output window; atomics are cheap only while it stays
+   in L2, so single-copy wants much smaller blocks (48M vs 128-256M).
+   At equal block size the scatter beat the stored-transpose gather:
+   73ms vs 102ms per iteration (single 48M vs stock 256M).
+2. Forward kernel was the bottleneck (170ms/iter at both 4 and 20 blocks):
+   small blocks leave ~3-4 nnz per row segment and warpmerge spends a
+   32-lane reduction (20 shuffles + 4 atomics) on each. New
+   csr_spmv_xor_segscan_kernel: 8 groups of 4 lanes each take a nonzero,
+   segmented XOR scan across groups, runs carried between steps, 4 steps
+   of loads issued ahead. 170 -> 78.5ms/iter at 38M blocks. It is worse
+   than warpmerge at large (DRAM-bound) blocks; see the review follow-up
+   below for how the kernel is now chosen.
+3. inner_prod (y ^= v * X): 4-bit tables, word-major so a warp's 16
+   possible entries per word are bank-disjoint: 128 -> 64 branch-free
+   lookups per element. outer_prod (X^T Y): 4-bit pieces with half-warp
+   table copies (rotation trick needs one slot per lane): half the shared
+   RMWs. Together ~16ms -> ~11ms and ~26 -> 19ms per iteration.
+4. Rejected: storing the transpose of the heavy rows (rows < 65536 hold
+   ~36% of nnz; transpose would fit uint16 indices). Skipping all heavy-
+   row atomics only cut the scatter by 19% (~12ms/iter upper bound)
+   before paying for the replacement gather and ~750MB VRAM.
+
+Single-copy block_nnz sweep (segscan forward, TD=90): 24M 1233, 32M 1449,
+48M 1484, 64M 1182, 96M 821 dims/s. Default is now (L2/3)/sizeof(v_t) *
+avg col weight with a 16M floor = 38M (TD=90) / 46M (TD=110).
+
+| TD | mode | block_nnz | dims/s | full ETA | sparse MB |
+|---|---|---|---:|---:|---:|
+| 90 | stock | 128M default | OOM | - | 8114 |
+| 90 | stock | 256M | 981 (best of 3; 891, 798) | 3h43m | 7713 |
+| 90 | stock | 1024M | 833 | 4h23m | 7461 |
+| 90 | use_managed=1 | 128M | 334 | 10h56m | host |
+| 90 | single_copy (first version) | 48M | 985 | 3h42m | 4660 |
+| 90 | single_copy (all changes) | 38M default | 1602 | 2h16m | 4962 |
+| 110 | single_copy (all changes) | 46M default | 1635 | 2h05m | 5248 |
+
+VBITS=64 build (both layouts fit at their defaults, so this is the clean
+comparison): stock 266M default 825 dims/s (4h26m, 9003MB sparse, 11.8GB
+peak) vs single_copy 177M default 1163 dims/s (3h08m, 4602MB, 7.7GB peak).
+The v64 single-copy default was not tuned further.
+
+Stock runs peak at ~11.9GB of 12.2GB; their spread (981/891/798 at the
+same setting) looks like WDDM paging under VRAM pressure. Untested: stock
++ segscan at small blocks on a card with room for it (needs ~2x rowptr
+overhead: every block of each direction carries a full rowptr array).
+
+### Review follow-up (same day)
+
+- Fixed a pre-existing bug: the GPU dense-row part of A^T x XORed dense
+  block i into b + VBITS*i instead of b (CPU: lanczos_matmul0.c). Only
+  matters with more than one dense block (num_dense_rows > VBITS).
+- Kernel choice is now per block (spmv_kernel=auto): segscan below 8
+  nonzeros per row, warpmerge above. Measured single-copy, forced
+  kernels: 128M blocks (9.7 nnz/row) 558 vs 547 dims/s, 256M (19.4)
+  404 vs 402 — a tie there, while at 38M (2.9) segscan is ~2x. Applies
+  to two-copy transpose blocks too, so small-block two-copy runs get
+  segscan automatically.
+- Single-copy block_nnz floor raised to 2*nrows: each block carries a
+  full rowptr array (53MB at 13M rows), which on small-L2 cards (V100,
+  3060) would otherwise eat most of the saving.
+- Tried and reverted: capping the inner/outer product grids at the
+  resident block count (to build/fold their shared tables fewer times).
+  A/B under identical load: capped 1272/1272, uncapped 1571/1558
+  dims/s. The 10000-block grid stays.
+- Load note: the 1551 dims/s post-review default (TD=90) was measured
+  with ~22 load average from unrelated CPU jobs; 1602 was an idle box.

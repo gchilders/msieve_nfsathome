@@ -533,11 +533,12 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 	d->num_block_rows = num_block_rows;
 	d->block_rows = block_rows;
 
-	/* handle the transpose of the matrix */
+	/* handle the transpose of the matrix; in single-copy mode
+	   the transpose multiply reuses the blocks above instead */
 
 	/* First rows are heavy so suggest a small initial blocksize */
 	blocksize = p->block_nnz / 10000;
-	while (start_row < p->nrows) {
+	while (!d->single_copy && start_row < p->nrows) {
 
 		block_row_t *b;
 		uint32 num_entries;
@@ -712,6 +713,12 @@ load_spmv_engine(msieve_obj *obj, gpudata_t *d)
 	d->spmv_engine_run = get_lib_symbol(
 					d->spmv_engine_handle,
 					"spmv_engine_run");
+	d->spmv_engine_run_trans = get_lib_symbol(
+					d->spmv_engine_handle,
+					"spmv_engine_run_trans");
+	d->spmv_engine_set_kernel = get_lib_symbol(
+					d->spmv_engine_handle,
+					"spmv_engine_set_kernel");
 	if (d->spmv_engine_init == NULL ||
 	    d->spmv_engine_free == NULL ||
 	    d->spmv_engine_run == NULL) {
@@ -808,9 +815,35 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 				launch->threads_per_block);
 	}
 
+	/* the outer product kernel gives every half-warp its own tables
+	   and needs 64 threads to write out each 64-row group */
+
+	if (d->launch[GPU_K_OUTER_PROD].threads_per_block % 16 != 0 ||
+	    d->launch[GPU_K_OUTER_PROD].threads_per_block < 64) {
+		printf("error: outer product kernel cannot run with "
+			"%d threads per block\n",
+			d->launch[GPU_K_OUTER_PROD].threads_per_block);
+		exit(-1);
+	}
+
 	/* allocate scratch arrays */
 
 	CUDA_TRY(cuMemAlloc(&d->gpu_scratch, VBITS * sizeof(v_t)))
+
+	/* should we store only one copy of the matrix on the card */
+
+	d->single_copy = 0;
+	if (obj->nfs_args != NULL &&
+	    strstr(obj->nfs_args, "single_copy=1") != NULL) {
+		if (d->spmv_engine_run_trans == NULL) {
+			printf("error: SpMV library does not support "
+				"single_copy=1\n");
+			exit(-1);
+		}
+		d->single_copy = 1;
+		logprintf(obj, "storing a single copy of the matrix "
+				"(no transpose) on the GPU\n");
+	}
 
 	/* Set preferred nonzeros per matrix block. The default sizes the
 	   active input-vector window of each column-slice SpMV block to
@@ -818,7 +851,18 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	   overhead (replicated row pointers, launch count) amortized.
 	   Within ~5% of the measured optimum on RTX 5070 (48MB L2) and
 	   Tesla V100 (6MB L2) at VBITS 64/128/256; see
-	   LANCZOS_OPTIMIZATION_NOTES.md. Override with block_nnz=N */
+	   LANCZOS_OPTIMIZATION_NOTES.md. Override with block_nnz=N
+
+	   In single-copy mode the same window is also the output range
+	   of the transpose scatter, whose atomics are only cheap while
+	   it stays in L2, so the window is a third of L2 (the forward
+	   gathers and the scatter compete for it) and the floor is much
+	   lower. Measured optimum on RTX 5070 at VBITS=256 was 32M-48M
+	   (TD=90 C170 matrix, 72.8 nonzeros/col). Every block carries a
+	   full row pointer array, though, so on cards with a small L2
+	   the floor keeps those arrays to at most half the size of the
+	   column indices; otherwise they eat the memory the missing
+	   transpose saves */
 
 	p->block_nnz = 1750000000;
 	if (p->unpacked_cols != NULL && p->ncols > 0) {
@@ -835,9 +879,14 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 			total_weight += p->unpacked_cols[i].weight;
 		avg_col_weight = (double)total_weight / p->ncols;
 
-		computed = (uint64)((double)(l2_bytes / 2) / sizeof(v_t) *
-					avg_col_weight);
-		computed = MAX(computed, 128000000);
+		computed = (uint64)((double)(l2_bytes /
+					(d->single_copy ? 3 : 2)) /
+					sizeof(v_t) * avg_col_weight);
+		if (d->single_copy)
+			computed = MAX(computed, MAX(16000000,
+						2 * (uint64)p->nrows));
+		else
+			computed = MAX(computed, 128000000);
 		computed = MIN(computed, 1750000000);
 		p->block_nnz = (uint32)computed;
 		logprintf(obj, "computed block_nnz %u (L2 cache %d bytes, "
@@ -854,6 +903,30 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		}
 	}
 	logprintf(obj, "nonzeros per matrix block: %u\n", p->block_nnz);
+
+	/* choose the kernel for the gather products (everything but
+	   the single-copy transpose scatter). By default the engine
+	   picks per block from its nonzeros per row: segscan for the
+	   short row segments of small blocks, warpmerge for long ones.
+	   Override with spmv_kernel=segscan|warpmerge */
+
+	if (d->spmv_engine_set_kernel != NULL) {
+		int kernel = SPMV_KERNEL_AUTO;
+		const char *name = "auto (by nonzeros per row)";
+
+		if (obj->nfs_args != NULL) {
+			if (strstr(obj->nfs_args, "spmv_kernel=segscan")) {
+				kernel = SPMV_KERNEL_SEGSCAN;
+				name = "segscan";
+			}
+			if (strstr(obj->nfs_args, "spmv_kernel=warpmerge")) {
+				kernel = SPMV_KERNEL_WARPMERGE;
+				name = "warpmerge";
+			}
+		}
+		d->spmv_engine_set_kernel(d->spmv_engine, kernel);
+		logprintf(obj, "SpMV kernel: %s\n", name);
+	}
 
 	/* should we used CUDA managed memory to store the matrix */
 
@@ -900,6 +973,34 @@ void matrix_extra_free(packed_matrix_t *p) {
 }
 
 /*-------------------------------------------------------------------*/
+static void run_spmv_block(gpudata_t *d, block_row_t *blk,
+			CUdeviceptr vector_in, CUdeviceptr vector_out,
+			spmv_engine_run_func run, const char *label) {
+
+	spmv_data_t spmv_data;
+
+	if (d->use_cudamanaged == 2) {
+		CUDA_TRY(my_cuMemPrefetchAsync(blk->col_entries,
+			blk->num_col_entries * sizeof(uint32),
+			d->gpu_info->device_handle, 0))
+		CUDA_TRY(my_cuMemPrefetchAsync(blk->row_entries,
+			(blk->num_rows + 1) * sizeof(uint32),
+			d->gpu_info->device_handle, 0))
+	}
+	spmv_data.num_rows = blk->num_rows;
+	spmv_data.num_col_entries = blk->num_col_entries;
+	spmv_data.col_entries = blk->col_entries;
+	spmv_data.row_entries = blk->row_entries;
+	spmv_data.vector_in = vector_in;
+	spmv_data.vector_out = vector_out;
+
+	LANCZOS_NVTX_PUSH(label, LANCZOS_NVTX_COLOR_SPMV_RUN);
+	run(d->spmv_engine, &spmv_data);
+	LANCZOS_NVTX_POP();
+	(void)label;
+}
+
+/*-------------------------------------------------------------------*/
 static void mul_packed_gpu(packed_matrix_t *p, 
 				gpuvec_t *x, gpuvec_t *b) {
 
@@ -918,27 +1019,11 @@ static void mul_packed_gpu(packed_matrix_t *p,
 	for (i = 0; i < d->num_block_rows; i++) {
 
 		block_row_t *blk = d->block_rows + i;
-		spmv_data_t spmv_data;
 
-		if (d->use_cudamanaged == 2) {
-			CUDA_TRY(my_cuMemPrefetchAsync(blk->col_entries,
-				blk->num_col_entries * sizeof(uint32),
-				d->gpu_info->device_handle, 0))
-			CUDA_TRY(my_cuMemPrefetchAsync(blk->row_entries,
-				(blk->num_rows + 1) * sizeof(uint32),
-				d->gpu_info->device_handle, 0))
-		}
-		spmv_data.num_rows = blk->num_rows;
-		spmv_data.num_col_entries = blk->num_col_entries;
-		spmv_data.col_entries = blk->col_entries;
-		spmv_data.row_entries = blk->row_entries;
-		spmv_data.vector_in = (CUdeviceptr)((v_t *)x->gpu_vec + start_col);
-		spmv_data.vector_out = b->gpu_vec;
-
-		LANCZOS_NVTX_PUSH("spmv_engine_run.normal", LANCZOS_NVTX_COLOR_SPMV_RUN);
-		d->spmv_engine_run(d->spmv_engine, &spmv_data);
-		LANCZOS_NVTX_POP();
-
+		run_spmv_block(d, blk,
+			(CUdeviceptr)((v_t *)x->gpu_vec + start_col),
+			b->gpu_vec, d->spmv_engine_run,
+			"spmv_engine_run.normal");
 		start_col += blk->blocksize;
 	}
 	LANCZOS_NVTX_POP();
@@ -966,7 +1051,6 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 				gpuvec_t *x, gpuvec_t *b) {
 
 	uint32 i;
-	uint32 start_row = 0;
 	gpudata_t *d = (gpudata_t *)p->extra;
 
 	LANCZOS_NVTX_PUSH("mul_packed_trans.memset", LANCZOS_NVTX_COLOR_MUL_TRANS);
@@ -974,38 +1058,46 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 			p->ncols * sizeof(v_t)));
 	LANCZOS_NVTX_POP();
 
-	/* sweep through the matrix a block row at a time */
-
 	LANCZOS_NVTX_PUSH("mul_packed_trans.spmv_blocks", LANCZOS_NVTX_COLOR_MUL_TRANS);
-	for (i = 0; i < d->num_trans_block_rows; i++) {
+	if (d->single_copy) {
 
-		block_row_t *blk = d->trans_block_rows + i;
-		spmv_data_t spmv_data;
+		/* no transpose on the card: sweep through the matrix
+		   a block col at a time, scattering into that block's
+		   columns of b */
 
-		if (d->use_cudamanaged == 2) {
-			CUDA_TRY(my_cuMemPrefetchAsync(blk->col_entries,
-				blk->num_col_entries * sizeof(uint32),
-				d->gpu_info->device_handle, 0))
-			CUDA_TRY(my_cuMemPrefetchAsync(blk->row_entries,
-				(blk->num_rows + 1) * sizeof(uint32),
-				d->gpu_info->device_handle, 0))
+		uint32 start_col = 0;
+
+		for (i = 0; i < d->num_block_rows; i++) {
+
+			block_row_t *blk = d->block_rows + i;
+
+			run_spmv_block(d, blk, x->gpu_vec,
+				(CUdeviceptr)((v_t *)b->gpu_vec + start_col),
+				d->spmv_engine_run_trans,
+				"spmv_engine_run.trans_scatter");
+			start_col += blk->blocksize;
 		}
-		spmv_data.num_rows = blk->num_rows;
-		spmv_data.num_col_entries = blk->num_col_entries;
-		spmv_data.col_entries = blk->col_entries;
-		spmv_data.row_entries = blk->row_entries;
-		spmv_data.vector_in = (CUdeviceptr)((v_t *)x->gpu_vec + start_row);
-		spmv_data.vector_out = b->gpu_vec;
+	}
+	else {
+		/* sweep through the transpose a block row at a time */
 
-		LANCZOS_NVTX_PUSH("spmv_engine_run.trans", LANCZOS_NVTX_COLOR_SPMV_RUN);
-		d->spmv_engine_run(d->spmv_engine, &spmv_data);
-		LANCZOS_NVTX_POP();
+		uint32 start_row = 0;
 
-		start_row += blk->blocksize;
+		for (i = 0; i < d->num_trans_block_rows; i++) {
+
+			block_row_t *blk = d->trans_block_rows + i;
+
+			run_spmv_block(d, blk,
+				(CUdeviceptr)((v_t *)x->gpu_vec + start_row),
+				b->gpu_vec, d->spmv_engine_run,
+				"spmv_engine_run.trans");
+			start_row += blk->blocksize;
+		}
 	}
 	LANCZOS_NVTX_POP();
 
-	/* handle dense rows */
+	/* handle dense rows; every dense block contributes to all
+	   of b, as in the CPU code */
 
 	LANCZOS_NVTX_PUSH("mul_packed_trans.dense_rows", LANCZOS_NVTX_COLOR_DENSE);
 	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++) {
@@ -1017,7 +1109,7 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 		mul_NxB_BxB_acc_gpu(p,
 			d->dense_blocks[i],
 			(CUdeviceptr)((v_t *)x->gpu_vec + VBITS * i),
-			(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i),
+			b->gpu_vec,
 			p->ncols);
 	}
 	LANCZOS_NVTX_POP();

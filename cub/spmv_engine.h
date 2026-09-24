@@ -28,6 +28,14 @@ typedef void (*spmv_engine_free_func)(void * e);
 typedef void (*spmv_engine_run_func)(void * e,
 				spmv_data_t * spmv_data);
 
+/* optional: kernel for the gather products (spmv_engine_run) */
+enum {
+	SPMV_KERNEL_AUTO = 0,	/* per block, from nonzeros per row */
+	SPMV_KERNEL_WARPMERGE = 1,
+	SPMV_KERNEL_SEGSCAN = 2
+};
+typedef void (*spmv_engine_set_kernel_func)(void * e, int kernel);
+
 #ifdef __cplusplus
 }
 #endif

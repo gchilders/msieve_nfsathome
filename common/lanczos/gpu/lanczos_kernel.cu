@@ -43,6 +43,61 @@ lanczos_kernel_xor(v_t *dest, v_t *src, uint32 n)
 }
 
 /*------------------------------------------------------------------------*/
+#if VBITS <= 256
+
+/* y ^= v * x, where x is a VBITS x VBITS matrix. Each 4-bit piece of
+   v[i] selects one of 16 precomputed XOR combinations of 4 rows of x,
+   so there are VBITS/4 table lookups per vector element and no
+   branches. The table is stored word-major, so the 16 entries a warp
+   can hit for one word sit in distinct shared memory banks. Needs
+   VBITS * VWORDS * 32 bytes of shared memory (32kB at VBITS=256) */
+
+__global__ void
+lanczos_kernel_inner_prod(v_t *y, v_t *v,
+			v_t *x, uint32 n)
+{
+	uint32 i, j, w;
+	uint32 num_threads = gridDim.x * blockDim.x;
+	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
+	__shared__ uint64 t[VBITS / 4][VWORDS][16];
+
+	for (i = threadIdx.x; i < (VBITS / 4) * 16; i += blockDim.x) {
+		uint32 g = i / 16;
+		uint32 m = i % 16;
+
+		for (w = 0; w < VWORDS; w++) {
+			uint64 val = 0;
+			for (j = 0; j < 4; j++) {
+				if (m & (1 << j))
+					val ^= x[4 * g + j].w[w];
+			}
+			t[g][w][m] = val;
+		}
+	}
+
+	__syncthreads();
+
+	for (i = grid_id; i < n; i += num_threads) {
+		v_t vi = v[i];
+		v_t acc;
+
+		for (w = 0; w < VWORDS; w++)
+			acc.w[w] = 0;
+
+#pragma unroll
+		for (j = 0; j < VBITS / 4; j++) {
+			uint32 m = (uint32)(vi.w[j / 16] >> (4 * (j % 16))) & 15;
+
+#pragma unroll
+			for (w = 0; w < VWORDS; w++)
+				acc.w[w] ^= t[j][w][m];
+		}
+		y[i] = v_xor(y[i], acc);
+	}
+}
+
+#else
+
 __global__ void
 lanczos_kernel_inner_prod(v_t *y, v_t *v,
 			v_t *x, uint32 n)
@@ -78,9 +133,21 @@ lanczos_kernel_inner_prod(v_t *y, v_t *v,
 	}
 }
 
+#endif
+
 /*------------------------------------------------------------------------*/
 
 /* thanks to Patrick Stach for ideas on this */
+
+/* xy ^= transpose(x) * y, a VBITS x VBITS result. For each pair of
+   words (w_x, w_y), every element XORs y[i].w[w_y] into one of 15
+   tables selected by each 4-bit piece of x[i].w[w_x]; afterwards row
+   4c+b of the result is the XOR of the tables for piece c whose index
+   has bit b set. Each half-warp owns a copy of the tables (16 pieces,
+   one slot each), and lane k rotates its x word by k pieces so that
+   the 16 lanes of a half-warp always update 16 different slots. That
+   is 16 shared memory updates per element and word pair, half as many
+   as with 2-bit pieces */
 
 #define MAX_OUTER_THREADS 256
 
@@ -88,66 +155,66 @@ __global__ void
 lanczos_kernel_outer_prod(v_t *x, v_t *y,
 			v_t *xy, uint32 n) 
 {
-	uint32 i, w_x, w_y;
+	uint32 i, j, w_x, w_y;
 	uint32 num_threads = gridDim.x * blockDim.x;
 	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
-	uint32 block_id = threadIdx.x;
-	__shared__ uint64 scratch[3 * MAX_OUTER_THREADS];
+	uint32 tid = threadIdx.x;
+	uint32 k = tid % 16;
+	uint32 num_halves = blockDim.x / 16;
+	__shared__ uint64 scratch[MAX_OUTER_THREADS / 16][15][16];
+	uint64 *s = &scratch[tid / 16][0][0];
+	uint64 *flat = &scratch[0][0][0];
 
 	for (w_x = 0; w_x < VWORDS; w_x++) {
 		for (w_y = 0; w_y < VWORDS; w_y++) {
-			uint64 *s = scratch + (block_id & ~0x1f);
-			scratch[block_id + 0*MAX_OUTER_THREADS] = 0;
-			scratch[block_id + 1*MAX_OUTER_THREADS] = 0;
-			scratch[block_id + 2*MAX_OUTER_THREADS] = 0;
+
+			for (i = tid; i < num_halves * 15 * 16; i += blockDim.x)
+				flat[i] = 0;
+			__syncthreads();
 
 			for (i = grid_id; i < n; i += num_threads) {
-				uint32 j;
-				uint32 k = block_id & 0x1f;
 				uint64 xi = x[i].w[w_x];
 				uint64 yi = y[i].w[w_y];
 
 				if (k != 0)
-					xi = (xi >> (2 * k)) | (xi << (64 - (2 * k)));
+					xi = (xi >> (4 * k)) | (xi << (64 - 4 * k));
 
 #pragma unroll
-				for (j = 0; j < 32; j++) {
-					uint32 off = bfe(xi, 2 * j, 2);
+				for (j = 0; j < 16; j++) {
+					uint32 m = bfe(xi, 4 * j, 4);
 					uint64 tmp = yi;
 
-					if (off == 0) {
+					if (m == 0) {
 						tmp = 0;
-						off = 1;
+						m = 1;
 					}
 
-					s[((k + j) & 0x1f) + 
-						MAX_OUTER_THREADS * (off - 1)] ^= tmp;
+					s[16 * (m - 1) + ((k + j) & 15)] ^= tmp;
 				}
 			}
-
-			s = scratch + block_id;
-			__syncthreads();
-			s[0*MAX_OUTER_THREADS] ^= s[2*MAX_OUTER_THREADS];
-			s[1*MAX_OUTER_THREADS] ^= s[2*MAX_OUTER_THREADS];
 			__syncthreads();
 
-			for (i = MAX_OUTER_THREADS / 2; i >= 32; i >>= 1) {
-				if (block_id < i) {
-					s[0*MAX_OUTER_THREADS] ^= s[0*MAX_OUTER_THREADS + i];
-					s[1*MAX_OUTER_THREADS] ^= s[1*MAX_OUTER_THREADS + i];
+			/* fold the half-warp copies together */
+
+			for (i = tid; i < 15 * 16; i += blockDim.x) {
+				uint64 acc = flat[i];
+				for (j = 1; j < num_halves; j++)
+					acc ^= flat[j * 15 * 16 + i];
+				flat[i] = acc;
+			}
+			__syncthreads();
+
+			if (tid < 64) {
+				uint32 c = tid / 4;
+				uint32 b = tid % 4;
+				uint32 m;
+				uint64 res = 0;
+
+				for (m = 1; m < 16; m++) {
+					if (m & (1 << b))
+						res ^= scratch[0][m - 1][c];
 				}
-				__syncthreads();
-			}
-
-			if (block_id < 32) {
-				uint64 res = scratch[block_id];
-				i = 2 * block_id;
-				atomicXor(&xy[64 * w_x + i].w[w_y], res);
-			}
-			else if (block_id < 64) {
-				uint64 res = scratch[MAX_OUTER_THREADS + block_id - 32];
-				i = 2 * block_id - 64 + 1;
-				atomicXor(&xy[64 * w_x + i].w[w_y], res);
+				atomicXor(&xy[64 * w_x + tid].w[w_y], res);
 			}
 			__syncthreads();
 		}

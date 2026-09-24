@@ -179,6 +179,10 @@ void print_usage(char *progname) {
 		 "   block_nnz=X      use approx. X nonzeros per CUB SpMV block\n"
 		 "   use_managed=1    store a matrix larger than will fit on the\n"
 		 "                    GPU in CUDA managed memory\n"
+		 "   single_copy=1    store only the matrix, not its transpose,\n"
+		 "                    on the GPU (less memory, often faster)\n"
+		 "   spmv_kernel=X    SpMV gather kernel: auto (default),\n"
+		 "                    segscan or warpmerge\n"
 #endif
 #ifdef HAVE_MPI
 		 "   mpi_nrows=X      use a grid with X rows\n"

@@ -13,9 +13,16 @@ msieve
 *.qo
 *.so
 built
+.build_config
+.r2_credentials
 msieve.dat
 msieve.dat.*
 msieve.fb
 msieve.log
 worktodo.ini
 *.zst
+download.sh
+*.gz
+jobname.txt
+.pastebin_credentials
+bench/
