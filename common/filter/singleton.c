@@ -813,9 +813,19 @@ void filter_purge_singletons_core(msieve_obj *obj,
 
 		num_passes++;
 
-		/* once a pass stops finding much, the remaining singletons are
+		/* Once a pass stops finding much, the remaining singletons are
 		   far cheaper to chase through the witnesses than to keep
-		   rescanning every relation for */
+		   rescanning every relation for.
+
+		   This break and the drain below it are a pair: leaving the
+		   loop here abandons it before it has converged, so the only
+		   thing that finishes the job is the queue walk that
+		   use_frontier switches on. Breaking out without setting the
+		   flag, or skipping the drain, returns an array that still
+		   contains singletons -- which nothing here checks for, and
+		   which clique removal then follows into a relation that no
+		   longer exists. The loop below is the only other way out,
+		   and it exits having converged. */
 
 		if (new_num_relations != num_relations &&
 		    (uint64)deleted_this_pass * 64 < (uint64)new_num_relations) {
