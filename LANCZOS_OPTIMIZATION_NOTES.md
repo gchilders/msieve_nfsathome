@@ -654,13 +654,20 @@ on sm_70, or a shutdown-path quirk. The 5070 ran v256+default cleanly.
 Do not ship v256 near the 1.75B clamp until understood; the recommended
 formula values (128-256M) are unaffected.
 
-## Tuning Heuristic (validated 2026-06-11, RTX 5070 + Tesla V100)
+## Tuning Heuristic (validated 2026-06-11, RTX 5070 + Tesla V100; RTX 3060 exception added 2026-09-25)
 
 1. Use the largest VBITS that fits VRAM (256 where possible). Tuned
    speed orders 256 >= 128 > 64 on every card tested; the advantage
    grows as L2 shrinks (+6% on 48MB-L2 5070, +81% on 6MB-L2 V100).
 2. Set block_nnz = max(128M, (L2_size/2)/sizeof(v_t) * avg_col_weight).
-   Within ~5% of measured optimum on every tested card/VBITS.
+   Within ~5% of measured optimum on the 5070 and V100 at every VBITS.
+   Exception (RTX 3060, 3MB L2, VBITS=256): a single block, i.e.
+   block_nnz at or above the matrix's sparse nnz, was ~7% faster than
+   the 128M default (single runs, against ~5% run-to-run noise) and uses
+   less VRAM. Only measured on a 958M-nnz matrix, where 1024M and 1.75B
+   are both one block; large multi-block settings were not tested on the
+   3060, and on the V100 at VBITS=256 two 1.75B blocks were slightly
+   slower than 128M (243.6 vs 246.3). Does not apply at VBITS=64.
 3. If VRAM is tight: raise block_nnz first (frees per-block rowptr
    replicas and costs little speed at high VBITS); drop VBITS only as
    a last resort (-45% on small-L2 cards).
@@ -777,3 +784,47 @@ overhead: every block of each direction carries a full rowptr array).
   dims/s. The 10000-block grid stays.
 - Load note: the 1551 dims/s post-review default (TD=90) was measured
   with ~22 load average from unrelated CPU jobs; 1602 was an idle box.
+
+### RTX 3060 check (2026-09-25, small L2)
+
+RTX 3060 12GB (sm_86, 3MB L2, 28 SMs), native Linux, driver 535,
+VBITS=256, same TD=90 matrix, code as of the review follow-up:
+
+| mode | block_nnz | dims/s | full ETA | sparse MB | peak VRAM |
+|---|---|---:|---:|---:|---:|
+| stock | 1024M | 332 | 11h01m | 7461 | 11.1GB |
+| stock | 128M default | 310 | 11h48m | 8114 | 11.8GB |
+| single_copy | 26M default (2*nrows floor) | 251 | 14h34m | 5514 | 9.2GB |
+| single_copy | 64M | 233 | 15h43m | 4409 | 8.1GB |
+
+With a 3MB L2 the scatter's output window can never be L2-resident.
+Single-copy's default was ~19% slower than the two-copy default (251 vs
+310) and ~24% slower than the best two-copy setting (332), so there it
+is a fit-in-memory option, not a speedup. Smaller blocks still helped
+single-copy (26M beat 64M) despite the extra row pointers. Stock at
+VBITS=256 was fastest as a single block on this card (table below); the
+V100 at VBITS=256 was flat instead. 4-bit inner/outer product kernels:
+pre-change commit 106bf9f, stock block_nnz=1024M, 319.2 dims/s vs 331.7
+with them (+4%, one run each, within the ~5% noise). On the 5070 there
+is no dims/s A/B for them; the profile went from ~16+26 to ~11+19
+ms/iter, an estimated 5-7% of an iteration.
+
+Stock block_nnz on small-L2 cards. The matrices differ: the 3060 ran
+the TD=90 C170 matrix (13.2M cols, 958M sparse nnz on the GPU, 72.8/col),
+so 1024M and 1.75B are both one block there; the V100 ran the 20.2M
+matrix (2.24B nnz, 111/col), so 1.75B is two blocks. Block counts in
+parentheses; single runs each.
+
+| card | VBITS | 128M window / (L2/2) | 128M | 1024M | 1.75B | best |
+|---|---:|---:|---:|---:|---:|---|
+| 3060 | 256 | 37x | 310 (8) | 332 (1) | 332 (1) | one block (+7%) |
+| 3060 | 64 | 9x | 142.9 | 132.2 (1) | - | 128M (+8%) |
+| V100 | 256 | 12x | 246.3 (18) | - | 243.6 (2) | flat (256M 257.5) |
+| V100 | 64 | 3x | 141.9 (18) | - | 109.5 (2) | 128M (+30%) |
+
+The window column is relative to half the L2 (the formula's target), so
+37x is ~19x the full L2. One large block only won where the 128M floor's
+window was that far out of cache (3060 at VBITS=256), and then by ~7%.
+Not put in the default formula (one card type, threshold fitted to four
+points); see the exception under Tuning Heuristic rule 2 above. 3060
+VBITS=64 peak VRAM: 10.7GB at 128M, 9.9GB at 1024M.

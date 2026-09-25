@@ -850,7 +850,8 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	   about half the L2 cache, with a floor that keeps per-block
 	   overhead (replicated row pointers, launch count) amortized.
 	   Within ~5% of the measured optimum on RTX 5070 (48MB L2) and
-	   Tesla V100 (6MB L2) at VBITS 64/128/256; see
+	   Tesla V100 (6MB L2) at VBITS 64/128/256; on an RTX 3060 (3MB
+	   L2) at VBITS=256 a single block was ~7% faster. See
 	   LANCZOS_OPTIMIZATION_NOTES.md. Override with block_nnz=N
 
 	   In single-copy mode the same window is also the output range
