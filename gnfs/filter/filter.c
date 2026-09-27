@@ -711,7 +711,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 					{
 						uint32 dn = do_partial_filtering(obj, &filter, &merge,
 								entries_r, entries_a, target_densities[d],
-								max_weight);
+								max_weight, NULL);
 						if (dn > 0) {
 							if (d == 0) { relations_needed = dn; goto finished; }
 							break;
