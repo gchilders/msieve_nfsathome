@@ -33,7 +33,7 @@ $Id$
 #endif
 
 #ifdef NO_ZLIB
-	#define gzFile   FILE
+	#define gzFile   FILE *
 	#define gzopen   fopen
 	#define gzclose  fclose
 	#define gzeof    feof

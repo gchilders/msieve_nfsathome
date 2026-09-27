@@ -20,8 +20,8 @@ $Id$
 void
 cuGetErrorMessage(CUresult result, int line) 
 {
-	char * error_name = NULL;
-	char * error_string = NULL;
+	const char * error_name = NULL;
+	const char * error_string = NULL;
 
 	cuGetErrorName(result, &error_name);
 	cuGetErrorString(result, &error_string);
