@@ -40,6 +40,23 @@ typedef struct {
 	uint32 col_off;
 } entry_idx_t;
 
+/* Largest block_nnz we accept. One block's nonzero count has to fit in a
+   uint32 all the way to the kernels (block_row_t::num_col_entries and
+   spmv_data_t::num_col_entries), and the CSR row pointers are uint32 too,
+   so 2^32-1 is the hard ceiling. We stop ~295M short of it because
+   extract_block() never splits a column, and so overshoots the request by
+   up to one column's weight; no real column comes anywhere near that much
+   slack. Every host-side nonzero count below is 64-bit, so nothing wraps
+   while a block is being assembled -- that, not the kernels, was what
+   limited this to 1750000000 before (11 * (nnz/10) overflowed a uint32).
+
+   Note that a block this large is expensive to build on the host: the CSR
+   column array costs 4 bytes per nonzero and radix_sort() another 16, so
+   a full 4e9-nonzero block needs ~80GB of host memory in transit, even
+   though only 16GB of it lands on the card. */
+
+#define MAX_BLOCK_NNZ 4000000000u
+
 #if 0
 // Tried using compressible memory on an A100. Did not help 
 static CUresult setProp(CUmemAllocationProp *prop, int UseCompressibleMemory)
@@ -163,17 +180,17 @@ static void copy_dense(packed_matrix_t *p)
 }
 
 /*-------------------------------------------------------------------*/
-static uint32 extract_block(la_col_t *cols,
+static uint64 extract_block(la_col_t *cols,
 			uint32 row_min, uint32 row_max,
 			uint32 col_min, uint32 col_max,
-			uint32 nnz, uint32 *blocksize,
-			entry_idx_t **entries_in, 
-			uint32 *max_entries_in)
+			uint64 nnz, uint32 *blocksize,
+			entry_idx_t **entries_in,
+			uint64 *max_entries_in)
 {
 	uint32 i, j;
-	uint32 num_entries = 0;
+	uint64 num_entries = 0;
 	entry_idx_t *entries = *entries_in;
-	uint32 max_entries = *max_entries_in;
+	uint64 max_entries = *max_entries_in;
 
 	for (i = col_min; (i < col_max) && (num_entries < nnz); i++) {
 
@@ -211,21 +228,22 @@ static uint32 extract_block(la_col_t *cols,
 }
 
 /*-------------------------------------------------------------------*/
-static uint32 extract_block_trans(la_col_t *cols,
+static uint64 extract_block_trans(la_col_t *cols,
 			uint32 row_min, uint32 row_max,
 			uint32 col_min, uint32 col_max,
-			uint32 nnz, uint32 num_dense_rows,
+			uint64 nnz, uint32 num_dense_rows,
 			uint32 *blocksize,
 			entry_idx_t **entries_in,
-			uint32 *max_entries_in)
+			uint64 *max_entries_in)
 {
 	uint32 i, j;
-	uint32 num_entries = 0;
+	uint64 num_entries = 0;
 	uint32 my_row_max, my_blocksize;
 	entry_idx_t *entries = *entries_in;
-	uint32 max_entries = *max_entries_in;
-	uint32 min_nnz = 9 * (nnz / 10);
-	uint32 max_nnz = 11 * (nnz / 10);
+	uint64 max_entries = *max_entries_in;
+	uint64 min_nnz = 9 * (nnz / 10);
+	/* the +10% search window has to stay inside what a block can hold */
+	uint64 max_nnz = MIN(11 * (nnz / 10), (uint64)MAX_BLOCK_NNZ);
 
 	/* Need to figure out what my_row_max to use to get about nnz nonzeros */
 
@@ -265,7 +283,7 @@ static uint32 extract_block_trans(la_col_t *cols,
 				my_row_max = row_max;
 				break;
 			}
-			max_nnz = (uint32)(-1);
+			max_nnz = (uint64)MAX_BLOCK_NNZ;
 			continue;
 		}
 		break;
@@ -323,15 +341,20 @@ static int compare_row_off(const void *x, const void *y) {
 }
 
 /*-------------------------------------------------------------------*/
-static void radix_sort(entry_idx_t *arr, uint32 n) {
+static void radix_sort(entry_idx_t *arr, uint64 n) {
 
 	/* simple radix sort, much faster than qsort() */
 
-	uint32 i, pass, skip;
+	uint64 i;
+	uint32 pass, skip;
 	uint64 *a, *b, *from, *to, *temp;
 
-	a = (uint64 *) malloc(n * sizeof(uint64));
-	b = (uint64 *) malloc(n * sizeof(uint64));
+	/* xmalloc, not malloc: these are 8n bytes each, so at the top of
+	   the block_nnz range they are tens of GB and a failure here is
+	   entirely plausible -- better to say so than to segfault */
+
+	a = (uint64 *) xmalloc(n * sizeof(uint64));
+	b = (uint64 *) xmalloc(n * sizeof(uint64));
 
 	for (i = 0; i < n; i++) {
 		entry_idx_t *e = arr + i;
@@ -342,7 +365,7 @@ static void radix_sort(entry_idx_t *arr, uint32 n) {
 	to = b;
 	skip = 0;
 	for (pass = 0; pass < 8; pass++)  {
-		uint32 box[256] = { 0 };
+		uint64 box[256] = { 0 };
 
 		for (i = 0; i < n; i++) box[ (from[i] >> (8*pass)) & 255]++;
 		if (box[0] == n) { /* this word is all 0's, don't need to sort */
@@ -350,7 +373,7 @@ static void radix_sort(entry_idx_t *arr, uint32 n) {
 			continue;
 		}
 		for (i = 1; i < 256; i++) box[i] += box[i-1];
-		for (i = n - 1; i != (uint32)(-1); i--) to[--box[(from[i] >> (8*pass)) & 255]] = from[i];
+		for (i = n - 1; i != (uint64)(-1); i--) to[--box[(from[i] >> (8*pass)) & 255]] = from[i];
 
 		temp = from;
 		from = to;
@@ -371,20 +394,33 @@ static void radix_sort(entry_idx_t *arr, uint32 n) {
 
 /*-------------------------------------------------------------------*/
 static void pack_matrix_block(gpudata_t *d, block_row_t *b,
-			entry_idx_t *entries, uint32 num_entries,
-			uint32 row_min, uint32 row_max, 
+			entry_idx_t *entries, uint64 num_entries,
+			uint32 row_min, uint32 row_max,
 			uint32 col_min, uint32 col_max,
 			uint32 is_trans)
 {
 
-	uint32 i, j;
+	uint64 i, j;
 	uint32 num_rows = row_max - row_min;
+	uint32 *col_entries;
+	uint32 *row_entries;
+
+	/* the CSR arrays below, and everything downstream of them, index
+	   nonzeros with a uint32; the block extractors are capped so this
+	   cannot happen, but a wrong answer here would be silent */
+
+	if (num_entries > MAX_BLOCK_NNZ) {
+		printf("error: matrix block holds %" PRIu64 " nonzeros, above "
+			"the %u a CSR block can address; lower block_nnz\n",
+			num_entries, (uint32)MAX_BLOCK_NNZ);
+		exit(-1);
+	}
 
 	/* convert a block of matrix rows from COO to CSR format */
 
-	uint32 *col_entries = (uint32 *)xmalloc(num_entries * 
+	col_entries = (uint32 *)xmalloc(num_entries *
 					sizeof(uint32));
-	uint32 *row_entries = (uint32 *)xcalloc(num_rows + 1,
+	row_entries = (uint32 *)xcalloc(num_rows + 1,
 					sizeof(uint32));
 
 	if (is_trans) {
@@ -408,23 +444,26 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 		col_entries[i] = e[0].col_off - col_min;
 
 		if (i > 0 && e[0].row_off != e[-1].row_off) {
-			row_entries[e[-1].row_off - row_min] = j;
+			row_entries[e[-1].row_off - row_min] = (uint32)j;
 			j = 0;
 		}
 	}
-	row_entries[entries[i-1].row_off - row_min] = j;
+	row_entries[entries[i-1].row_off - row_min] = (uint32)j;
+
+	/* the running total ends at num_entries, which the check above
+	   has already bounded to what a uint32 can hold */
 
 	for (i = j = 0; i < num_rows; i++) {
 		uint32 t = row_entries[i];
-		row_entries[i] = j;
+		row_entries[i] = (uint32)j;
 		j += t;
 	}
-	row_entries[num_rows] = num_entries;
+	row_entries[num_rows] = (uint32)num_entries;
 
 	b->num_rows = num_rows;
 	b->num_cols = col_max - col_min;
-	b->num_col_entries = num_entries;
-	printf("%u %u %u\n", num_entries, num_rows, b->blocksize);
+	b->num_col_entries = (uint32)num_entries;
+	printf("%" PRIu64 " %u %u\n", num_entries, num_rows, b->blocksize);
 
 	if (d->use_cudamanaged) {
 		CUDA_TRY(cuMemAllocManaged(&b->col_entries,
@@ -487,7 +526,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 					num_trans_block_rows_alloc *
 					sizeof(block_row_t));
 
-	uint32 num_entries_alloc = 10000;
+	uint64 num_entries_alloc = 10000;
 	entry_idx_t *entries = (entry_idx_t *)xmalloc(
 					num_entries_alloc *
 					sizeof(entry_idx_t));
@@ -503,7 +542,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 	while (start_col < p->ncols) {
 
 		block_row_t *b;
-		uint32 num_entries;
+		uint64 num_entries;
 
 		num_entries = extract_block(p->unpacked_cols,
 					0, p->nrows,
@@ -543,7 +582,7 @@ static void gpu_matrix_init(packed_matrix_t *p) {
 	while (!d->single_copy && start_row < p->nrows) {
 
 		block_row_t *b;
-		uint32 num_entries;
+		uint64 num_entries;
 
 		num_entries = extract_block_trans(p->unpacked_cols,
 					start_row,
@@ -898,7 +937,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 						2 * (uint64)p->nrows));
 		else
 			computed = MAX(computed, 128000000);
-		computed = MIN(computed, 1750000000);
+		computed = MIN(computed, (uint64)MAX_BLOCK_NNZ);
 		p->block_nnz = (uint32)computed;
 		logprintf(obj, "computed block_nnz %u (L2 cache %d bytes, "
 				"average column weight %.1f)\n",
@@ -911,19 +950,27 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 			{
 				/* atoi() would wrap anything past INT_MAX into a
 				   block size nobody asked for, on a run that then
-				   takes hours */
+				   takes hours. strtoull() rather than strtoul()
+				   because unsigned long is 32 bits on Windows,
+				   where an oversized value saturates at UINT32_MAX
+				   instead of being caught as out of range */
 
 				char *endp;
-				unsigned long v = strtoul(tmp + 10, &endp, 10);
+				uint64 v;
 
-				if (endp == tmp + 10 || v == 0 || v > UINT32_MAX) {
+				errno = 0;
+				v = strtoull(tmp + 10, &endp, 10);
+
+				if (endp == tmp + 10 || errno == ERANGE ||
+				    v == 0 || v > UINT32_MAX) {
 					logprintf(obj, "error: block_nnz out of range\n");
 					exit(-1);
 				}
 				p->block_nnz = (uint32)v;
 			}
 			if (p->block_nnz < 100000) p->block_nnz = 100000;
-			if (p->block_nnz > 1750000000) p->block_nnz = 1750000000;
+			if (p->block_nnz > MAX_BLOCK_NNZ)
+				p->block_nnz = MAX_BLOCK_NNZ;
 		}
 	}
 	logprintf(obj, "nonzeros per matrix block: %u\n", p->block_nnz);
