@@ -21,6 +21,8 @@ $Id$
 extern void *spmv_engine_init(int *vbits);
 extern void spmv_engine_free(void *engine);
 extern void spmv_engine_run(void *engine, spmv_data_t *spmv_data);
+extern void spmv_engine_run_trans(void *engine, spmv_data_t *spmv_data);
+extern void spmv_engine_set_kernel(void *engine, int kernel);
 #endif
 #include "lanczos_gpu_core.h"
 #include "lanczos_nvtx.h"
@@ -623,6 +625,8 @@ load_spmv_engine(msieve_obj *obj, gpudata_t *d)
 	d->spmv_engine_init = spmv_engine_init;
 	d->spmv_engine_free = spmv_engine_free;
 	d->spmv_engine_run = spmv_engine_run;
+	d->spmv_engine_run_trans = spmv_engine_run_trans;
+	d->spmv_engine_set_kernel = spmv_engine_set_kernel;
 
 	/* Preserve the historical spmvlib= override for testing/custom engines. */
 	if (obj->nfs_args != NULL)
@@ -653,6 +657,12 @@ load_spmv_engine(msieve_obj *obj, gpudata_t *d)
 					"spmv_engine_free");
 	d->spmv_engine_run = get_lib_symbol(d->spmv_engine_handle,
 					"spmv_engine_run");
+	/* the override library replaces the built-in engine completely, so
+	   the optional entry points come from it too (NULL if it has none) */
+	d->spmv_engine_run_trans = get_lib_symbol(d->spmv_engine_handle,
+					"spmv_engine_run_trans");
+	d->spmv_engine_set_kernel = get_lib_symbol(d->spmv_engine_handle,
+					"spmv_engine_set_kernel");
 	if (d->spmv_engine_init == NULL ||
 	    d->spmv_engine_free == NULL ||
 	    d->spmv_engine_run == NULL) {
