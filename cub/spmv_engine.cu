@@ -8,6 +8,25 @@
 #include <cstdio>
 #include "spmv_engine.h"
 
+#ifndef DISABLE_NVTX
+#include "nvtx3/nvToolsExt.h"
+static inline void spmv_nvtx_push(const char *name) {
+    nvtxEventAttributes_t attr = {};
+    attr.version = NVTX_VERSION;
+    attr.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
+    attr.colorType = NVTX_COLOR_ARGB;
+    attr.color = 0xFF43A047u;  /* green: matches host-side spmv_engine_run */
+    attr.messageType = NVTX_MESSAGE_TYPE_ASCII;
+    attr.message.ascii = name;
+    nvtxRangePushEx(&attr);
+}
+#define SPMV_NVTX_PUSH(name) spmv_nvtx_push(name)
+#define SPMV_NVTX_POP()      nvtxRangePop()
+#else
+#define SPMV_NVTX_PUSH(name) ((void)0)
+#define SPMV_NVTX_POP()      ((void)0)
+#endif
+
 #ifndef WARP_SIZE
 #define WARP_SIZE 32
 #endif
@@ -226,24 +245,34 @@ SPMV_API void spmv_engine_run(void* e, spmv_data_t* spmv_data) {
     if (blocks > 0) {
         switch (eng->warp_items) {
             case 256:
+                SPMV_NVTX_PUSH("spmv_run[wi=256]");
                 cudaFuncSetCacheConfig(csr_spmv_xor_warpmerge_kernel<256>, cudaFuncCachePreferL1);
                 csr_spmv_xor_warpmerge_kernel<256><<<blocks, warps_per_block * WARP_SIZE>>>(rowptr, colidx, x, y, num_rows, total_nnz);
+                SPMV_NVTX_POP();
                 break;
             case 512:
+                SPMV_NVTX_PUSH("spmv_run[wi=512]");
                 cudaFuncSetCacheConfig(csr_spmv_xor_warpmerge_kernel<512>, cudaFuncCachePreferL1);
                 csr_spmv_xor_warpmerge_kernel<512><<<blocks, warps_per_block * WARP_SIZE>>>(rowptr, colidx, x, y, num_rows, total_nnz);
+                SPMV_NVTX_POP();
                 break;
             case 1024:
+                SPMV_NVTX_PUSH("spmv_run[wi=1024]");
                 cudaFuncSetCacheConfig(csr_spmv_xor_warpmerge_kernel<1024>, cudaFuncCachePreferL1);
                 csr_spmv_xor_warpmerge_kernel<1024><<<blocks, warps_per_block * WARP_SIZE>>>(rowptr, colidx, x, y, num_rows, total_nnz);
+                SPMV_NVTX_POP();
                 break;
             case 2048:
+                SPMV_NVTX_PUSH("spmv_run[wi=2048]");
                 cudaFuncSetCacheConfig(csr_spmv_xor_warpmerge_kernel<2048>, cudaFuncCachePreferL1);
                 csr_spmv_xor_warpmerge_kernel<2048><<<blocks, warps_per_block * WARP_SIZE>>>(rowptr, colidx, x, y, num_rows, total_nnz);
+                SPMV_NVTX_POP();
                 break;
             default:
+                SPMV_NVTX_PUSH("spmv_run[wi=default]");
                 cudaFuncSetCacheConfig(csr_spmv_xor_warpmerge_kernel<512>, cudaFuncCachePreferL1);
                 csr_spmv_xor_warpmerge_kernel<512><<<blocks, warps_per_block * WARP_SIZE>>>(rowptr, colidx, x, y, num_rows, total_nnz);
+                SPMV_NVTX_POP();
                 break;
         }
     }

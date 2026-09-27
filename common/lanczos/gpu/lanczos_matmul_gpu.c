@@ -23,6 +23,7 @@ extern void spmv_engine_free(void *engine);
 extern void spmv_engine_run(void *engine, spmv_data_t *spmv_data);
 #endif
 #include "lanczos_gpu_core.h"
+#include "lanczos_nvtx.h"
 
 static const char * gpu_kernel_names[] = 
 {
@@ -875,11 +876,14 @@ static void mul_packed_gpu(packed_matrix_t *p,
 	uint32 start_col = 0;
 	gpudata_t *d = (gpudata_t *)p->extra;
 
-	CUDA_TRY(cuMemsetD8(b->gpu_vec, 0, 
+	LANCZOS_NVTX_PUSH("mul_packed.memset", LANCZOS_NVTX_COLOR_MUL);
+	CUDA_TRY(cuMemsetD8(b->gpu_vec, 0,
 			p->nrows * sizeof(v_t)));
+	LANCZOS_NVTX_POP();
 
 	/* sweep through the matrix a block col at a time */
 
+	LANCZOS_NVTX_PUSH("mul_packed.spmv_blocks", LANCZOS_NVTX_COLOR_MUL);
 	for (i = 0; i < d->num_block_rows; i++) {
 
 		block_row_t *blk = d->block_rows + i;
@@ -900,25 +904,30 @@ static void mul_packed_gpu(packed_matrix_t *p,
 		spmv_data.vector_in = (CUdeviceptr)((v_t *)x->gpu_vec + start_col);
 		spmv_data.vector_out = b->gpu_vec;
 
+		LANCZOS_NVTX_PUSH("spmv_engine_run.normal", LANCZOS_NVTX_COLOR_SPMV_RUN);
 		d->spmv_engine_run(d->spmv_engine, &spmv_data);
+		LANCZOS_NVTX_POP();
 
 		start_col += blk->blocksize;
 	}
+	LANCZOS_NVTX_POP();
 
 	/* handle dense rows */
 
+	LANCZOS_NVTX_PUSH("mul_packed.dense_rows", LANCZOS_NVTX_COLOR_DENSE);
 	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++) {
 		if (d->use_cudamanaged == 2) {
 			CUDA_TRY(my_cuMemPrefetchAsync(d->dense_blocks[i],
 				p->ncols * sizeof(v_t),
 				d->gpu_info->device_handle, 0))
 		}
-		mul_BxN_NxB_gpu(p, 
-			d->dense_blocks[i], 
-			x->gpu_vec, 
-			(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i), 
+		mul_BxN_NxB_gpu(p,
+			d->dense_blocks[i],
+			x->gpu_vec,
+			(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i),
 			p->ncols);
 	}
+	LANCZOS_NVTX_POP();
 }
 
 /*-------------------------------------------------------------------*/
@@ -929,11 +938,14 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 	uint32 start_row = 0;
 	gpudata_t *d = (gpudata_t *)p->extra;
 
-	CUDA_TRY(cuMemsetD8(b->gpu_vec, 0, 
+	LANCZOS_NVTX_PUSH("mul_packed_trans.memset", LANCZOS_NVTX_COLOR_MUL_TRANS);
+	CUDA_TRY(cuMemsetD8(b->gpu_vec, 0,
 			p->ncols * sizeof(v_t)));
+	LANCZOS_NVTX_POP();
 
 	/* sweep through the matrix a block row at a time */
 
+	LANCZOS_NVTX_PUSH("mul_packed_trans.spmv_blocks", LANCZOS_NVTX_COLOR_MUL_TRANS);
 	for (i = 0; i < d->num_trans_block_rows; i++) {
 
 		block_row_t *blk = d->trans_block_rows + i;
@@ -954,13 +966,17 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 		spmv_data.vector_in = (CUdeviceptr)((v_t *)x->gpu_vec + start_row);
 		spmv_data.vector_out = b->gpu_vec;
 
+		LANCZOS_NVTX_PUSH("spmv_engine_run.trans", LANCZOS_NVTX_COLOR_SPMV_RUN);
 		d->spmv_engine_run(d->spmv_engine, &spmv_data);
+		LANCZOS_NVTX_POP();
 
 		start_row += blk->blocksize;
 	}
+	LANCZOS_NVTX_POP();
 
 	/* handle dense rows */
 
+	LANCZOS_NVTX_PUSH("mul_packed_trans.dense_rows", LANCZOS_NVTX_COLOR_DENSE);
 	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++) {
 		if (d->use_cudamanaged == 2) {
 			CUDA_TRY(my_cuMemPrefetchAsync(d->dense_blocks[i],
@@ -973,15 +989,18 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 			(CUdeviceptr)((v_t *)b->gpu_vec + VBITS * i),
 			p->ncols);
 	}
+	LANCZOS_NVTX_POP();
 }
 
 /*-------------------------------------------------------------------*/
 void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
-    
+
 	gpuvec_t *x = (gpuvec_t *)x_in;
 	gpuvec_t *b = (gpuvec_t *)b_in;
 
+	LANCZOS_NVTX_PUSH("mul_core", LANCZOS_NVTX_COLOR_MUL);
 	mul_packed_gpu(A, x, b);
+	LANCZOS_NVTX_POP();
 
 #ifdef LANCZOS_GPU_DEBUG
 	{
@@ -1013,11 +1032,13 @@ void mul_core(packed_matrix_t *A, void *x_in, void *b_in) {
 
 /*-------------------------------------------------------------------*/
 void mul_trans_core(packed_matrix_t *A, void *x_in, void *b_in) {
-    
+
 	gpuvec_t *x = (gpuvec_t *)x_in;
 	gpuvec_t *b = (gpuvec_t *)b_in;
 
+	LANCZOS_NVTX_PUSH("mul_trans_core", LANCZOS_NVTX_COLOR_MUL_TRANS);
 	mul_packed_trans_gpu(A, x, b);
+	LANCZOS_NVTX_POP();
 
 #ifdef LANCZOS_GPU_DEBUG
 	{

@@ -13,6 +13,7 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include "lanczos_gpu.h"
+#include "lanczos_nvtx.h"
 
 /*-------------------------------------------------------------------*/
 
@@ -307,24 +308,26 @@ void mul_NxB_BxB_acc_cpu(v_t *v, v_t *x, v_t *y, uint32 n) {
 }
 
 /*-------------------------------------------------------------------*/
-void mul_NxB_BxB_acc_gpu(packed_matrix_t *matrix, 
+void mul_NxB_BxB_acc_gpu(packed_matrix_t *matrix,
 			CUdeviceptr v, CUdeviceptr x,
 			CUdeviceptr y, uint32 n) {
 
 	gpudata_t *d = (gpudata_t *)matrix->extra;
 	gpu_launch_t *launch = d->launch + GPU_K_INNER_PROD;
-	uint32 num_blocks = (n + launch->threads_per_block - 1) / 
+	uint32 num_blocks = (n + launch->threads_per_block - 1) /
 				launch->threads_per_block;
 
 	void *args[4] = {&y, &v, &x, &n};
 
-	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
+	LANCZOS_NVTX_PUSH("lanczos_kernel_inner_prod", LANCZOS_NVTX_COLOR_KERNEL);
+	CUDA_TRY(cuLaunchKernel(launch->kernel_func,
 				MIN(10000, num_blocks), 1, 1, launch->threads_per_block, 1, 1,
 				0, NULL, args, NULL))
+	LANCZOS_NVTX_POP();
 }
 
 /*-------------------------------------------------------------------*/
-void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix, 
+void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 			void *v_in, v_t *x,
 			void *y_in, uint32 n) {
 
@@ -332,12 +335,14 @@ void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 	gpuvec_t *y = (gpuvec_t *)y_in;
 	gpudata_t *d = (gpudata_t *)matrix->extra;
 
+	LANCZOS_NVTX_PUSH("vv_mul_NxB_BxB_acc", LANCZOS_NVTX_COLOR_VV);
+
 #ifdef LANCZOS_GPU_DEBUG
 	CUDA_TRY(cuMemcpyDtoH(v->host_vec, v->gpu_vec, n * sizeof(v_t)))
 	CUDA_TRY(cuMemcpyDtoH(y->host_vec, y->gpu_vec, n * sizeof(v_t)))
 #endif
 
-	CUDA_TRY(cuMemcpyHtoD(d->gpu_scratch, x, 
+	CUDA_TRY(cuMemcpyHtoD(d->gpu_scratch, x,
 				VBITS * sizeof(v_t)))
 	mul_NxB_BxB_acc_gpu(matrix, v->gpu_vec, d->gpu_scratch,
 				y->gpu_vec, n);
@@ -362,6 +367,8 @@ void vv_mul_NxB_BxB_acc(packed_matrix_t *matrix,
 		free(tmp);
 	}
 #endif
+
+	LANCZOS_NVTX_POP();
 }
 
 /*-------------------------------------------------------------------*/
@@ -548,9 +555,11 @@ void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 
 	void *args[4] = {&x, &y, &xy, &n};
 
-	CUDA_TRY(cuLaunchKernel(launch->kernel_func, 
+	LANCZOS_NVTX_PUSH("lanczos_kernel_outer_prod", LANCZOS_NVTX_COLOR_KERNEL);
+	CUDA_TRY(cuLaunchKernel(launch->kernel_func,
 				num_blocks, 1, 1, num_threads, 1, 1,
 				0, NULL, args, NULL))
+	LANCZOS_NVTX_POP();
 }
 
 /*-------------------------------------------------------------------*/
@@ -563,9 +572,11 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 	gpuvec_t *y = (gpuvec_t *)y_in;
 	gpudata_t *d = (gpudata_t *)matrix->extra;
 
+	LANCZOS_NVTX_PUSH("vv_mul_BxN_NxB", LANCZOS_NVTX_COLOR_VV);
+
 	CUDA_TRY(cuMemsetD8(d->gpu_scratch, 0, VBITS * sizeof(v_t)));
 
-	mul_BxN_NxB_gpu(matrix, x->gpu_vec, y->gpu_vec, 
+	mul_BxN_NxB_gpu(matrix, x->gpu_vec, y->gpu_vec,
 			d->gpu_scratch, n);
 
 #ifdef LANCZOS_GPU_DEBUG
@@ -597,6 +608,8 @@ void vv_mul_BxN_NxB(packed_matrix_t *matrix,
 	/* combine the results across the entire MPI grid */
 
 	MPI_TRY(MPI_Allreduce(MPI_IN_PLACE, xy, VWORDS * VBITS,
-		MPI_LONG_LONG, MPI_BXOR, matrix->mpi_la_grid))		
+		MPI_LONG_LONG, MPI_BXOR, matrix->mpi_la_grid))
 #endif
+
+	LANCZOS_NVTX_POP();
 }

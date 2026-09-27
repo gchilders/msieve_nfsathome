@@ -18,3 +18,4 @@ msieve.dat.*
 msieve.fb
 msieve.log
 worktodo.ini
+*.zst
