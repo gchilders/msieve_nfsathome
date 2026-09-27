@@ -898,7 +898,20 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		const char *tmp;
 		tmp = strstr(obj->nfs_args, "block_nnz=");
 		if (tmp != NULL) {
-			p->block_nnz = (uint32)atoi(tmp + 10);
+			{
+				/* atoi() would wrap anything past INT_MAX into a
+				   block size nobody asked for, on a run that then
+				   takes hours */
+
+				char *endp;
+				unsigned long v = strtoul(tmp + 10, &endp, 10);
+
+				if (endp == tmp + 10 || v == 0 || v > UINT32_MAX) {
+					logprintf(obj, "error: block_nnz out of range\n");
+					exit(-1);
+				}
+				p->block_nnz = (uint32)v;
+			}
 			if (p->block_nnz < 100000) p->block_nnz = 100000;
 			if (p->block_nnz > 1750000000) p->block_nnz = 1750000000;
 		}

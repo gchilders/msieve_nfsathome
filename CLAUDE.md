@@ -19,7 +19,9 @@ Other useful flags: `OMP=1` (default on), `MPI=1`, `ECM=1`, `VBITS=64` (default)
 
 Clean: `make clean`
 
-There are no automated tests. Validation is done by running actual NFS factorizations.
+There are no automated tests. Validation is done by running actual NFS
+factorizations; the small and medium jobs under c:/dev/numbers are gated on a
+byte-identical msieve.dat.cyc and msieve.dat.mat.
 
 ## Running
 
@@ -38,14 +40,6 @@ NFS options are passed as a quoted string:
 ./msieve -nc2 "all_matbuild=1"
 ./msieve -nc2 "select_density=100"
 ```
-
-### Setup helper script
-
-`setup_job.sh` prepares a working directory from downloaded NFS@Home job files: looks for `*.gz`, `*.fb`, and `*.ini` files, renames them to `msieve.dat.gz`, `msieve.fb`, `worktodo.ini`, and decompresses the `.gz`.
-
-### LA benchmark script
-
-`bench_la.sh` times Lanczos on a prebuilt matrix: `./bench_la.sh -d 90 -a "single_copy=1"` runs `-nc2 "skip_matbuild=1 ..."` on `msieve.dat.mat.90` in its own `bench/<name>-<stamp>/` directory (symlinks to the matrix, so the real job files are never written), measures dims/sec after warmup, stops msieve with SIGTERM (which runs the Lanczos integrity check) and appends a row to `bench/results.tsv`. `-F` instead lets the solve finish and runs `-nc3` in the same directory.
 
 ## Architecture
 

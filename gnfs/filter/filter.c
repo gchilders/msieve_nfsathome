@@ -552,7 +552,18 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 				filter_merge_init(obj, &filter);
 				filter_merge_2way(obj, &filter, &merge);
 				if (filter_merge_full(obj, &merge, extra_needed) != 0) {
-					if (d == 0) { relations_needed = 1000000; free(saved_rel_array); goto finished; }
+
+					/* do_merge() frees the half-built relsets before it
+					   returns; these loops have to do it themselves,
+					   and the finished: label does not */
+
+					if (merge.relset_array != NULL || merge.data_pool != NULL)
+						filter_free_relsets(&merge);
+					if (d == 0) {
+						relations_needed = 1000000;
+						free(saved_rel_array);
+						goto finished;
+					}
 					break;
 				}
 				filter_postproc_relsets(obj, &merge);
@@ -562,7 +573,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 				relations_needed = 0;
 			}
 			free(saved_rel_array);
-			sprintf(lp_filename, "%s.lp", obj->savefile.name);
+			get_filter_tmp_name(obj, lp_filename,
+					sizeof(lp_filename), ".lp");
 			remove(lp_filename);
 			wall_time = time(NULL) - wall_time;
 			logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);
@@ -658,7 +670,18 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 					filter_merge_init(obj, &filter);
 					filter_merge_2way(obj, &filter, &merge);
 					if (filter_merge_full(obj, &merge, extra_needed) != 0) {
-						if (d == 0) { relations_needed = 1000000; free(saved_rel_array); goto finished; }
+
+						/* do_merge() frees the half-built relsets before it
+						   returns; these loops have to do it themselves,
+						   and the finished: label does not */
+
+						if (merge.relset_array != NULL || merge.data_pool != NULL)
+							filter_free_relsets(&merge);
+						if (d == 0) {
+							relations_needed = 1000000;
+							free(saved_rel_array);
+							goto finished;
+						}
 						break;
 					}
 					filter_postproc_relsets(obj, &merge);
@@ -668,7 +691,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 					relations_needed = 0;
 				}
 				free(saved_rel_array);
-				sprintf(lp_filename, "%s.lp", obj->savefile.name);
+				get_filter_tmp_name(obj, lp_filename,
+						sizeof(lp_filename), ".lp");
 				remove(lp_filename);
 				wall_time = time(NULL) - wall_time;
 				logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);
@@ -713,7 +737,15 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 								entries_r, entries_a, target_densities[d],
 								max_weight, NULL);
 						if (dn > 0) {
-							if (d == 0) { relations_needed = dn; goto finished; }
+
+							/* as above: nothing downstream frees these */
+
+							if (merge.relset_array != NULL || merge.data_pool != NULL)
+								filter_free_relsets(&merge);
+							if (d == 0) {
+								relations_needed = dn;
+								goto finished;
+							}
 							break;
 						}
 					}
@@ -723,7 +755,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 					filter_free_relsets(&merge);
 					relations_needed = 0;
 				}
-				sprintf(lp_filename, "%s.lp", obj->savefile.name);
+				get_filter_tmp_name(obj, lp_filename,
+						sizeof(lp_filename), ".lp");
 				remove(lp_filename);
 				wall_time = time(NULL) - wall_time;
 				logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);

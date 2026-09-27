@@ -821,10 +821,24 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 			logprintf(obj, "error: cannot rename '%s' to '%s'\n", src, dst);
 			exit(-1);
 		}
+		/* The cycles are about to be installed under the plain name,
+		   so the matrix has to come with them. A density whose build
+		   failed leaves its .cyc.NNN behind with no .mat.NNN beside
+		   it, and carrying on from there would hand the solver
+		   whatever stale msieve.dat.mat happened to be lying about,
+		   whose cycles are not these. */
+
 		sprintf(src, "%s.mat.%d", obj->savefile.name, dsuffix);
 		sprintf(dst, "%s.mat", obj->savefile.name);
-		if (access(src, F_OK) == 0)
-			rename(src, dst);
+		if (access(src, F_OK) != 0) {
+			logprintf(obj, "error: matrix file '%s' not found\n", src);
+			exit(-1);
+		}
+		if (rename(src, dst) != 0) {
+			logprintf(obj, "error: cannot rename '%s' to '%s'\n",
+					src, dst);
+			exit(-1);
+		}
 		sprintf(src, "%s.mat.idx.%d", obj->savefile.name, dsuffix);
 		sprintf(dst, "%s.mat.idx", obj->savefile.name);
 		if (access(src, F_OK) == 0)
