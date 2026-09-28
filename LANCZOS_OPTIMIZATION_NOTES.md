@@ -668,6 +668,9 @@ formula values (128-256M) are unaffected.
    are both one block; large multi-block settings were not tested on the
    3060, and on the V100 at VBITS=256 two 1.75B blocks were slightly
    slower than 128M (243.6 vs 246.3). Does not apply at VBITS=64.
+   Known failure (2026-09-27, A100 MPI 1x2, 61M-row piece): the fixed
+   128M floor is far too small when the GPU's piece has many rows. See
+   "A100 Feedback" at the end; a row-proportional floor is proposed.
 3. If VRAM is tight: raise block_nnz first (frees per-block rowptr
    replicas and costs little speed at high VBITS); drop VBITS only as
    a last resort (-45% on small-L2 cards).
@@ -828,3 +831,163 @@ window was that far out of cache (3060 at VBITS=256), and then by ~7%.
 Not put in the default formula (one card type, threshold fitted to four
 points); see the exception under Tuning Heuristic rule 2 above. 3060
 VBITS=64 peak VRAM: 10.7GB at 128M, 9.9GB at 1024M.
+
+## 2026-09-27: A100 Feedback (Greg) — the 128M Floor Fails on Tall MPI Pieces
+
+Greg ran the new code (b61b5ac) on 2x A100 under MPI with a 1x2 grid.
+The first GPU's piece is 61010818 x 30505387, weight 3266389052
+(107.08/col). The GPU's sparse average column weight is 76.4, so about
+2.33B sparse nnz and an average row weight of ~38. The log line was
+"computed block_nnz 128000000 (L2 cache 41943040 bytes, average column
+weight 76.4)". VBITS was not stated: the formula gives 100M at VBITS=128
+and 50M at 256, so it is at least 128 either way (both hit the floor).
+Full-solve ETAs:
+
+| code | mode | block_nnz | kernel | ETA |
+|---|---|---|---|---:|
+| previous (pre-b61b5ac) | stock | 1.75B (old default) | - | 29h53m |
+| new | stock | 128M (new default, floor) | auto | 32h37m |
+| new | stock | 1.75B | auto | 28h44m |
+| new | stock | 1.75B | warpmerge | same as auto |
+| new | stock | not stated (probably 1.75B) | segscan | 29h18m |
+| new | single_copy | 122M default (2*nrows floor) | auto | 43h41m |
+| new | single_copy | below the floor (L2 fit) | auto | "a little slower still" |
+| new | single_copy | 1.75B | auto | 49h47m |
+
+What held up:
+- New inner/outer product and vector kernels: -3.9% ETA at matched
+  1.75B (29h53m -> 28h44m). This matches the 3060's +4%.
+- auto = warpmerge at 1.75B, as expected: blocks there have 29-57 nnz
+  per row, far above the segscan threshold of 8. Forced segscan was only
+  2% slower on these long rows. No change needed.
+
+What failed: the default block_nnz (+13.5% vs 1.75B) and single_copy
+(+52%).
+
+### Diagnosis: per-block cost scales with the piece's rows
+
+Every A*x block spans all nrows: it carries a full rowptr array and XORs
+into the whole output vector. Every A^T*x block spans all ncols. So each
+block costs about (2*sizeof(v_t) + 4) bytes per output row it touches,
+independent of block_nnz. The 128M floor was calibrated on square
+matrices with 9.5M-20M rows, and on this piece it gives far fewer
+nonzeros per output row per block:
+
+| matrix | rows | nnz per output row per block at 128M |
+|---|---:|---:|
+| 5070 C168 | 9.54M | 13.4 |
+| 5070/3060 C170 | 13.17M | 9.7 |
+| V100 | 20.2M | 6.3 |
+| Greg A100 (MPI 1x2 piece) | 61.0M | 2.1 (A*x), 4.2 (A^T*x) |
+
+The lowest value we ever tested was ~3 (V100 64M, 5070 C168 v256 32M),
+and it lost every time.
+
+Back-of-envelope: 128M gives 19 blocks per direction vs 2 at 1.75B, so
+17 extra blocks each way. Assumptions: 80-100% of rows touched per
+block, streaming at 1.55-2.0 TB/s HBM, full dimension 2*30.5M = 61M.
+
+| VBITS | iterations | observed extra | est. extra row-side traffic | est. time |
+|---:|---:|---:|---:|---:|
+| 128 | 479K | 29 ms/iter | 46-56 GB/iter | 23-36 ms |
+| 256 | 239K | 58 ms/iter | 86-106 GB/iter | 43-68 ms |
+
+The per-block overhead accounts for the whole loss, so the smaller
+window bought ~no L2 locality. That is expected: at 128M the A*x window
+is 27MB (v128) or 54MB (v256), and the A^T*x window is twice that
+(54/107MB) because rows are half as heavy as columns. That is against a
+40MB L2 that is really two 20MB partitions (see the caveat below).
+
+### Why not "just use max block size" on some cards
+
+Our own data argues against dropping the L2 fit:
+- 5070 C168 v256: one block was 16% slower than the 128M floor (1208 vs
+  1435).
+- V100 v256: 256M beat 1.75B by ~6% (257.5 vs 243.6) even though the
+  window was 12x L2.
+- 5070 C170 v256: 256M beat 1024M (981 vs 833, noisy under WDDM
+  pressure).
+
+Only the 3060 v256 (+7%) and this A100 run preferred the largest blocks.
+The fix belongs in the floor, not in the L2 targeting.
+
+### Proposed fix (not implemented yet)
+
+Make the floor proportional to the piece's rows, in `lanczos_matmul_gpu.c`
+where the two-copy path does `computed = MAX(computed, 128000000)`:
+
+    floor = MAX(128M, k * MAX(nrows, ncols) * sizeof(v_t) / 32),  k = 12
+
+In words: a block must gather at least k times as many 32-byte sectors
+as it rewrites in its output vector. The sizeof(v_t)/32 factor is there
+because a row rewrite costs 2*sizeof(v_t), while a missed gather costs a
+full 32B sector at any VBITS. That is why the V100 at v64 still wants
+128M. Use p->nrows/p->ncols, i.e. the local MPI piece. Effect of k=12:
+
+| card / matrix | VBITS | current | k=12 floor | new | measured |
+|---|---:|---:|---:|---:|---|
+| 5070 C168 | 64 | 278M | 29M | 278M | optimum ~256M |
+| 5070 C168 | 128 | 139M | 57M | 139M | optimum 128M |
+| 5070 C168 | 256 | 128M | 114M | 128M | optimum 128M |
+| 5070 C170 TD=90 | 256 | 128M | 158M | 158M | 128M OOM, 256M 981 |
+| V100 | 64 | 128M | 61M | 128M | optimum 128M |
+| V100 | 256 | 128M | 242M | 242M | optimum 256M (+4.5% vs 128M) |
+| 3060 C170 | 64 | 128M | 40M | 128M | 128M, +8% over 1 block |
+| 3060 C170 | 256 | 128M | 158M | 158M | 1 block +7% over 128M |
+| A100 piece | 128 | 128M | 366M (7 blocks) | 366M | est. ~4% behind 1.75B |
+| A100 piece | 256 | 128M | 732M (4 blocks) | 732M | est. ~1.5% behind 1.75B |
+
+Every default that matched a measured optimum is unchanged. The two that
+did not (V100 v256, 3060 v256) move in the right direction. On the A100
+piece, the estimated loss vs hand-set 1.75B drops from 13.5% to ~1.5-4%.
+k=13 would still leave the 5070 C168 v256 alone (124M) and gives the
+A100 piece 3 blocks at v256.
+
+Possible refinements:
+- Size the two directions separately. A*x windows use the column weight
+  and A^T*x windows use the row weight; these differ 2x on a 1x2 MPI
+  piece, so one block_nnz cannot suit both.
+- Balance block sizes. At 732M the A100 piece splits into
+  732/732/732/135M, and the tiny last block still pays full rowptr and
+  output costs.
+
+### Single copy: same mechanism, and a usable predictor
+
+Single copy won only where its L2 fit ((L2/3)/sizeof(v_t) * col weight)
+cleared its 2*nrows floor:
+- 5070: 38M vs 26M floor. Won.
+- 3060: 2.4M vs 26M. Lost 19%.
+- A100 piece: 33M (v256) vs 122M. Lost 52%.
+
+Proposal: when single_copy=1 is requested and the floor binds, log that
+it is expected to be slower than two copies and only saves VRAM. Update
+the CLAUDE.md single_copy paragraph with the A100 result.
+
+### Caveat: A100 L2 partitioning (unverified)
+
+The formula takes CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE at face value. On
+A100 (and H100), L2 is two partitions, and each caches data for the SMs
+attached to it. Data that every SM gathers may therefore be held in both
+halves, so the usable capacity would be closer to 20MB. This does not
+matter for Greg's run, where the floor dominates, but it would matter if
+we ever tune the L2 fit for datacenter cards.
+
+### Next steps
+
+1. Ask Greg for his VBITS, and for ETAs after warmup at block_nnz =
+   512M, 768M and 1G (two-copy, auto kernel). This shows whether the
+   row floor is enough or the A100 really wants max beyond the per-block
+   overhead. It is also our first data on a piece with more than 20M
+   rows.
+2. Implement the k=12 row floor. Re-check on the 5070: the C168
+   defaults should be unchanged, and C170 v256 moves 128M -> 158M, so
+   check its VRAM and speed.
+3. Add the single_copy warning and the CLAUDE.md update.
+4. If Greg's sweep does not fit the model: add a startup autotune that
+   times a few SpMV iterations at 2-3 block sizes and keeps the fastest.
+   - Safe: the host matrix (p->unpacked_cols) lives for the whole
+     solve, and block layout does not change results (byte-identical
+     checkpoints, 2026-06-10).
+   - Cheap: each GPU rebuild is ~minutes against a ~29h solve.
+   - Each MPI rank can pick its own size.
+   - This is the robust answer for cards we cannot test.
