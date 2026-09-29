@@ -85,10 +85,15 @@ endif
 # cubins. CUDA_ARCHS may be space- or comma-separated. The first architecture
 # is also the default PTX virtual architecture unless CUDA_PTX_ARCH is set.
 #
-# CUDA=1 asks this nvcc which architectures it supports: native code for the
-# current cards among them (80 86 89 90 120), plus PTX for the oldest one, so
-# that any other card this toolkit supports can JIT it. Toolkits too old to
-# list architectures (before 11.0) get the historical sm_60 build.
+# CUDA=1 asks this nvcc which architectures it supports and builds native
+# code for the current cards among them (80 86 89 90 120), plus two PTX
+# images: one for the oldest supported architecture from sm_60 (the old
+# CUDA=1 default) up, so older cards can JIT it, and one for compute_80.
+# The driver JITs the newest PTX a card can run, so a card with no native
+# code here (e.g. sm_100) gets compute_80 code and CUB's tuning for it
+# rather than Pascal's. Toolkits too old to list architectures (before
+# 11.0) get the historical sm_60 build.
+CUDA_PTX_EXTRA =
 ifeq ($(CUDA),1)
 ifeq ($(origin CUDA_ARCHS),undefined)
 NVCC_ARCHS := $(patsubst compute_%,%,$(shell $(NVCC) --list-gpu-arch 2>/dev/null))
@@ -96,7 +101,8 @@ ifeq ($(strip $(NVCC_ARCHS)),)
 	CUDA_ARCHS = 60
 else
 	CUDA_ARCHS = $(filter $(NVCC_ARCHS),80 86 89 90 120)
-	CUDA_PTX_ARCH ?= $(firstword $(filter $(NVCC_ARCHS),35 37 50 52 53 60 61 62 70 72 75 80))
+	CUDA_PTX_ARCH ?= $(firstword $(filter $(NVCC_ARCHS),60 61 62 70 72 75 80))
+	CUDA_PTX_EXTRA = $(filter 80,$(NVCC_ARCHS))
 endif
 endif
 else
@@ -108,7 +114,7 @@ CUDA_ARCH_LIST := $(strip $(subst $(comma), ,$(CUDA_ARCHS)))
 CUDA_PTX_ARCH ?= $(firstword $(CUDA_ARCH_LIST))
 CUDA_GENCODE := $(foreach arch,$(CUDA_ARCH_LIST),-gencode arch=compute_$(arch),code=sm_$(arch))
 CUDA_FATBIN_GENCODE := $(CUDA_GENCODE) \
-	-gencode arch=compute_$(CUDA_PTX_ARCH),code=compute_$(CUDA_PTX_ARCH)
+	$(foreach arch,$(sort $(CUDA_PTX_ARCH) $(CUDA_PTX_EXTRA)),-gencode arch=compute_$(arch),code=compute_$(arch))
 
 	CFLAGS += -I"$(CUDA_ROOT)/include" -Icub -DHAVE_CUDA
 ifeq ($(CUDA_SINGLE_BINARY),1)
@@ -387,9 +393,11 @@ help:
 	@echo "add 'ECM=1' if GMP-ECM is available (enables ECM)"
 	@echo "add 'CUDA=1' for Nvidia graphics card support"
 	@echo "     CUDA=1 builds native code for whichever of 80 86 89 90 120 nvcc"
-	@echo "     supports, plus PTX for the oldest architecture it supports"
+	@echo "     supports, plus PTX for compute_80 and for the oldest architecture"
+	@echo "     from sm_60 up that nvcc supports"
 	@echo "     use CUDA_ARCHS=\"80 86 89 90\" to embed several native architectures"
-	@echo "     CUDA_PTX_ARCH defaults to the first CUDA_ARCHS entry and supplies PTX fallback"
+	@echo "     CUDA_PTX_ARCH (with CUDA=cc or CUDA_ARCHS: the first CUDA_ARCHS"
+	@echo "     entry) supplies the PTX fallback"
 	@echo "     CUDA_SINGLE_BINARY=1 is the Unix default; =0 selects legacy external CUDA files"
 	@echo "add 'MPI=1' for parallel processing using MPI"
 	@echo "     add 'CUDAAWARE=1' if using CUDA-Aware MPI"

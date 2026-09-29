@@ -60,6 +60,13 @@ typedef struct {
 
 #define MAX_BLOCK_NNZ 4000000000u
 
+/* Largest block that actually gets built. The SpMV kernels index
+   nonzeros in uint32 and step past a block's end by up to one warp
+   segment (TWarpItems <= 2048) plus a warp-strided load before they
+   compare, so a block right at 2^32-1 would wrap; keep 2^20 clear */
+
+#define MAX_CSR_BLOCK_NNZ ((uint64)UINT32_MAX - (1u << 20))
+
 #if 0
 // Tried using compressible memory on an A100. Did not help 
 static CUresult setProp(CUmemAllocationProp *prop, int UseCompressibleMemory)
@@ -371,10 +378,10 @@ static void pack_matrix_block(block_row_t *b,
 	   nonzeros with a uint32; the block extractors are capped so this
 	   cannot happen, but a wrong answer here would be silent */
 
-	if (num_entries > (uint64)UINT32_MAX) {
+	if (num_entries > MAX_CSR_BLOCK_NNZ) {
 		printf("error: matrix block holds %" PRIu64 " nonzeros, above "
-			"the %u a CSR block can address; lower block_nnz\n",
-			num_entries, (uint32)UINT32_MAX);
+			"the %" PRIu64 " a CSR block can hold; lower block_nnz\n",
+			num_entries, MAX_CSR_BLOCK_NNZ);
 		exit(-1);
 	}
 
@@ -595,10 +602,10 @@ static void plan_add_block(block_plan_t *plan, uint32 start, uint32 size,
 	   building blocks; block_nnz stops at MAX_BLOCK_NNZ so that one
 	   column's overshoot still fits */
 
-	if (nnz > (uint64)UINT32_MAX) {
+	if (nnz > MAX_CSR_BLOCK_NNZ) {
 		printf("error: matrix block %u would hold %" PRIu64 " nonzeros, "
-			"above the %u a CSR block can address; lower "
-			"block_nnz\n", n, nnz, (uint32)UINT32_MAX);
+			"above the %" PRIu64 " a CSR block can hold; lower "
+			"block_nnz\n", n, nnz, MAX_CSR_BLOCK_NNZ);
 		exit(-1);
 	}
 

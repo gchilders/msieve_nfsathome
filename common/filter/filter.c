@@ -99,6 +99,8 @@ static uint32 ckpt_read(ckpt_io_t *io, void *dst, size_t len) {
 	return 1;
 }
 
+static int read_committed_rmap_generation(msieve_obj *obj,
+					uint64 *generation);
 static uint32 get_committed_rmap_generation(msieve_obj *obj,
 					uint64 *generation);
 
@@ -118,7 +120,16 @@ int32 filter_merge_checkpoint_save(msieve_obj *obj, merge_t *merge,
 	   map; record which one, so a restart after another filtering
 	   run has replaced it is refused rather than misread */
 
-	have_rmap = get_committed_rmap_generation(obj, &rmap_generation);
+	{
+		int rc = read_committed_rmap_generation(obj, &rmap_generation);
+
+		if (rc < 0) {
+			logprintf(obj, "error: not writing merge checkpoint "
+					"'%s'\n", path);
+			return -1;
+		}
+		have_rmap = (uint32)rc;
+	}
 
 	io.fp = fopen(path, "wb");
 	if (io.fp == NULL) {
@@ -189,6 +200,7 @@ int32 filter_merge_checkpoint_load(msieve_obj *obj, merge_t *merge,
 	uint32 num_relsets;
 	uint32 have_rmap, ckpt_have_rmap;
 	uint64 rmap_generation = 0, ckpt_rmap_generation;
+	int rc;
 	time_t start = time(NULL);
 
 	io.fp = fopen(path, "rb");
@@ -221,7 +233,18 @@ int32 filter_merge_checkpoint_load(msieve_obj *obj, merge_t *merge,
 		return -1;
 	}
 
-	have_rmap = get_committed_rmap_generation(obj, &rmap_generation);
+	/* a map that can't be read only means this checkpoint can't be
+	   trusted; refiltering from scratch rebuilds the map */
+
+	rc = read_committed_rmap_generation(obj, &rmap_generation);
+	if (rc < 0) {
+		logprintf(obj, "error: not loading merge checkpoint '%s'\n",
+				path);
+		free(io.buf);
+		fclose(io.fp);
+		return -1;
+	}
+	have_rmap = (uint32)rc;
 	if (!ckpt_read(&io, &ckpt_have_rmap, sizeof(uint32)) ||
 	    !ckpt_read(&io, &ckpt_rmap_generation, sizeof(uint64))) {
 		logprintf(obj, "error: truncated merge checkpoint\n");
@@ -313,7 +336,10 @@ void filter_free_relsets(merge_t *merge) {
 	merge->num_ideals = 0;
 }
 
-static uint32 get_committed_rmap_generation(msieve_obj *obj,
+/* 1 and the generation if a committed relation map is present, 0 if
+   there is none, -1 (logged) if there is one that can't be used */
+
+static int read_committed_rmap_generation(msieve_obj *obj,
 					uint64 *generation) {
 	char buf[256];
 	FILE *map_fp, *commit_fp;
@@ -330,7 +356,7 @@ static uint32 get_committed_rmap_generation(msieve_obj *obj,
 	    fclose(map_fp) != 0 || magic != NFS_RMAP_MAGIC ||
 	    version != NFS_RMAP_VERSION) {
 		logprintf(obj, "error: invalid relation map metadata\n");
-		exit(-1);
+		return -1;
 	}
 	sprintf(buf, "%s.rmap.commit", obj->savefile.name);
 	commit_fp = fopen(buf, "rb");
@@ -341,10 +367,20 @@ static uint32 get_committed_rmap_generation(msieve_obj *obj,
 	    fclose(commit_fp) != 0 || cmagic != NFS_RMAP_COMMIT_MAGIC ||
 	    cgen != gen || ccount != count) {
 		logprintf(obj, "error: relation map is not transactionally committed\n");
-		exit(-1);
+		return -1;
 	}
 	*generation = gen;
 	return 1;
+}
+
+static uint32 get_committed_rmap_generation(msieve_obj *obj,
+					uint64 *generation) {
+
+	int rc = read_committed_rmap_generation(obj, generation);
+
+	if (rc < 0)
+		exit(-1);
+	return (uint32)rc;
 }
 
 /*--------------------------------------------------------------------*/
@@ -444,7 +480,13 @@ int32 filter_make_relsets(msieve_obj *obj, filter_t *filter,
 	   all). do_partial_filtering() calls this routine again for each
 	   retry at a higher max_weight, and the checkpoint has to hold the
 	   attempt that was accepted, so each attempt goes to <path>.tmp and
-	   the caller installs it with filter_merge_checkpoint_commit() */
+	   the caller installs it with filter_merge_checkpoint_commit().
+	   Which attempt is accepted is only known after its full merge,
+	   and that merge consumes the relation sets, so every attempt is
+	   written; on a large dataset that retries, the rejected ones
+	   cost minutes of I/O, but only when merge_ckpt was asked for.
+	   The previous attempt's file goes first, so that a failed write
+	   can't leave a rejected attempt behind to be installed */
 
 	if (ckpt_path != NULL) {
 		FILE *probe = fopen(ckpt_path, "rb");
@@ -455,6 +497,7 @@ int32 filter_make_relsets(msieve_obj *obj, filter_t *filter,
 		}
 		else if (snprintf(tmp_path, sizeof(tmp_path), "%s.tmp",
 				ckpt_path) < (int)sizeof(tmp_path)) {
+			remove(tmp_path);
 			filter_merge_checkpoint_save(obj, merge, min_cycles,
 					tmp_path);
 		}

@@ -313,6 +313,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 	logprintf(obj, "\n");
 	logprintf(obj, "commencing relation filtering\n");
+	savefile_check_scratch(obj);
 
 	/* parse arguments */
 
@@ -393,6 +394,18 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 			}
 		}
 
+		/* the checkpoint holds the relation sets of one merge; the
+		   multi-density paths run their own merges per density and
+		   write .cyc.NNN files, which it can neither record nor
+		   restart. Refuse the pair rather than write a plain .cyc
+		   that all_matbuild would never read */
+
+		if (ckpt_path != NULL && num_densities > 1) {
+			logprintf(obj, "error: merge_ckpt works with a single "
+					"target_density, not a list\n");
+			exit(-1);
+		}
+
 		tmp = strstr(obj->nfs_args, "max_weight=");
 		if (tmp != NULL) {
 			max_weight = strtoul(tmp + 11, NULL, 10);
@@ -457,7 +470,20 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 				merge.target_density = target_density;
 			if (filter_merge_full(obj, &merge,
 					ckpt_min_cycles) != 0) {
+				char failed[300];
+
+				/* reloading it would fail the same way on
+				   every later run, even after more relations
+				   are sieved; move it aside so the next run
+				   filters from the relations again */
+
 				filter_free_relsets(&merge);
+				if (snprintf(failed, sizeof(failed), "%s.failed",
+						ckpt_path) < (int)sizeof(failed) &&
+				    rename(ckpt_path, failed) == 0)
+					logprintf(obj, "merge from checkpoint "
+						"failed; moved it to '%s'\n",
+						failed);
 				relations_needed = 1000000;
 				goto finished;
 			}

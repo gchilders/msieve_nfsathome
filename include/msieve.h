@@ -170,6 +170,8 @@ typedef struct {
 				    staged savefile and the filtering
 				    intermediates that do not outlive the
 				    filtering run */
+	uint32 scratch_checked;  /* scratch_dir has been compared with the
+				    savefile's directory (savefile.c) */
 } msieve_obj;
 
 msieve_obj * msieve_obj_new(char *input_integer,

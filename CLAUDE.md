@@ -17,7 +17,7 @@ make all CUDA=90
 
 Other useful flags: `OMP=1` (default on), `MPI=1`, `ECM=1`, `VBITS=64` (default).
 
-CUDA builds on Linux produce one self-contained binary: the CUB sort/SpMV engines are linked in and the stage-1 and Lanczos kernels are embedded (fatbin plus PTX fallback), so no `.ptx`, `.fatbin` or `cub/*.so` files are needed at runtime. `CUDA_ARCHS="86 120"` embeds several architectures (oldest first; `CUDA_PTX_ARCH` defaults to the first); `CUDA=cc` still builds one. `CUDA_SINGLE_BINARY=0` restores the old external-file layout (the `WIN=1` default). Changing `VBITS` or the architectures rebuilds the GPU objects (via the `cub/.build_config` stamp), but not the host C objects, so `make clean` when switching VBITS.
+CUDA builds on Linux produce one self-contained binary: the CUB sort/SpMV engines are linked in and the stage-1 and Lanczos kernels are embedded (fatbin plus PTX fallback), so no `.ptx`, `.fatbin` or `cub/*.so` files are needed at runtime. `CUDA_ARCHS="86 120"` embeds several architectures (oldest first; `CUDA_PTX_ARCH` defaults to the first); `CUDA=cc` still builds one. Plain `CUDA=1` builds whichever of 80/86/89/90/120 the installed nvcc supports, plus PTX for compute_80 and for the oldest architecture nvcc supports from sm_60 up. `CUDA_SINGLE_BINARY=0` restores the old external-file layout (the `WIN=1` default). Changing `VBITS` or the architectures rebuilds the GPU objects (via the `cub/.build_config` stamp), but not the host C objects, so `make clean` when switching VBITS.
 
 Clean: `make clean`
 

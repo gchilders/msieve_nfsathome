@@ -94,12 +94,15 @@ static uint32 same_directory(const char *a, const char *b) {
 #endif
 }
 
-static void check_scratch_dir(msieve_obj *obj) {
+void savefile_check_scratch(msieve_obj *obj) {
 
 	char dir[256];
 	const char *base;
 	size_t len;
 
+	if (obj->scratch_checked)
+		return;
+	obj->scratch_checked = 1;
 	if (obj->scratch_dir == NULL)
 		return;
 
@@ -125,7 +128,7 @@ void get_filter_tmp_name(msieve_obj *obj, char *buf,
 
 	int len;
 
-	check_scratch_dir(obj);
+	savefile_check_scratch(obj);
 	if (obj->scratch_dir == NULL) {
 		len = snprintf(buf, buf_len, "%s%s", obj->savefile.name,
 				suffix);
@@ -188,7 +191,7 @@ uint32 savefile_stage(msieve_obj *obj) {
 	struct stat dummy;
 #endif
 
-	check_scratch_dir(obj);
+	savefile_check_scratch(obj);
 	if (obj->scratch_dir == NULL || obj->savefile.staged_name != NULL)
 		return 0;
 

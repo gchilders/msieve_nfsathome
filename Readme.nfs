@@ -388,6 +388,12 @@ CUDA_PTX_ARCH defaults to the first entry in CUDA_ARCHS. List architectures
 from oldest to newest so that the default PTX image can run on every selected
 GPU generation. The historical CUDA=cc form still builds for one architecture.
 
+Plain CUDA=1 asks nvcc which architectures it supports, builds native code for
+whichever of 80 86 89 90 120 are among them, and adds two PTX images: one for
+the oldest supported architecture from sm_60 up, so that older cards can run
+the result, and one for compute_80, which newer cards without native code
+(e.g. sm_100) use instead.
+
 On Unix/Linux this single-binary packaging is the Makefile default. Set
 CUDA_SINGLE_BINARY=0 to restore the historical external PTX/fatbin and CUB
 shared-library layout. The legacy WIN=1 Makefile defaults to the external

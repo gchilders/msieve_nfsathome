@@ -708,6 +708,74 @@ static void build_matrix(msieve_obj *obj, mpz_t n) {
 }
 
 /*------------------------------------------------------------------*/
+static int install_density(msieve_obj *obj, int dsuffix) {
+
+	/* install msieve.dat.cyc.NNN and .mat.NNN (and .mat.idx.NNN) under
+	   the plain names the linear algebra reads; 0 on success */
+
+	char cyc_src[512], cyc_dst[512], mat_src[512], mat_dst[512];
+	char src[512], dst[512];
+
+	/* The cycles and the matrix go in together, so check both before
+	   touching either. A density whose build failed leaves its
+	   .cyc.NNN behind with no .mat.NNN beside it; carrying on from
+	   there would hand the solver whatever stale msieve.dat.mat
+	   happened to be lying about, whose cycles are not these, and
+	   renaming the cycles first would leave the job files
+	   half-switched */
+
+	sprintf(cyc_src, "%s.cyc.%d", obj->savefile.name, dsuffix);
+	sprintf(cyc_dst, "%s.cyc", obj->savefile.name);
+	sprintf(mat_src, "%s.mat.%d", obj->savefile.name, dsuffix);
+	sprintf(mat_dst, "%s.mat", obj->savefile.name);
+	if (access(cyc_src, F_OK) != 0) {
+		logprintf(obj, "error: cycle file '%s' not found\n", cyc_src);
+		return -1;
+	}
+	if (access(mat_src, F_OK) != 0) {
+		logprintf(obj, "error: matrix file '%s' not found (run "
+				"all_matbuild=1 first)\n", mat_src);
+		return -1;
+	}
+	if (rename(cyc_src, cyc_dst) != 0) {
+		logprintf(obj, "error: cannot rename '%s' to '%s'\n",
+				cyc_src, cyc_dst);
+		return -1;
+	}
+	if (rename(mat_src, mat_dst) != 0) {
+		logprintf(obj, "error: cannot rename '%s' to '%s'\n",
+				mat_src, mat_dst);
+		rename(cyc_dst, cyc_src);
+		return -1;
+	}
+
+	/* the MPI index describes one particular matrix file. One left
+	   over from the matrix just replaced would split the new matrix
+	   at the old matrix's offsets, so without an index for this
+	   density there must be none at all: an MPI solve then stops
+	   saying so, instead of reading the wrong parts of the matrix */
+
+	sprintf(src, "%s.mat.idx.%d", obj->savefile.name, dsuffix);
+	sprintf(dst, "%s.mat.idx", obj->savefile.name);
+	if (access(src, F_OK) == 0) {
+		if (rename(src, dst) != 0) {
+			logprintf(obj, "error: cannot rename '%s' to '%s'\n",
+					src, dst);
+			return -1;
+		}
+	}
+	else if (access(dst, F_OK) == 0) {
+		logprintf(obj, "removing '%s', which indexed the matrix "
+				"just replaced\n", dst);
+		if (remove(dst) != 0) {
+			logprintf(obj, "error: cannot remove '%s'\n", dst);
+			return -1;
+		}
+	}
+	return 0;
+}
+
+/*------------------------------------------------------------------*/
 /* whether the matrix the build wrote is the same file the finished matrix
    lives in, i.e. whether there is no separate scratch copy to throw away.
    A savefile path too long to append ".mat" to cannot be that file, since
@@ -757,6 +825,7 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 
 	logprintf(obj, "\n");
 	logprintf(obj, "commencing linear algebra\n");
+	savefile_check_scratch(obj);
 	logprintf(obj, "using VBITS=%d\n", VBITS);
 
 	/* parse input arguments */
@@ -812,48 +881,24 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 		}
 	}
 
-	/* handle select_density: rename .cyc.NNN and .mat.NNN to unsuffixed versions */
+	/* handle select_density: rename .cyc.NNN and .mat.NNN to
+	   unsuffixed versions. With MPI every rank gets here, but the
+	   files are shared, so rank 0 renames them and tells the rest
+	   whether that worked; all ranks then go on or stop together */
+
 	if (select_density > 0) {
-		char cyc_src[512], cyc_dst[512], mat_src[512], mat_dst[512];
-		char src[512], dst[512];
 		int dsuffix = (int)(select_density + 0.5);
+		int status = 0;
 
-		/* The cycles and the matrix are installed under the plain
-		   names together, so check both before touching either. A
-		   density whose build failed leaves its .cyc.NNN behind with
-		   no .mat.NNN beside it; carrying on from there would hand
-		   the solver whatever stale msieve.dat.mat happened to be
-		   lying about, whose cycles are not these, and renaming the
-		   cycles first would leave the job files half-switched */
-
-		sprintf(cyc_src, "%s.cyc.%d", obj->savefile.name, dsuffix);
-		sprintf(cyc_dst, "%s.cyc", obj->savefile.name);
-		sprintf(mat_src, "%s.mat.%d", obj->savefile.name, dsuffix);
-		sprintf(mat_dst, "%s.mat", obj->savefile.name);
-		if (access(cyc_src, F_OK) != 0) {
-			logprintf(obj, "error: cycle file '%s' not found\n", cyc_src);
+#ifdef HAVE_MPI
+		if (obj->mpi_rank == 0)
+			status = install_density(obj, dsuffix);
+		MPI_TRY(MPI_Bcast(&status, 1, MPI_INT, 0, MPI_COMM_WORLD))
+#else
+		status = install_density(obj, dsuffix);
+#endif
+		if (status != 0)
 			exit(-1);
-		}
-		if (access(mat_src, F_OK) != 0) {
-			logprintf(obj, "error: matrix file '%s' not found (run "
-					"all_matbuild=1 first)\n", mat_src);
-			exit(-1);
-		}
-		if (rename(cyc_src, cyc_dst) != 0) {
-			logprintf(obj, "error: cannot rename '%s' to '%s'\n",
-					cyc_src, cyc_dst);
-			exit(-1);
-		}
-		if (rename(mat_src, mat_dst) != 0) {
-			logprintf(obj, "error: cannot rename '%s' to '%s'\n",
-					mat_src, mat_dst);
-			rename(cyc_dst, cyc_src);
-			exit(-1);
-		}
-		sprintf(src, "%s.mat.idx.%d", obj->savefile.name, dsuffix);
-		sprintf(dst, "%s.mat.idx", obj->savefile.name);
-		if (access(src, F_OK) == 0)
-			rename(src, dst);
 		skip_matbuild = 1;
 	}
 
