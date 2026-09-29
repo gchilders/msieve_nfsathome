@@ -273,6 +273,108 @@ static uint32 count_relation_ideals_parallel(relation_ideal_t **relation_ptr,
 }
 
 /*--------------------------------------------------------------------*/
+/* The cap on ideal weight is the largest single lever on filtering, and
+   right now it is a side effect of how much memory the LP file needed
+   rather than of anything about the dataset: the one-pass reader below
+   hardcodes 200, and the partial reader is handed a value that starts
+   at 20. Burying an ideal adds one to target_excess (add_target_excess
+   above), and clique removal then stops at a fixed multiple of it, so
+   the cap is what decides the excess the merge gets to work with -- and
+   thus both whether a matrix can be built and how big it comes out.
+
+   counts[] holds every ideal's exact weight right here, and the
+   renumbering is about to overwrite it, so this is the one moment where
+   every candidate cap can be priced for nothing. Log what each would
+   have buried. It changes no behavior; it exists so the cap can
+   eventually be chosen from measurements across many jobs instead of
+   from the two constants we have now. */
+
+#define WEIGHT_PROFILE_BUCKETS 256
+
+static void log_ideal_weight_profile(msieve_obj *obj, uint32 *counts,
+                uint32 num_ideals, uint32 num_relations,
+                uint32 min_keep, uint32 base_excess) {
+
+    static const uint32 caps[] = { 10, 15, 20, 25, 30, 35, 40, 45,
+                    100, 200 };
+    const uint32 num_caps = sizeof(caps) / sizeof(caps[0]);
+    uint64 *hist;
+    uint64 total[WEIGHT_PROFILE_BUCKETS];
+    uint32 num_blocks;
+    int nthreads = 1;
+    int b;
+    uint32 i, c;
+    int64 margin;
+
+    if (num_ideals == 0)
+        return;
+
+#ifdef HAVE_OMP
+    nthreads = omp_get_max_threads();
+    if (nthreads < 1)
+        nthreads = 1;
+#endif
+
+    hist = (uint64 *)xcalloc((size_t)nthreads * WEIGHT_PROFILE_BUCKETS,
+                    sizeof(uint64));
+    num_blocks = (uint32)(((uint64)num_ideals +
+            IDEAL_RENUMBER_BLOCK_SIZE - 1) / IDEAL_RENUMBER_BLOCK_SIZE);
+
+    /* the last bucket absorbs everything at or above it; every cap
+       reported below is smaller, so those ideals are buried either way */
+
+#pragma omp parallel for schedule(static)
+    for (b = 0; b < (int)num_blocks; b++) {
+        uint64 k;
+        uint64 start = (uint64)b * IDEAL_RENUMBER_BLOCK_SIZE;
+        uint64 end = MIN(start + IDEAL_RENUMBER_BLOCK_SIZE,
+                (uint64)num_ideals);
+        uint64 *my_hist = hist;
+#ifdef HAVE_OMP
+        my_hist += (size_t)omp_get_thread_num() * WEIGHT_PROFILE_BUCKETS;
+#endif
+        for (k = start; k < end; k++) {
+            uint32 v = counts[(size_t)k];
+            my_hist[MIN(v, (uint32)(WEIGHT_PROFILE_BUCKETS - 1))]++;
+        }
+    }
+
+    for (i = 0; i < WEIGHT_PROFILE_BUCKETS; i++) {
+        uint64 sum = 0;
+        for (b = 0; b < nthreads; b++)
+            sum += hist[(size_t)b * WEIGHT_PROFILE_BUCKETS + i];
+        total[i] = sum;
+    }
+    free(hist);
+
+    /* the margin is the excess that is not an artifact of burial, so it
+       is the same whatever cap is chosen; it bounds how far burial can
+       usefully be pushed */
+
+    margin = (int64)num_relations - (int64)num_ideals - (int64)base_excess;
+    logprintf(obj, "ideal weight profile: %u ideals, %u relations, "
+            "base target excess %u, margin %" PRId64 "\n",
+            num_ideals, num_relations, base_excess, margin);
+
+    for (c = 0; c < num_caps; c++) {
+        uint32 w = caps[c];
+        uint64 keep = 0;
+        uint64 bury;
+
+        if (w >= WEIGHT_PROFILE_BUCKETS - 1)
+            continue;
+
+        for (i = min_keep; i <= w; i++)
+            keep += total[i];
+        bury = (uint64)num_ideals - keep;
+
+        logprintf(obj, "  weight <= %3u: keep %" PRIu64 ", bury %" PRIu64
+                ", target excess %" PRIu64 "\n",
+                w, keep, bury, (uint64)base_excess + bury);
+    }
+}
+
+/*--------------------------------------------------------------------*/
 static void filter_read_lp_file_1pass(msieve_obj *obj,
                 filter_t *filter,
                 uint32 max_ideal_weight) {
@@ -359,6 +461,9 @@ static void filter_read_lp_file_1pass(msieve_obj *obj,
         }
     }
 
+    log_ideal_weight_profile(obj, counts, num_ideals, num_relations,
+            1, filter->target_excess);
+
     j = renumber_ideal_counts(counts, num_ideals, 1, max_ideal_weight,
             UINT32_MAX, NULL);
     add_target_excess(obj, filter, num_ideals - j);
@@ -444,6 +549,9 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
         logprintf(obj, "error: LP file contains trailing relation data\n");
         exit(-1);
     }
+
+    log_ideal_weight_profile(obj, counts, num_ideals, num_relations,
+            0, filter->target_excess);
 
     j = renumber_ideal_counts(counts, num_ideals, 0, max_ideal_weight,
             UINT32_MAX, NULL);
