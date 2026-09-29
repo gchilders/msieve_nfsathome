@@ -18,6 +18,7 @@ $Id$
 #include <util.h>
 #include <gmp.h>
 #include <mp.h>
+#include <limits.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,7 +50,13 @@ static INLINE void gmp2mp(mpz_t src, mp_t *dest) {
 /*--------------------------------------------------------------------*/
 static INLINE void uint64_2gmp(uint64 src, mpz_t dest) {
 
-#if GMP_LIMB_BITS == 64
+	/* the fast path needs mpz_set_ui's argument to actually hold 64
+	   bits, which is a property of unsigned long and not of the limb
+	   size. LLP64 targets (64-bit Windows, MSVC and MinGW alike) have
+	   64-bit limbs but a 32-bit unsigned long, and would silently
+	   discard the top half of src. */
+
+#if GMP_LIMB_BITS == 64 && ULONG_MAX > 0xffffffffUL
 	mpz_set_ui(dest, src);
 #else
 	/* mpz_import is terribly slow */

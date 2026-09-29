@@ -15,7 +15,7 @@ $Id$
 #include "sieve.h"
 
 /*------------------------------------------------------------------*/
-void print_relation(savefile_t *savefile, int64 a, uint32 b, 
+void print_relation(savefile_t *savefile, int64 a, uint64 b, 
 			uint32 *factors_r, uint32 num_factors_r, 
 			uint32 large_prime_r[MAX_LARGE_PRIMES],
 			uint32 *factors_a, uint32 num_factors_a, 
@@ -25,7 +25,7 @@ void print_relation(savefile_t *savefile, int64 a, uint32 b,
 	char buf[LINE_BUF_SIZE];
 	char *tmp = buf;
 
-	tmp += sprintf(buf, "%" PRId64 ",%u", a, b);
+	tmp += sprintf(buf, "%" PRId64 ",%" PRIu64, a, b);
 	for (i = 0; i < num_factors_r; i++) {
 		if (i == 0)
 			tmp += sprintf(tmp, ":%x", factors_r[i]);
@@ -70,7 +70,7 @@ uint32 fplog(uint32 k, double log_of_base) {
 }
 
 /*------------------------------------------------------------------*/
-int32 fplog_eval_poly(int64 a, uint32 b, mpz_t scratch,
+int32 fplog_eval_poly(int64 a, uint64 b, mpz_t scratch,
 			mpz_poly_t *f, double log_base,
 			uint32 *bits) { 
 
@@ -89,7 +89,7 @@ int32 fplog_eval_poly(int64 a, uint32 b, mpz_t scratch,
 #define LOG_TARGET 220
 
 double get_log_base(mpz_poly_t *poly, 
-			int64 a0, int64 a1, uint32 b) { 
+			int64 a0, int64 a1, uint64 b) { 
 
 	/* Decide on a base for the logs of one polynomial. 
 
@@ -155,7 +155,7 @@ uint32 read_last_line(msieve_obj *obj, mpz_t n) {
 }
 
 /*------------------------------------------------------------------*/
-void write_last_line(msieve_obj *obj, mpz_t n, uint32 b) {
+void write_last_line(msieve_obj *obj, mpz_t n, uint64 b) {
 
 	char buf[LINE_BUF_SIZE];
 	FILE *linefile;
@@ -168,19 +168,30 @@ void write_last_line(msieve_obj *obj, mpz_t n, uint32 b) {
 	}
 
 	gmp_fprintf(linefile, "N %Zd\n", n);
-	fprintf(linefile, "%u\n", b);
+	fprintf(linefile, "%" PRIu64 "\n", b);
 	fclose(linefile);
 }
 
 /*------------------------------------------------------------------*/
 uint32 add_free_relations(msieve_obj *obj, 
-			factor_base_t *fb, uint8 *free_bits) {
+			factor_base_t *fb, uint8 *free_bits,
+			uint32 **primes_out) {
 
 	uint32 i, j;
 	uint32 num_relations = 0;
 	uint32 alg_degree = fb->afb.poly.degree;
 	uint32 rat_degree = fb->rfb.poly.degree;
 	uint32 free_bytes = (FREE_RELATION_LIMIT / 2 + 7) / 8;
+	uint32 primes_alloc = 0;
+	uint32 *primes = NULL;
+
+	/* the caller may want the list of relations we append, since it has
+	   no other way to learn their coordinates */
+
+	if (primes_out != NULL) {
+		primes_alloc = 1024;
+		primes = (uint32 *)xmalloc(primes_alloc * sizeof(uint32));
+	}
 
 	savefile_open(&obj->savefile, SAVEFILE_APPEND);
 
@@ -218,6 +229,15 @@ uint32 add_free_relations(msieve_obj *obj,
 					sprintf(buf, "%u,0:\n", p);
 					savefile_write_line(&obj->savefile, 
 								buf);
+					if (primes != NULL) {
+						if (num_relations == primes_alloc) {
+							primes_alloc *= 2;
+							primes = (uint32 *)xrealloc(
+								primes, primes_alloc *
+								sizeof(uint32));
+						}
+						primes[num_relations] = p;
+					}
 					num_relations++;
 				}
 			}
@@ -228,5 +248,7 @@ uint32 add_free_relations(msieve_obj *obj,
 		logprintf(obj, "added %u free relations\n", num_relations);
 	savefile_flush(&obj->savefile);
 	savefile_close(&obj->savefile);
+	if (primes_out != NULL)
+		*primes_out = primes;
 	return num_relations;
 }

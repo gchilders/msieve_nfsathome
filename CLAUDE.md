@@ -17,9 +17,14 @@ make all CUDA=90
 
 Other useful flags: `OMP=1` (default on), `MPI=1`, `ECM=1`, `VBITS=64` (default).
 
+CUDA builds on Linux produce one self-contained binary: the CUB sort/SpMV engines are linked in and the stage-1 and Lanczos kernels are embedded (fatbin plus PTX fallback), so no `.ptx`, `.fatbin` or `cub/*.so` files are needed at runtime. `CUDA_ARCHS="86 120"` embeds several architectures (oldest first; `CUDA_PTX_ARCH` defaults to the first); `CUDA=cc` still builds one. `CUDA_SINGLE_BINARY=0` restores the old external-file layout (the `WIN=1` default). Changing `VBITS` or the architectures rebuilds the GPU objects (via the `cub/.build_config` stamp), but not the host C objects, so `make clean` when switching VBITS.
+
 Clean: `make clean`
 
-There are no automated tests. Validation is done by running actual NFS factorizations.
+There are no automated tests. Validation is done by running actual NFS
+factorizations; Greg gates filtering changes on a byte-identical msieve.dat.cyc
+and msieve.dat.mat for the small and medium jobs under c:/dev/numbers on his
+machine.
 
 ## Running
 

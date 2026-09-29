@@ -6,8 +6,8 @@ errors.
 
 Optionally, please be nice and tell me if you find this source to be
 useful. Again optionally, if you add to the functionality present here
-please consider making those additions public too, so that others may 
-benefit from your work.	
+please consider making those additions public too, so that others may
+benefit from your work.
 
 $Id$
 --------------------------------------------------------------------*/
@@ -100,7 +100,7 @@ extern "C" {
 	typedef unsigned short uint16;
 	typedef unsigned int uint32;
 	typedef uint64_t uint64;
-	
+
 	#ifndef RS6K
 	typedef char int8;
 	typedef short int16;
@@ -121,7 +121,7 @@ extern "C" {
 #define MAX(a,b) ((a) > (b)? (a) : (b))
 
 #if defined(_MSC_VER)
-    
+
 	#include <float.h>
 	#define INLINE __inline
 	#define getpid _getpid
@@ -135,7 +135,7 @@ extern "C" {
 
     __inline double rint(double x)
     {
-        static double c2_52 = 4503599627370496.0e0;  /* 2 ^ 52 */ 
+        static double c2_52 = 4503599627370496.0e0;  /* 2 ^ 52 */
         double t;
 
         if(x != x || _copysign(x, 1.0) >= c2_52)
@@ -152,7 +152,7 @@ extern "C" {
 #endif
 
 #if defined(__GNUC__) && __GNUC__ >= 3
-	#define PREFETCH(addr) __builtin_prefetch(addr) 
+	#define PREFETCH(addr) __builtin_prefetch(addr)
 #elif defined(_MSC_VER) && _MSC_VER >= 1400
 	#define PREFETCH(addr) PreFetchCacheLine(PF_TEMPORAL_LEVEL_1, addr)
 #else
@@ -164,16 +164,20 @@ extern "C" {
 static INLINE void * xmalloc(size_t len) {
 	void *ptr = malloc(len);
 	if (ptr == NULL) {
-		printf("failed to allocate %u bytes\n", (uint32)len);
+		printf("failed to allocate %zu bytes\n", len);
 		exit(-1);
 	}
 	return ptr;
 }
 
 static INLINE void * xcalloc(size_t num, size_t len) {
+	if (len != 0 && num > (size_t)-1 / len) {
+		printf("failed to calloc: size overflow (%zu x %zu)\n", num, len);
+		exit(-1);
+	}
 	void *ptr = calloc(num, len);
 	if (ptr == NULL) {
-		printf("failed to calloc %u bytes\n", (uint32)(num * len));
+		printf("failed to calloc %zu bytes\n", num * len);
 		exit(-1);
 	}
 	return ptr;
@@ -182,7 +186,7 @@ static INLINE void * xcalloc(size_t num, size_t len) {
 static INLINE void * xrealloc(void *iptr, size_t len) {
 	void *ptr = realloc(iptr, len);
 	if (ptr == NULL) {
-		printf("failed to reallocate %u bytes\n", (uint32)len);
+		printf("failed to reallocate %zu bytes\n", len);
 		exit(-1);
 	}
 	return ptr;
@@ -212,9 +216,9 @@ void * get_lib_symbol(libhandle_t h, const char *symbol_name);
 #define M_PI 3.14159265358979323846
 #endif
 
-static INLINE uint32 
+static INLINE uint32
 get_rand(uint32 *rand_seed, uint32 *rand_carry) {
-   
+
 	/* A multiply-with-carry generator by George Marsaglia.
 	   The period is about 2^63. */
 
@@ -222,8 +226,8 @@ get_rand(uint32 *rand_seed, uint32 *rand_carry) {
 
 	uint64 temp;
 
-	temp = (uint64)(*rand_seed) * 
-		       (uint64)RAND_MULT + 
+	temp = (uint64)(*rand_seed) *
+		       (uint64)RAND_MULT +
 		       (uint64)(*rand_carry);
 	*rand_seed = (uint32)temp;
 	*rand_carry = (uint32)(temp >> 32);
@@ -264,14 +268,14 @@ enum cpu_type get_cpu_type(void);
 		#define HAS_MANY_REGISTERS
 	#endif
 
-#elif defined(CPU_PENTIUM2) 
+#elif defined(CPU_PENTIUM2)
 	#define MANUAL_PREFETCH
 
 #elif defined(CPU_ATHLON)
 	#define MANUAL_PREFETCH
 	#define HAS_AMD_MMX
 
-#elif defined(CPU_PENTIUM3) 
+#elif defined(CPU_PENTIUM3)
 	#define MANUAL_PREFETCH
 	#define HAS_SSE
 
@@ -295,14 +299,14 @@ enum cpu_type get_cpu_type(void);
 #endif
 
 /* this byzantine complexity sets up the correct assembly
-   language syntax based on the compiler, OS and word size 
-   
-   Where an inline assembler segment is provided in both 
-   GCC and MSC format (i.e. alternative sections), the 
+   language syntax based on the compiler, OS and word size
+
+   Where an inline assembler segment is provided in both
+   GCC and MSC format (i.e. alternative sections), the
    Intel compiler is configured using guards with an A
-   suffix to prefer the native version (GCC on Linux/Unix, 
-   MSC on Windows). Where an inline assembler segment is 
-   only provided in GCC or MSC format but not both (i.e. 
+   suffix to prefer the native version (GCC on Linux/Unix,
+   MSC on Windows). Where an inline assembler segment is
+   only provided in GCC or MSC format but not both (i.e.
    exclusive sections) the guards have an X suffix.
 
    The Intel compiler on Windows appears to have some
@@ -316,7 +320,7 @@ enum cpu_type get_cpu_type(void);
 	#define ASM_M __asm
 
 	/* for inline assembler on Unix/Linux */
-	#if defined(__unix__)        
+	#if defined(__unix__)
 		#if defined(__x86_64__)
 			#define GCC_ASM64A
 			#define GCC_ASM64X
@@ -346,7 +350,7 @@ enum cpu_type get_cpu_type(void);
 
 	#define ASM_G __asm__
 
-	#if defined(__x86_64__) 
+	#if defined(__x86_64__)
 		#define GCC_ASM64A
 		#define GCC_ASM64X
 	#elif defined(__i386__)
@@ -368,7 +372,7 @@ enum cpu_type get_cpu_type(void);
    we're using MSVC */
 
 #ifndef _MSC_VER
-	#define ALIGN_LOOP   ".p2align 4,,7 \n\t" 
+	#define ALIGN_LOOP   ".p2align 4,,7 \n\t"
 #else
 	#define ALIGN_LOOP /* nothing */
 #endif

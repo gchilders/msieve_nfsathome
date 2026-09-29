@@ -43,12 +43,45 @@ extern "C" {
 
 #define BIGNUM_BUF_SIZE 500
 #define LINE_BUF_SIZE 300
+
+/* Versioned cycle/relation-map metadata used when NFS source relation
+   numbers have been compacted into a dense 32-bit namespace. Legacy cycle
+   files still begin directly with num_cycles. */
+#define NFS_RMAP_MAGIC ((uint64)0x4d5352564d415032ULL)
+#define NFS_RMAP_VERSION ((uint64)2)
+#define NFS_RMAP_COMMIT_MAGIC ((uint64)0x4d535256434d5432ULL)
+#define CYCLE_FILE_MAGIC ((uint32)0xffffffffU)
+#define CYCLE_FILE_VERSION ((uint32)1U)
+#define CYCLE_FLAG_RMAP_REQUIRED ((uint32)0x00000001U)
 #define SAVEFILE_READ 0x01
 #define SAVEFILE_WRITE 0x02
 #define SAVEFILE_APPEND 0x04
 
 void savefile_init(savefile_t *s, char *filename);
 void savefile_free(savefile_t *s);
+/* Build the path of a filtering intermediate (suffix includes the dot).
+   These files are written, re-read and deleted inside a single filtering
+   run, so when a scratch directory is configured they belong on
+   node-local storage. Outputs that outlive filtering -- .cyc, .rmap --
+   must not use this; they always sit beside the savefile. */
+
+void get_filter_tmp_name(msieve_obj *obj, char *buf,
+			size_t buf_len, const char *suffix);
+
+/* copy the savefile into obj->scratch_dir, decompressing it, and make
+   subsequent reads use that copy; returns nonzero if staging happened.
+   savefile_unstage() deletes it along with any filtering intermediates
+   still on scratch, and is safe to call unconditionally. */
+
+/* path of the throwaway matrix the build writes and reads back;
+   the reduced matrix that dump_matrix() writes is not this file */
+
+void get_matrix_work_name(msieve_obj *obj, char *buf, size_t buf_len);
+
+uint32 savefile_stage(msieve_obj *obj);
+void savefile_unstage(msieve_obj *obj);
+void savefile_unstage_tmp(msieve_obj *obj);
+
 void savefile_open(savefile_t *s, uint32 flags);
 void savefile_close(savefile_t *s);
 uint32 savefile_eof(savefile_t *s);
@@ -204,6 +237,21 @@ static INLINE uint32 hash_function(uint32 *data, uint32 num_words) {
    matching blob[] is output in *ordinal_id (if non-NULL) */
 
 
+#define HASHTABLE_NOT_FOUND ((uint32)(-1))
+
+/* look up a blob without inserting it; returns its ordinal id or
+   HASHTABLE_NOT_FOUND. Safe to call concurrently (see hashtable.c) */
+
+uint32 hashtable_probe(hashtable_t *h, void *blob);
+
+/* the entry an ordinal refers to. Only valid until the next insertion,
+   which may move match_array */
+
+static INLINE void *hashtable_entry(hashtable_t *h, uint32 ordinal) {
+	return h->match_array +
+		(size_t)(ordinal + 1) * (h->blob_words + 1);
+}
+
 void *hashtable_find(hashtable_t *h, void *blob, 
 		uint32 *ordinal_id, uint32 *present);
 
@@ -319,7 +367,14 @@ void dump_matrix(msieve_obj *obj,
 		uint32 ncols, la_col_t *cols,
 		uint64 num_nonzero);
 
-void read_matrix(msieve_obj *obj, 
+void read_matrix(msieve_obj *obj,
+		uint32 *nrows, uint32 *max_nrows, uint32 *start_row,
+		uint32 *num_dense_rows_out,
+		uint32 *ncols, uint32 *max_ncols, uint32 *start_col,
+		la_col_t **cols_out,
+		uint32 *rowperm, uint32 *colperm);
+
+void read_matrix_from(msieve_obj *obj, const char *path, 
 		uint32 *nrows, uint32 *max_nrows, uint32 *start_row,
 		uint32 *num_dense_rows_out,
 		uint32 *ncols, uint32 *max_ncols, uint32 *start_col,

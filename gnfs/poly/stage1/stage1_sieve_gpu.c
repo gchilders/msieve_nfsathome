@@ -13,6 +13,15 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include <sort_engine.h> /* interface to GPU sorting library */
+#ifdef MSIEVE_CUDA_SINGLE_BINARY
+#include <cuda_embedded.h>
+
+/* Built-in CUB engine entry points. These are linked directly into msieve
+   in single-binary CUDA builds; keep the public DSO header unchanged. */
+extern void *sort_engine_init(void);
+extern void sort_engine_free(void *engine);
+extern void sort_engine_run(void *engine, sort_data_t *sort_data);
+#endif
 #include <stage1.h>
 #include <stage1_core_gpu/stage1_core.h>
 
@@ -947,6 +956,57 @@ sieve_lattice_gpu_core(msieve_obj *obj,
 }
 
 /*------------------------------------------------------------------------*/
+#ifdef MSIEVE_CUDA_SINGLE_BINARY
+static void
+load_sort_engine(msieve_obj *obj, device_data_t *d)
+{
+	char libname[256];
+	char *tmp = NULL;
+
+	/* The normal build links the CUB sort engine directly into msieve. */
+	d->sort_engine_handle = NULL;
+	d->sort_engine_init = sort_engine_init;
+	d->sort_engine_free = sort_engine_free;
+	d->sort_engine_run = sort_engine_run;
+
+	/* Preserve the historical sortlib= override for testing/custom engines. */
+	if (obj->nfs_args != NULL)
+		tmp = strstr(obj->nfs_args, "sortlib=");
+	if (tmp == NULL)
+		return;
+
+	{
+		uint32 i;
+		for (i = 0, tmp += 8; i < sizeof(libname) - 1; i++) {
+			if (*tmp == 0 || isspace(*tmp))
+				break;
+			libname[i] = *tmp++;
+		}
+		libname[i] = 0;
+	}
+
+	d->sort_engine_handle = load_dynamic_lib(libname);
+	if (d->sort_engine_handle == NULL) {
+		printf("error: failed to load GPU sorting engine override from \"%s\"\n",
+			libname);
+		exit(-1);
+	}
+
+	d->sort_engine_init = get_lib_symbol(d->sort_engine_handle,
+					"sort_engine_init");
+	d->sort_engine_free = get_lib_symbol(d->sort_engine_handle,
+					"sort_engine_free");
+	d->sort_engine_run = get_lib_symbol(d->sort_engine_handle,
+					"sort_engine_run");
+	if (d->sort_engine_init == NULL ||
+	    d->sort_engine_free == NULL ||
+	    d->sort_engine_run == NULL) {
+		printf("error: cannot find GPU sorting function in \"%s\"\n",
+			libname);
+		exit(-1);
+	}
+}
+#else
 static void
 load_sort_engine(msieve_obj *obj, device_data_t *d)
 {
@@ -1039,6 +1099,7 @@ load_sort_engine(msieve_obj *obj, device_data_t *d)
 		exit(-1);
 	}
 }
+#endif
 
 
 /*------------------------------------------------------------------------*/
@@ -1059,12 +1120,23 @@ gpu_thread_data_init(void *data, int threadid)
 			CU_CTX_SCHED_BLOCKING_SYNC,
 			d->gpu_info->device_handle))
 
+#ifdef MSIEVE_CUDA_SINGLE_BINARY
+	/* Prefer native code from the embedded multi-architecture fatbin.
+	   Keep a separately embedded PTX image as a fallback for driver/toolkit
+	   combinations that reject the fatbin container. */
+	status = cuda_load_embedded_module(&t->gpu_module,
+			msieve_stage1_core_fatbin,
+			(const char *)msieve_stage1_core_ptx,
+			"stage1_core");
+	CUDA_TRY(status)
+#else
 	/* load GPU kernels */
 	status = cuModuleLoad(&t->gpu_module, "stage1_core.ptx");				\
 	if (status != CUDA_SUCCESS) {
 		printf("Error loading ptx. Trying fatbin.\n");
 		CUDA_TRY(cuModuleLoad(&t->gpu_module, "stage1_core.fatbin"))
 	}
+#endif
 
 	t->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
 				sizeof(gpu_launch_t));
@@ -1288,7 +1360,8 @@ void gpu_data_free(void *gpu_data)
 
 	free(d->threads);
 
-	unload_dynamic_lib(d->sort_engine_handle);
+	if (d->sort_engine_handle != NULL)
+		unload_dynamic_lib(d->sort_engine_handle);
 
 	free(d->gpu_info);
 	free(d);

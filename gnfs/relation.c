@@ -6,21 +6,22 @@ errors.
 
 Optionally, please be nice and tell me if you find this source to be
 useful. Again optionally, if you add to the functionality present here
-please consider making those additions public too, so that others may 
-benefit from your work.	
+please consider making those additions public too, so that others may
+benefit from your work.
 
 $Id$
 --------------------------------------------------------------------*/
 
 #include <common.h>
 #include "gnfs.h"
+#include "filter/rmap.h"
 
 /*--------------------------------------------------------------------*/
 static
 #ifdef __GNUC__
 __attribute__((always_inline))
 #endif
-uint32 divide_factor_out(mpz_t polyval, uint64 p, 
+uint32 divide_factor_out(mpz_t polyval, uint64 p,
 			uint8 *factors, uint32 *array_size_in,
 			uint32 *num_factors, uint32 compress,
 			mpz_t tmp1, mpz_t tmp2, mpz_t tmp3) {
@@ -47,7 +48,7 @@ uint32 divide_factor_out(mpz_t polyval, uint64 p,
 		uint64_2gmp(p, tmp1);
 		while (1) {
 			mpz_tdiv_qr(tmp2, tmp3, polyval, tmp1);
-			if (mpz_cmp_ui(tmp3, 0) != 0 || 
+			if (mpz_cmp_ui(tmp3, 0) != 0 ||
 			    mpz_cmp_ui(tmp2, 0) == 0)
 				break;
 
@@ -77,7 +78,7 @@ uint32 divide_factor_out(mpz_t polyval, uint64 p,
 /*--------------------------------------------------------------------*/
 #define RELATION_TF_BOUND 1000
 
-int32 nfs_read_relation(char *buf, factor_base_t *fb, 
+int32 nfs_read_relation(char *buf, factor_base_t *fb,
 			relation_t *r, uint32 *array_size_out,
 			uint32 compress, mpz_t polyval,
 			uint32 test_primality) {
@@ -85,10 +86,10 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	/* note that only the polynomials within the factor
 	   base need to be initialized */
 
-	uint32 i, colons; 
+	uint32 i, colons;
 	uint64 p, btmp;
 	int64 a, atmp;
-	uint32 b;
+	uint64 b;
 	char *tmp, *next_field;
 	mpz_poly_t *rpoly = &fb->rfb.poly;
 	mpz_poly_t *apoly = &fb->afb.poly;
@@ -113,12 +114,9 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	if (tmp[0] != ',' || !isdigit(tmp[1]))
 		return -1;
 
-	btmp = strtoull(tmp+1, &next_field, 10);
+	b = strtoull(tmp+1, &next_field, 10);
 	tmp = next_field;
-	b = (uint32)btmp;
-	if (btmp != (uint64)b)
-		return -99; /* cannot use large b */
-	if ((b != 0) && (colons != 2)) 
+	if ((b != 0) && (colons != 2))
 		return -97; /* bad relation */
 
 	num_factors_r = 0;
@@ -151,7 +149,7 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 		if (num_roots != apoly->degree || high_coeff == 0)
 			return -4;
 		for (i = 0; i < num_roots; i++) {
-			array_size = compress_p(factors, (uint64)roots[i], 
+			array_size = compress_p(factors, (uint64)roots[i],
 						array_size);
 		}
 
@@ -163,12 +161,12 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 
 	if (tmp[0] != ':')
 		return -5;
-	
+
 	atmp = a % (int64)b;
 	if (atmp < 0)
 		atmp += b;
 
-	if (mp_gcd_1((uint32)atmp, b) != 1)
+	if (mp_gcd_2((uint64)atmp, b) != 1)
 		return -6;
 
 	/* handle a rational factor of -1 */
@@ -189,15 +187,15 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 		do {
 			p = strtoull(tmp + 1, &next_field, 16);
 
-			if (test_primality && 
-			    p > RELATION_TF_BOUND && 
+			if (test_primality &&
+			    p > RELATION_TF_BOUND &&
 			    p < ((uint64)1 << 32) &&
 	    		    !mp_is_prime_1((uint32)p)) {
 				mpz_clears(tmp1, tmp2, tmp3, NULL);
 				return -98;
 			}
 
-			if (p > 1 && divide_factor_out(polyval, p, 
+			if (p > 1 && divide_factor_out(polyval, p,
 						factors, &array_size,
 						&num_factors_r, compress,
 						tmp1, tmp2,
@@ -220,13 +218,13 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	/* if there are rational factors still to be accounted
 	   for, assume they are small and find them by trial division */
 
-	for (i = p = 0; mpz_cmp_ui(polyval, 1) != 0 && 
+	for (i = p = 0; mpz_cmp_ui(polyval, 1) != 0 &&
 				p < RELATION_TF_BOUND; i++) {
 
 		p += prime_delta[i];
-		if (divide_factor_out(polyval, p, factors, 
-				&array_size, &num_factors_r, 
-				compress, tmp1, 
+		if (divide_factor_out(polyval, p, factors,
+				&array_size, &num_factors_r,
+				compress, tmp1,
 				tmp2, tmp3)) {
 			mpz_clears(tmp1, tmp2, tmp3, NULL);
 			return -10;
@@ -259,14 +257,14 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 			p = strtoull(tmp + 1, &next_field, 16);
 
 			if (test_primality &&
-			    p > RELATION_TF_BOUND && 
+			    p > RELATION_TF_BOUND &&
 			    p < ((uint64)1 << 32) &&
 	    		    !mp_is_prime_1((uint32)p)) {
 				mpz_clears(tmp1, tmp2, tmp3, NULL);
 				return -98;
 			}
 
-			if (p > 1 && divide_factor_out(polyval, p, 
+			if (p > 1 && divide_factor_out(polyval, p,
 						factors, &array_size,
 						&num_factors_a, compress,
 						tmp1, tmp2,
@@ -281,12 +279,12 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 	/* if there are algebraic factors still to be accounted
 	   for, assume they are small and find them by trial division */
 
-	for (i = p = 0; mpz_cmp_ui(polyval, 1) != 0 && 
+	for (i = p = 0; mpz_cmp_ui(polyval, 1) != 0 &&
 					p < RELATION_TF_BOUND; i++) {
 
 		p += prime_delta[i];
-		if (divide_factor_out(polyval, p, factors, 
-				&array_size, &num_factors_a, 
+		if (divide_factor_out(polyval, p, factors,
+				&array_size, &num_factors_a,
 				compress, tmp1,
 				tmp2, tmp3)) {
 			mpz_clears(tmp1, tmp2, tmp3, NULL);
@@ -314,15 +312,15 @@ int32 nfs_read_relation(char *buf, factor_base_t *fb,
 }
 
 /*--------------------------------------------------------------------*/
-uint32 find_large_ideals(relation_t *rel, 
-			relation_lp_t *out, 
+uint32 find_large_ideals(relation_t *rel,
+			relation_lp_t *out,
 			uint32 filtmin_r, uint32 filtmin_a) {
 	uint32 i;
 	uint32 num_ideals = 0;
 	uint32 array_size = 0;
 	uint32 num_factors_r;
 	int64 a = rel->a;
-	uint32 b = rel->b;
+	uint64 b = rel->b;
 
 	out->gf2_factors = 0;
 
@@ -348,7 +346,7 @@ uint32 find_large_ideals(relation_t *rel,
 
 		if (p > filtmin_a) {
 			for (i = 0; i < rel->num_factors_a; i++) {
-				ideal_t *ideal = out->ideal_list + 
+				ideal_t *ideal = out->ideal_list +
 							num_ideals + i;
 				uint64 root = decompress_p(rel->factors,
 							&array_size);
@@ -448,12 +446,12 @@ uint32 find_large_ideals(relation_t *rel,
 
 				root = (uint64)mapped_a;
 				if (p < ((uint64)1 << 32)) {
-					root = mp_modmul_1((uint32)root, 
-						    mp_modinv_1(bmodp, 
+					root = mp_modmul_1((uint32)root,
+						    mp_modinv_1(bmodp,
 						    	(uint32)p), (uint32)p);
 				}
 				else {
-					root = mp_modmul_2(root, 
+					root = mp_modmul_2(root,
 						    mp_modinv_2(bmodp, p), p);
 				}
 				ideal->r_lo = (uint32)root;
@@ -486,12 +484,17 @@ static int bsearch_relation(const void *key, const void *rel) {
 	return 0;
 }
 
-static void remap_relation_numbers(msieve_obj *obj, 
-				uint32 num_cycles, 
-				la_col_t *cycle_list, 
+static void remap_relation_numbers(msieve_obj *obj,
+				uint32 num_cycles,
+				la_col_t *cycle_list,
 				uint32 num_relations,
 				relation_t *rlist) {
 	uint32 i;
+
+	if (num_relations == 0 || rlist == NULL) {
+		logprintf(obj, "error: cannot remap cycles without relations\n");
+		exit(-1);
+	}
 
 	/* walk through the list of cycles and convert
 	   each occurence of a line number in the savefile
@@ -505,7 +508,7 @@ static void remap_relation_numbers(msieve_obj *obj,
 		for (j = 0; j < c->cycle.num_relations; j++) {
 
 			/* since relations were read in order of increasing
-			   relation index (= savefile line number), use 
+			   relation index (= savefile line number), use
 			   binary search to locate relation j for this
 			   cycle, then save a pointer to it */
 
@@ -518,7 +521,7 @@ static void remap_relation_numbers(msieve_obj *obj,
 			if (rptr == NULL) {
 				/* this cycle is corrupt somehow */
 				logprintf(obj, "error: cannot locate "
-						"relation %u\n", 
+						"relation %u\n",
 						c->cycle.list[j]);
 				exit(-1);
 			}
@@ -545,9 +548,152 @@ typedef struct {
 	uint32 count;
 } relcount_t;
 
-static void nfs_get_cycle_relations(msieve_obj *obj, 
-				factor_base_t *fb, uint32 num_cycles, 
-				la_col_t *cycle_list, 
+static uint32 cycle_requires_rmap(msieve_obj *obj, uint64 *generation) {
+	char filename[256];
+	FILE *fp;
+	uint32 first, version, flags, num_cycles;
+	uint64 gen;
+	*generation = UINT64_MAX;
+	sprintf(filename, "%s.cyc", obj->savefile.name);
+	fp = fopen(filename, "rb");
+	if (fp == NULL)
+		return 0;
+	if (fread(&first, sizeof(uint32), 1, fp) != 1) {
+		fclose(fp);
+		return 0;
+	}
+	if (first != CYCLE_FILE_MAGIC) {
+		fclose(fp);
+		return 0;
+	}
+	if (fread(&version, sizeof(uint32), 1, fp) != 1 ||
+	    fread(&flags, sizeof(uint32), 1, fp) != 1 ||
+	    fread(&num_cycles, sizeof(uint32), 1, fp) != 1 ||
+	    fread(&gen, sizeof(uint64), 1, fp) != 1 ||
+	    version != CYCLE_FILE_VERSION) {
+		fclose(fp);
+		logprintf(obj, "error: invalid versioned cycle-file header\n");
+		exit(-1);
+	}
+	fclose(fp);
+	(void)num_cycles;
+	*generation = gen;
+	return (flags & CYCLE_FLAG_RMAP_REQUIRED) != 0;
+}
+
+static uint64 *load_source_relation_numbers(msieve_obj *obj,
+					 uint32 *dense_relidx,
+					 uint32 num_relidx) {
+	uint32 i;
+	uint64 *source_relidx;
+	uint64 expected_generation;
+	uint32 required = cycle_requires_rmap(obj, &expected_generation);
+	nfs_rmap_reader_t map;
+	int map_open;
+
+	source_relidx = (uint64 *)xmalloc((size_t)num_relidx * sizeof(uint64));
+	/* Legacy cycle files always contain source relation numbers directly.
+	   Relation maps are only meaningful when a versioned cycle header
+	   explicitly requires the current map format. */
+	if (!required) {
+		for (i = 0; i < num_relidx; i++)
+			source_relidx[i] = dense_relidx[i];
+		return source_relidx;
+	}
+
+	map_open = nfs_rmap_reader_open(obj, &map, 1, expected_generation);
+	if (map_open != 0) {
+		logprintf(obj, "error: cycle file requires a committed relation map, but the matching map is missing or invalid\n");
+		exit(-1);
+	}
+
+	for (i = 0; i < num_relidx; i++) {
+		if (i > 0 && dense_relidx[i] <= dense_relidx[i - 1]) {
+			logprintf(obj, "error: cycle relation IDs are not strictly increasing\n");
+			exit(-1);
+		}
+		source_relidx[i] = nfs_rmap_get(obj, &map, dense_relidx[i]);
+		if (i > 0 && source_relidx[i] <= source_relidx[i - 1]) {
+			logprintf(obj, "error: relation map is not strictly increasing\n");
+			exit(-1);
+		}
+	}
+	nfs_rmap_reader_close(&map);
+	return source_relidx;
+}
+
+/* Inflating the savefile is the bulk of this phase -- about 50 s of the 64 s
+   it takes on the C159 medium job -- and zlib cannot be split across threads.
+   It does not have to sit between the parallel parses though, only stay ahead
+   of them, so the sequential reader state lives here and one thread fills the
+   next batch while the rest parse the batch already in hand. */
+
+typedef struct {
+	savefile_t *savefile;
+	uint32 *relidx_list;
+	uint64 *source_relidx_list;
+	uint32 num_unique_relidx;
+	uint32 next_idx;        /* relations handed out so far */
+	uint64 curr_relation;   /* ordinal of the last line examined */
+	uint32 batch;
+	uint32 done;
+} cyc_reader_t;
+
+static void cyc_read_batch(msieve_obj *obj, cyc_reader_t *r, char *buf,
+			uint32 *dense, uint64 *source, uint32 *count_out) {
+
+	uint32 i;
+	uint32 count = 0;
+
+	if (r->done) {
+		*count_out = 0;
+		return;
+	}
+
+	for (i = 0; i < r->batch; i++) {
+		char *buf_i = buf + i * LINE_BUF_SIZE;
+		uint64 target;
+
+		savefile_read_line(buf_i, LINE_BUF_SIZE * sizeof(char),
+				r->savefile);
+		if (savefile_eof(r->savefile)) {
+			r->done = 1;
+			break;
+		}
+		if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
+			i--;
+			continue;
+		}
+
+		r->curr_relation++;
+		target = r->source_relidx_list[r->next_idx + count];
+		if (r->curr_relation < target) {
+			i--;
+			continue;
+		}
+		if (r->curr_relation > target) {
+			logprintf(obj, "error: cannot locate source relation %" PRIu64 "\n",
+					target);
+			exit(-1);
+		}
+
+		dense[i] = r->relidx_list[r->next_idx + count];
+		source[i] = r->curr_relation;
+		count++;
+		if (r->next_idx + count == r->num_unique_relidx) {
+			r->done = 1;
+			break;
+		}
+	}
+
+	r->next_idx += count;
+	*count_out = count;
+}
+
+/*--------------------------------------------------------------------*/
+static void nfs_get_cycle_relations(msieve_obj *obj,
+				factor_base_t *fb, uint32 num_cycles,
+				la_col_t *cycle_list,
 				uint32 *num_relations_out,
 				relation_t **rlist_out,
 				uint32 compress,
@@ -559,11 +705,20 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 
 	hashtable_t unique_relidx;
 	uint32 num_unique_relidx;
+	uint32 expected_relidx;
 	uint32 *relidx_list;
+	uint64 *source_relidx_list;
 	relcount_t *entry;
 
-	uint32 *my_curr_relation;
-	uint32 curr_relation;
+	uint32 *my_dense_relation;
+	uint64 *my_source_relation;
+	uint32 *my_dense_relation2;
+	uint64 *my_source_relation2;
+	char *buf2;
+	char *buf_cur, *buf_nxt, *tmp_buf;
+	uint32 *dense_cur, *dense_nxt, *tmp_dense;
+	uint64 *source_cur, *source_nxt, *tmp_source;
+	cyc_reader_t rd;
 	uint32 *tmp_factor_size;
 	relation_t *tmp_relation;
 	mpz_t *scratch;
@@ -573,9 +728,15 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 
 	if (batch < 1) batch = 1;
 
-	/* per thread variables */
-	my_curr_relation = (uint32 *)malloc(batch * sizeof(uint32));
+	my_dense_relation = (uint32 *)malloc(batch * sizeof(uint32));
+	my_source_relation = (uint64 *)malloc(batch * sizeof(uint64));
 	buf = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
+	my_dense_relation2 = (uint32 *)malloc(batch * sizeof(uint32));
+	my_source_relation2 = (uint64 *)malloc(batch * sizeof(uint64));
+	buf2 = (char *)malloc(batch * LINE_BUF_SIZE * sizeof(char));
+	buf_cur = buf; buf_nxt = buf2;
+	dense_cur = my_dense_relation; dense_nxt = my_dense_relation2;
+	source_cur = my_source_relation; source_nxt = my_source_relation2;
 	scratch = (mpz_t *)malloc(batch * sizeof(mpz_t));
 	tmp_factor_size = (uint32 *)malloc(batch * sizeof(uint32));
 	tmp_relation = (relation_t *)malloc(batch * sizeof(relation_t));
@@ -585,11 +746,9 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 		mpz_init(scratch[i]);
 	}
 
-	hashtable_init(&unique_relidx, 
-			(uint32)WORDS_IN(relcount_t), 
+	hashtable_init(&unique_relidx,
+			(uint32)WORDS_IN(relcount_t),
 			(uint32)1);
-
-	/* fill the hashtable */
 
 	for (i = 0; i < num_cycles; i++) {
 		la_col_t *c = cycle_list + i;
@@ -599,7 +758,7 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 		for (j = 0; j < num_relations; j++) {
 			uint32 already_seen;
 			entry = (relcount_t *)hashtable_find(
-						&unique_relidx, list + j, 
+						&unique_relidx, list + j,
 						NULL, &already_seen);
 			if (!already_seen)
 				entry->count = 1;
@@ -607,11 +766,6 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 				entry->count++;
 		}
 	}
-
-	/* convert the internal list of hashtable entries into
-	   a list of 32-bit relation numbers. If reading in just
-	   the relations in one dependency, squeeze out relations
-	   that appear an even number of times */
 
 	hashtable_close(&unique_relidx);
 	num_unique_relidx = hashtable_get_num(&unique_relidx);
@@ -621,107 +775,138 @@ static void nfs_get_cycle_relations(msieve_obj *obj,
 	for (i = j = 0; i < num_unique_relidx; i++) {
 		if (dependency == 0 || entry->count % 2 != 0)
 			relidx_list[j++] = entry->relidx;
-
-		entry = (relcount_t *)hashtable_get_next(
-					&unique_relidx, entry);
+		entry = (relcount_t *)hashtable_get_next(&unique_relidx, entry);
 	}
 	num_unique_relidx = j;
 
-	/* sort the list in order of increasing relation number */
-
-	qsort(relidx_list, (size_t)num_unique_relidx, 
+	qsort(relidx_list, (size_t)num_unique_relidx,
 		sizeof(uint32), compare_uint32);
 
-	logprintf(obj, "cycles contain %u unique relations\n", 
+	logprintf(obj, "cycles contain %u unique relations\n",
 				num_unique_relidx);
+	if (num_unique_relidx == 0) {
+		*num_relations_out = 0;
+		*rlist_out = NULL;
+		hashtable_free(&unique_relidx);
+		for (i = 0; i < batch; i++) {
+			free(tmp_relation[i].factors);
+			mpz_clear(scratch[i]);
+		}
+		free(my_dense_relation);
+		free(my_source_relation);
+		free(my_dense_relation2);
+		free(my_source_relation2);
+		free(scratch);
+		free(tmp_factor_size);
+		free(tmp_relation);
+		free(buf);
+		free(buf2);
+		return;
+	}
+
+	source_relidx_list = load_source_relation_numbers(obj, relidx_list,
+							  num_unique_relidx);
 
 	savefile_open(savefile, SAVEFILE_READ);
+	rlist = (relation_t *)xmalloc((size_t)num_unique_relidx * sizeof(relation_t));
 
-	/* read the list of relations */
-
-	rlist = (relation_t *)xmalloc(num_unique_relidx * sizeof(relation_t));
-
-	curr_relation = (uint32)(-1);
 	j = 0;
-	
-	do {
-		num_relations_read = 0;
-		for(i = 0; i < batch; i++) {
-			char *buf_i = buf + i * LINE_BUF_SIZE;
-			savefile_read_line(buf_i, 
-					LINE_BUF_SIZE * sizeof(char), savefile);
-			if (savefile_eof(savefile)) break;
-			if (buf_i[0] != '-' && !isdigit(buf_i[0])) {
-				/* no relation on this line */
-				i--;
-				continue;
-			}
-			if (++curr_relation < relidx_list[j + num_relations_read]) {
-				/* relation not needed */
-				i--;
-				continue;
-			}
-			num_relations_read++;
-			my_curr_relation[i] = curr_relation;
-			if (j + num_relations_read == num_unique_relidx) break;
-		}
+	expected_relidx = num_unique_relidx;
 
-#pragma omp parallel for
-		for (i = 0; i < num_relations_read; i++) {
-			int32 status;
-			char *buf_i = buf + i * LINE_BUF_SIZE;
-			status = nfs_read_relation(buf_i, fb, &tmp_relation[i], 
+	rd.savefile = savefile;
+	rd.relidx_list = relidx_list;
+	rd.source_relidx_list = source_relidx_list;
+	rd.num_unique_relidx = num_unique_relidx;
+	rd.next_idx = 0;
+	rd.curr_relation = UINT64_MAX;
+	rd.batch = batch;
+	rd.done = 0;
+
+	cyc_read_batch(obj, &rd, buf_cur, dense_cur, source_cur,
+			&num_relations_read);
+
+	while (num_relations_read > 0) {
+
+		uint32 next_count = 0;
+
+#pragma omp parallel
+		{
+			/* one thread runs ahead into the other buffer while
+			   the rest parse this batch; the barrier ending the
+			   worksharing loop keeps them in step */
+
+#pragma omp single nowait
+			cyc_read_batch(obj, &rd, buf_nxt, dense_nxt,
+					source_nxt, &next_count);
+
+#pragma omp for schedule(dynamic, 64)
+			for (i = 0; i < num_relations_read; i++) {
+				int32 status;
+				char *buf_i = buf_cur + i * LINE_BUF_SIZE;
+
+				status = nfs_read_relation(buf_i, fb,
+						&tmp_relation[i],
 						&tmp_factor_size[i], compress,
 						scratch[i], 0);
-			if (status) {
-				/* at this point, if the relation couldn't be
-			       read then the filtering stage should have
-			       found that out and skipped it */
-
-				logprintf(obj, "error: relation %u corrupt\n", my_curr_relation[i]);
-				exit(-1);
+				if (status) {
+					logprintf(obj, "error: relation %" PRIu64 " corrupt\n",
+							source_cur[i]);
+					exit(-1);
+				}
 			}
 		}
 
 		for (i = 0; i < num_relations_read; i++) {
-			/* save the relation */
-
 			relation_t *r = rlist + j++;
-
 			*r = tmp_relation[i];
-			r->rel_index = my_curr_relation[i];
-			r->factors = (uint8 *)xmalloc(tmp_factor_size[i] *
-							sizeof(uint8));
+			r->rel_index = dense_cur[i];
+			r->factors = (uint8 *)xmalloc(tmp_factor_size[i] * sizeof(uint8));
 			memcpy(r->factors, tmp_relation[i].factors,
-					tmp_factor_size[i] * sizeof(uint8));
+				tmp_factor_size[i] * sizeof(uint8));
 		}
-	} while (num_relations_read == batch && j < num_unique_relidx);
 
-	num_unique_relidx = *num_relations_out = j;
+		/* swap the views, not the allocations; buf/my_* stay the
+		   owning pointers so the frees below cannot double up */
+
+		tmp_buf = buf_cur; buf_cur = buf_nxt; buf_nxt = tmp_buf;
+		tmp_dense = dense_cur; dense_cur = dense_nxt; dense_nxt = tmp_dense;
+		tmp_source = source_cur; source_cur = source_nxt; source_nxt = tmp_source;
+		num_relations_read = next_count;
+	}
+
+	if (j != expected_relidx) {
+		logprintf(obj, "error: only read %u of %u relations required by cycles\n",
+				j, expected_relidx);
+		exit(-1);
+	}
+
+	*num_relations_out = j;
 	logprintf(obj, "read %u relations\n", j);
 	savefile_close(savefile);
 	hashtable_free(&unique_relidx);
 	*rlist_out = rlist;
-
-	/* free per thread variables */
+	free(source_relidx_list);
 
 	for (i = 0; i < batch; i++) {
 		free(tmp_relation[i].factors);
 		mpz_clear(scratch[i]);
 	}
-	
-	free(my_curr_relation);
+	free(my_dense_relation);
+	free(my_source_relation);
+	free(my_dense_relation2);
+	free(my_source_relation2);
 	free(scratch);
 	free(tmp_factor_size);
 	free(tmp_relation);
 	free(buf);
+	free(buf2);
 }
 
 /*--------------------------------------------------------------------*/
-void nfs_read_cycles(msieve_obj *obj, 
+void nfs_read_cycles(msieve_obj *obj,
 			factor_base_t *fb,
-			uint32 *num_cycles_out, 
-			la_col_t **cycle_list_out, 
+			uint32 *num_cycles_out,
+			la_col_t **cycle_list_out,
 			uint32 *num_relations_out,
 			relation_t **rlist_out,
 			uint32 compress,
@@ -763,14 +948,14 @@ void nfs_read_cycles(msieve_obj *obj,
 	/* now read the list of relations needed by the
 	   list of cycles */
 
-	nfs_get_cycle_relations(obj, fb, num_cycles, cycle_list, 
+	nfs_get_cycle_relations(obj, fb, num_cycles, cycle_list,
 				&num_relations, &rlist, compress,
 				dependency);
 
 	*num_relations_out = num_relations;
 	*rlist_out = rlist;
 
-	/* if both the cycles and relations are wanted by 
+	/* if both the cycles and relations are wanted by
 	   callers, then modify the cycles to point to the
 	   relations in memory and not on disk */
 
@@ -796,111 +981,3 @@ void nfs_free_relation_list(relation_t *rlist, uint32 num_relations) {
 		free(rlist[i].factors);
 	free(rlist);
 }
-
-/*--------------------------------------------------------------------*/
-typedef struct {
-	uint32 purge_idx;
-	uint32 rel_idx;
-} relconvert_t;
-
-static int bsearch_relconvert(const void *key, const void *t) {
-	relconvert_t *c = (relconvert_t *)t;
-	uint32 *k = (uint32 *)key;
-
-	if ((*k) < c->purge_idx)
-		return -1;
-	if ((*k) > c->purge_idx)
-		return 1;
-	return 0;
-}
-
-void nfs_convert_cado_cycles(msieve_obj *obj) {
-
-	uint32 i, j;
-
-	char buf[LINE_BUF_SIZE];
-	char purgefile[LINE_BUF_SIZE];
-	savefile_t s;
-	savefile_t *savefile = &s;
-
-	uint32 num_cycles;
-	la_col_t *cycle_list = NULL;
-	uint32 num_unique_relidx;
-	relconvert_t *convert;
-
-	/* read the raw list of relation numbers for each cycle */
-
-	read_cycles(obj, &num_cycles, &cycle_list, 0, NULL);
-
-	/* for CADO filtering results, the cycle file contains
-	   line numbers in a purge file, not the line numbers of
-	   relations like we want. This is arguably better, since
-	   the purge file results have already assigned unique
-	   numbers to ideals so we could use the purge file to
-	   directly build the matrix. Unfortunately, if we did that
-	   then both the linear algebra and the square root would
-	   need modifications to understand the purge file format.
-	   The alternative is to use the purge file lines to convert 
-	   the purge file line numbers to relation numbers */
-
-	sprintf(purgefile, "%s.purged", obj->savefile.name);
-	savefile_init(savefile, purgefile);
-	savefile_open(savefile, SAVEFILE_READ);
-	savefile_read_line(buf, sizeof(buf), savefile);
-
-	num_unique_relidx = strtoul(buf, NULL, 10);
-
-	logprintf(obj, "cycles contain %u unique purge entries\n", 
-				num_unique_relidx);
-
-	convert = (relconvert_t *)xmalloc(num_unique_relidx *
-					sizeof(relconvert_t));
-
-	for (i = 0; i < num_unique_relidx; i++) {
-
-		relconvert_t *curr = convert + i;
-
-		savefile_read_line(buf, sizeof(buf), savefile);
-
-		/* the relation number is the first entry in the
-		   line from the purge file */
-
-		curr->rel_idx = strtoul(buf, NULL, 10);
-		curr->purge_idx = i;
-	}
-
-	savefile_close(savefile);
-	savefile_free(savefile);
-
-	/* walk through the list of cycles and convert
-	   each purge file number to a relation file number */
-
-	for (i = 0; i < num_cycles; i++) {
-		la_col_t *c = cycle_list + i;
-
-		for (j = 0; j < c->cycle.num_relations; j++) {
-
-			relconvert_t *t = (relconvert_t *)bsearch(
-						c->cycle.list + j,
-						convert,
-						(size_t)num_unique_relidx,
-						sizeof(relconvert_t),
-						bsearch_relconvert);
-			if (t == NULL) {
-				/* this cycle is corrupt somehow */
-				logprintf(obj, "error: cannot locate "
-						"relation %u\n", 
-						c->cycle.list[j]);
-				exit(-1);
-			}
-			else {
-				c->cycle.list[j] = t->rel_idx;
-			}
-		}
-	}
-
-	dump_cycles(obj, cycle_list, num_cycles);
-	free_cycle_list(cycle_list, num_cycles);
-	free(convert);
-}
-

@@ -110,6 +110,9 @@ typedef struct {
 	char is_a_FILE;
 #endif
 	char *name;
+	char *staged_name;    /* if set, reads come from this local copy of
+				 the savefile instead of from name; appends
+				 still go to name, which stays authoritative */
 	char *buf;
 	uint32 buf_off;
 } savefile_t;
@@ -162,6 +165,11 @@ typedef struct {
 	char *mp_sprintf_buf;    /* scratch space for printing big integers */
 
 	const char *nfs_args;   /* arguments for NFS */
+
+	const char *scratch_dir; /* if set, node-local directory holding the
+				    staged savefile and the filtering
+				    intermediates that do not outlive the
+				    filtering run */
 } msieve_obj;
 
 msieve_obj * msieve_obj_new(char *input_integer,

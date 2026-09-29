@@ -16,6 +16,17 @@ $Id$
 #if !defined(WIN32) && !defined(_WIN64)
 #include <unistd.h>
 #endif
+#ifdef MSIEVE_CUDA_SINGLE_BINARY
+#include <cuda_embedded.h>
+
+/* Built-in CUB engine entry points. These are linked directly into msieve
+   in single-binary CUDA builds; keep the public DSO header unchanged. */
+extern void *spmv_engine_init(int *vbits);
+extern void spmv_engine_free(void *engine);
+extern void spmv_engine_run(void *engine, spmv_data_t *spmv_data);
+extern void spmv_engine_run_trans(void *engine, spmv_data_t *spmv_data);
+extern void spmv_engine_set_kernel(void *engine, int kernel);
+#endif
 #include "lanczos_gpu_core.h"
 #include "lanczos_nvtx.h"
 
@@ -31,6 +42,23 @@ typedef struct {
 	uint32 row_off;
 	uint32 col_off;
 } entry_idx_t;
+
+/* Largest block_nnz we accept. One block's nonzero count has to fit in a
+   uint32 all the way to the kernels (block_row_t::num_col_entries and
+   spmv_data_t::num_col_entries), and the CSR row pointers are uint32 too,
+   so 2^32-1 is the hard ceiling. We stop ~295M short of it because
+   extract_block() never splits a column, and so overshoots the request by
+   up to one column's weight; no real column comes anywhere near that much
+   slack. Every host-side nonzero count below is 64-bit, so nothing wraps
+   while a block is being assembled -- that, not the kernels, was what
+   limited this to 1750000000 before (11 * (nnz/10) overflowed a uint32).
+
+   Note that a block this large is expensive to build on the host: the CSR
+   column array costs 4 bytes per nonzero and radix_sort() another 16, so
+   a full 4e9-nonzero block needs ~80GB of host memory in transit, even
+   though only 16GB of it lands on the card. */
+
+#define MAX_BLOCK_NNZ 4000000000u
 
 #if 0
 // Tried using compressible memory on an A100. Did not help 
@@ -155,17 +183,17 @@ static void copy_dense(packed_matrix_t *p)
 }
 
 /*-------------------------------------------------------------------*/
-static uint32 extract_block(la_col_t *cols,
+static uint64 extract_block(la_col_t *cols,
 			uint32 row_min, uint32 row_max,
 			uint32 col_min, uint32 col_max,
-			uint32 nnz, uint32 *blocksize,
-			entry_idx_t **entries_in, 
-			uint32 *max_entries_in)
+			uint64 nnz, uint32 *blocksize,
+			entry_idx_t **entries_in,
+			uint64 *max_entries_in)
 {
 	uint32 i, j;
-	uint32 num_entries = 0;
+	uint64 num_entries = 0;
 	entry_idx_t *entries = *entries_in;
-	uint32 max_entries = *max_entries_in;
+	uint64 max_entries = *max_entries_in;
 
 	for (i = col_min; (i < col_max) && (num_entries < nnz); i++) {
 
@@ -203,19 +231,19 @@ static uint32 extract_block(la_col_t *cols,
 }
 
 /*-------------------------------------------------------------------*/
-static uint32 extract_rows(la_col_t *cols, uint32 ncols,
+static uint64 extract_rows(la_col_t *cols, uint32 ncols,
 			uint32 row_min, uint32 row_max,
 			entry_idx_t **entries_in,
-			uint32 *max_entries_in)
+			uint64 *max_entries_in)
 {
 	/* collect the nonzeros in rows [row_min, row_max) of every
 	   column, for one block of the transpose. Where its rows start
 	   and end is decided beforehand, by plan_trans_blocks */
 
 	uint32 i, j;
-	uint32 num_entries = 0;
+	uint64 num_entries = 0;
 	entry_idx_t *entries = *entries_in;
-	uint32 max_entries = *max_entries_in;
+	uint64 max_entries = *max_entries_in;
 
 	for (i = 0; i < ncols; i++) {
 
@@ -265,15 +293,20 @@ static int compare_row_off(const void *x, const void *y) {
 }
 
 /*-------------------------------------------------------------------*/
-static void radix_sort(entry_idx_t *arr, uint32 n) {
+static void radix_sort(entry_idx_t *arr, uint64 n) {
 
 	/* simple radix sort, much faster than qsort() */
 
-	uint32 i, pass, skip;
+	uint64 i;
+	uint32 pass, skip;
 	uint64 *a, *b, *from, *to, *temp;
 
-	a = (uint64 *) malloc(n * sizeof(uint64));
-	b = (uint64 *) malloc(n * sizeof(uint64));
+	/* xmalloc, not malloc: these are 8n bytes each, so at the top of
+	   the block_nnz range they are tens of GB and a failure here is
+	   entirely plausible -- better to say so than to segfault */
+
+	a = (uint64 *) xmalloc(n * sizeof(uint64));
+	b = (uint64 *) xmalloc(n * sizeof(uint64));
 
 	for (i = 0; i < n; i++) {
 		entry_idx_t *e = arr + i;
@@ -284,7 +317,7 @@ static void radix_sort(entry_idx_t *arr, uint32 n) {
 	to = b;
 	skip = 0;
 	for (pass = 0; pass < 8; pass++)  {
-		uint32 box[256] = { 0 };
+		uint64 box[256] = { 0 };
 
 		for (i = 0; i < n; i++) box[ (from[i] >> (8*pass)) & 255]++;
 		if (box[0] == n) { /* this word is all 0's, don't need to sort */
@@ -292,7 +325,7 @@ static void radix_sort(entry_idx_t *arr, uint32 n) {
 			continue;
 		}
 		for (i = 1; i < 256; i++) box[i] += box[i-1];
-		for (i = n - 1; i != (uint32)(-1); i--) to[--box[(from[i] >> (8*pass)) & 255]] = from[i];
+		for (i = n - 1; i != (uint64)(-1); i--) to[--box[(from[i] >> (8*pass)) & 255]] = from[i];
 
 		temp = from;
 		from = to;
@@ -312,7 +345,7 @@ static void radix_sort(entry_idx_t *arr, uint32 n) {
 }
 
 /*-------------------------------------------------------------------*/
-static size_t block_bytes(uint32 num_entries, uint32 num_rows) {
+static size_t block_bytes(uint64 num_entries, uint32 num_rows) {
 
 	/* a packed block: column indices padded to 256 bytes, then
 	   the row pointers */
@@ -323,16 +356,27 @@ static size_t block_bytes(uint32 num_entries, uint32 num_rows) {
 
 /*-------------------------------------------------------------------*/
 static void pack_matrix_block(block_row_t *b,
-			entry_idx_t *entries, uint32 num_entries,
+			entry_idx_t *entries, uint64 num_entries,
 			uint32 row_min, uint32 row_max,
 			uint32 col_min, uint32 col_max,
 			uint32 is_trans, uint32 streamed)
 {
 
-	uint32 i, j;
+	uint64 i, j;
 	uint32 num_rows = row_max - row_min;
 	uint32 *col_entries;
 	uint32 *row_entries;
+
+	/* the CSR arrays below, and everything downstream of them, index
+	   nonzeros with a uint32; the block extractors are capped so this
+	   cannot happen, but a wrong answer here would be silent */
+
+	if (num_entries > MAX_BLOCK_NNZ) {
+		printf("error: matrix block holds %" PRIu64 " nonzeros, above "
+			"the %u a CSR block can address; lower block_nnz\n",
+			num_entries, (uint32)MAX_BLOCK_NNZ);
+		exit(-1);
+	}
 
 	/* convert a block of matrix rows from COO to CSR format, in one
 	   host buffer: column indices, then the row pointers starting on
@@ -385,25 +429,28 @@ static void pack_matrix_block(block_row_t *b,
 		col_entries[i] = e[0].col_off - col_min;
 
 		if (i > 0 && e[0].row_off != e[-1].row_off) {
-			row_entries[e[-1].row_off - row_min] = j;
+			row_entries[e[-1].row_off - row_min] = (uint32)j;
 			j = 0;
 		}
 	}
 	if (num_entries > 0)
-		row_entries[entries[i-1].row_off - row_min] = j;
+		row_entries[entries[i-1].row_off - row_min] = (uint32)j;
+
+	/* the running total ends at num_entries, which the check above
+	   has already bounded to what a uint32 can hold */
 
 	for (i = j = 0; i < num_rows; i++) {
 		uint32 t = row_entries[i];
-		row_entries[i] = j;
+		row_entries[i] = (uint32)j;
 		j += t;
 	}
-	row_entries[num_rows] = num_entries;
+	row_entries[num_rows] = (uint32)num_entries;
 
 	b->num_rows = num_rows;
 	b->num_cols = col_max - col_min;
-	b->num_col_entries = num_entries;
+	b->num_col_entries = (uint32)num_entries;
 	b->col_entries = b->row_entries = 0;
-	printf("%u %u %u\n", num_entries, num_rows, b->blocksize);
+	printf("%" PRIu64 " %u %u\n", num_entries, num_rows, b->blocksize);
 }
 
 /*-------------------------------------------------------------------*/
@@ -530,7 +577,7 @@ typedef struct {
 	uint32 alloc;
 	uint32 *start;
 	uint32 *size;
-	uint32 *nnz;
+	uint64 *nnz;
 	size_t *bytes;
 
 	uint8 *streamed;        /* PLACE_STREAM only */
@@ -540,7 +587,7 @@ typedef struct {
 
 /*-------------------------------------------------------------------*/
 static void plan_add_block(block_plan_t *plan, uint32 start, uint32 size,
-			uint32 nnz, uint32 num_rows) {
+			uint64 nnz, uint32 num_rows) {
 
 	uint32 n = plan->num_blocks;
 
@@ -550,8 +597,8 @@ static void plan_add_block(block_plan_t *plan, uint32 start, uint32 size,
 					plan->alloc * sizeof(uint32));
 		plan->size = (uint32 *)xrealloc(plan->size,
 					plan->alloc * sizeof(uint32));
-		plan->nnz = (uint32 *)xrealloc(plan->nnz,
-					plan->alloc * sizeof(uint32));
+		plan->nnz = (uint64 *)xrealloc(plan->nnz,
+					plan->alloc * sizeof(uint64));
 		plan->bytes = (size_t *)xrealloc(plan->bytes,
 					plan->alloc * sizeof(size_t));
 	}
@@ -596,7 +643,7 @@ static void plan_forward_blocks(packed_matrix_t *p, block_plan_t *plan) {
 	uint32 start = 0;
 
 	while (start < p->ncols) {
-		uint32 num = 0;
+		uint64 num = 0;
 
 		for (i = start; i < p->ncols && num < p->block_nnz; i++)
 			num += col_sparse_entries(p->unpacked_cols + i,
@@ -635,18 +682,20 @@ static void plan_trans_blocks(packed_matrix_t *p, block_plan_t *plan) {
 		below[i + 1] += below[i];
 
 #define ROWS_NNZ(lo, hi) \
-	(uint32)(below[MIN(hi, nrows)] - below[MIN(lo, nrows)])
+	(below[MIN(hi, nrows)] - below[MIN(lo, nrows)])
 
 	while (start_row < nrows) {
 
 		uint32 row_min = start_row;
 		uint32 row_max = nrows;
-		uint32 nnz = p->block_nnz;
-		uint32 min_nnz = 9 * (nnz / 10);
-		uint32 max_nnz = 11 * (nnz / 10);
+		uint64 nnz = p->block_nnz;
+		uint64 min_nnz = 9 * (nnz / 10);
+		/* the +10% search window has to stay inside what a
+		   block can hold */
+		uint64 max_nnz = MIN(11 * (nnz / 10), (uint64)MAX_BLOCK_NNZ);
 		uint32 my_blocksize = blocksize;
 		uint32 my_row_max = row_min + my_blocksize;
-		uint32 num_entries;
+		uint64 num_entries;
 
 		if (my_row_max > row_max) {
 			my_row_max = row_max;
@@ -675,7 +724,7 @@ static void plan_trans_blocks(packed_matrix_t *p, block_plan_t *plan) {
 					my_row_max = row_max;
 					break;
 				}
-				max_nnz = (uint32)(-1);
+				max_nnz = (uint64)MAX_BLOCK_NNZ;
 				continue;
 			}
 			break;
@@ -905,14 +954,15 @@ static void alloc_staging(gpudata_t *d, uint32 num_slots, size_t bytes) {
 
 /*-------------------------------------------------------------------*/
 static void check_block(block_plan_t *plan, uint32 k, uint32 size,
-			uint32 num_entries) {
+			uint64 num_entries) {
 
 	/* the planned counts come from the same column data, so this
 	   only fails on a bug */
 
 	if (size != plan->size[k] || num_entries != plan->nnz[k]) {
-		printf("error: matrix block %u has %u lines and %u nonzeros, "
-			"planned %u and %u\n", k, size, num_entries,
+		printf("error: matrix block %u has %u lines and %" PRIu64
+			" nonzeros, planned %u and %" PRIu64 "\n",
+			k, size, num_entries,
 			plan->size[k], plan->nnz[k]);
 		exit(-1);
 	}
@@ -924,7 +974,7 @@ static void gpu_matrix_init(packed_matrix_t *p, block_plan_t *plan) {
 	gpudata_t *d = (gpudata_t *)p->extra;
 	uint32 streaming = (plan->mode == PLACE_STREAM);
 	uint32 num_trans = plan->num_blocks - plan->num_forward;
-	uint32 num_entries_alloc = 10000;
+	uint64 num_entries_alloc = 10000;
 	entry_idx_t *entries = (entry_idx_t *)xmalloc(
 					num_entries_alloc *
 					sizeof(entry_idx_t));
@@ -950,13 +1000,13 @@ static void gpu_matrix_init(packed_matrix_t *p, block_plan_t *plan) {
 
 		block_row_t *b = d->block_rows + i;
 		uint32 blocksize;
-		uint32 num_entries;
+		uint64 num_entries;
 
 		num_entries = extract_block(p->unpacked_cols,
 					0, p->nrows,
 					plan->start[i],
 					plan->start[i] + plan->size[i],
-					(uint32)(-1),
+					(uint64)(-1),
 					&blocksize,
 					&entries,
 					&num_entries_alloc);
@@ -983,7 +1033,7 @@ static void gpu_matrix_init(packed_matrix_t *p, block_plan_t *plan) {
 
 		uint32 k = plan->num_forward + i;
 		block_row_t *b = d->trans_block_rows + i;
-		uint32 num_entries;
+		uint64 num_entries;
 
 		num_entries = extract_rows(p->unpacked_cols, p->ncols,
 					plan->start[k],
@@ -1167,6 +1217,70 @@ static stream_slot_t * stream_load(gpudata_t *d, block_row_t *b,
 }
 
 /*------------------------------------------------------------------------*/
+#ifdef MSIEVE_CUDA_SINGLE_BINARY
+static void
+load_spmv_engine(msieve_obj *obj, gpudata_t *d)
+{
+	char libname[256];
+	char *tmp = NULL;
+
+	if (d->gpu_info->compute_version_major < 2) {
+		printf("error: GPU compute capability >= 2.0 required\n");
+		exit(-1);
+	}
+
+	/* The normal build links the CUB SpMV engine directly into msieve. */
+	d->spmv_engine_handle = NULL;
+	d->spmv_engine_init = spmv_engine_init;
+	d->spmv_engine_free = spmv_engine_free;
+	d->spmv_engine_run = spmv_engine_run;
+	d->spmv_engine_run_trans = spmv_engine_run_trans;
+	d->spmv_engine_set_kernel = spmv_engine_set_kernel;
+
+	/* Preserve the historical spmvlib= override for testing/custom engines. */
+	if (obj->nfs_args != NULL)
+		tmp = strstr(obj->nfs_args, "spmvlib=");
+	if (tmp == NULL)
+		return;
+
+	{
+		uint32 i;
+		for (i = 0, tmp += 8; i < sizeof(libname) - 1; i++) {
+			if (*tmp == 0 || isspace(*tmp))
+				break;
+			libname[i] = *tmp++;
+		}
+		libname[i] = 0;
+	}
+
+	d->spmv_engine_handle = load_dynamic_lib(libname);
+	if (d->spmv_engine_handle == NULL) {
+		printf("error: failed to load GPU matrix multiply engine override "
+		       "from \"%s\"\n", libname);
+		exit(-1);
+	}
+
+	d->spmv_engine_init = get_lib_symbol(d->spmv_engine_handle,
+					"spmv_engine_init");
+	d->spmv_engine_free = get_lib_symbol(d->spmv_engine_handle,
+					"spmv_engine_free");
+	d->spmv_engine_run = get_lib_symbol(d->spmv_engine_handle,
+					"spmv_engine_run");
+	/* the override library replaces the built-in engine completely, so
+	   the optional entry points come from it too (NULL if it has none) */
+	d->spmv_engine_run_trans = get_lib_symbol(d->spmv_engine_handle,
+					"spmv_engine_run_trans");
+	d->spmv_engine_set_kernel = get_lib_symbol(d->spmv_engine_handle,
+					"spmv_engine_set_kernel");
+	if (d->spmv_engine_init == NULL ||
+	    d->spmv_engine_free == NULL ||
+	    d->spmv_engine_run == NULL) {
+		printf("error: cannot find GPU matrix multiply function in \"%s\"\n",
+			libname);
+		exit(-1);
+	}
+}
+#else
 static void
 load_spmv_engine(msieve_obj *obj, gpudata_t *d)
 {
@@ -1231,6 +1345,8 @@ load_spmv_engine(msieve_obj *obj, gpudata_t *d)
 		exit(-1);
 	}
 }
+#endif
+
 
 /*-------------------------------------------------------------------*/
 void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
@@ -1288,6 +1404,16 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
                 exit(-1);
 	}
 
+#ifdef MSIEVE_CUDA_SINGLE_BINARY
+	/* Prefer native code from the embedded multi-architecture fatbin.
+	   Keep a separately embedded PTX image as a fallback for driver/toolkit
+	   combinations that reject the fatbin container. */
+	status = cuda_load_embedded_module(&d->gpu_module,
+			msieve_lanczos_kernel_fatbin,
+			(const char *)msieve_lanczos_kernel_ptx,
+			"lanczos_kernel");
+	CUDA_TRY(status)
+#else
 	/* load kernels */
 
 	status = cuModuleLoad(&d->gpu_module, "lanczos_kernel.ptx");				\
@@ -1295,6 +1421,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		printf("Error loading ptx. Trying fatbin.\n");
 		CUDA_TRY(cuModuleLoad(&d->gpu_module, "lanczos_kernel.fatbin"))
 	}
+#endif
 
 	d->launch = (gpu_launch_t *)xmalloc(NUM_GPU_FUNCTIONS *
 				sizeof(gpu_launch_t));
@@ -1400,7 +1527,7 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 
 			computed = MAX(computed, MAX(128000000, row_floor));
 		}
-		computed = MIN(computed, 1750000000);
+		computed = MIN(computed, (uint64)MAX_BLOCK_NNZ);
 		p->block_nnz = (uint32)computed;
 		logprintf(obj, "computed block_nnz %u (L2 cache %d bytes, "
 				"average column weight %.1f)\n",
@@ -1410,9 +1537,30 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		const char *tmp;
 		tmp = strstr(obj->nfs_args, "block_nnz=");
 		if (tmp != NULL) {
-			p->block_nnz = (uint32)atoi(tmp + 10);
+			{
+				/* atoi() would wrap anything past INT_MAX into a
+				   block size nobody asked for, on a run that then
+				   takes hours. strtoull() rather than strtoul()
+				   because unsigned long is 32 bits on Windows,
+				   where an oversized value saturates at UINT32_MAX
+				   instead of being caught as out of range */
+
+				char *endp;
+				uint64 v;
+
+				errno = 0;
+				v = strtoull(tmp + 10, &endp, 10);
+
+				if (endp == tmp + 10 || errno == ERANGE ||
+				    v == 0 || v > UINT32_MAX) {
+					logprintf(obj, "error: block_nnz out of range\n");
+					exit(-1);
+				}
+				p->block_nnz = (uint32)v;
+			}
 			if (p->block_nnz < 100000) p->block_nnz = 100000;
-			if (p->block_nnz > 1750000000) p->block_nnz = 1750000000;
+			if (p->block_nnz > MAX_BLOCK_NNZ)
+				p->block_nnz = MAX_BLOCK_NNZ;
 			floor_binds = 0;
 		}
 	}
@@ -1484,7 +1632,8 @@ void matrix_extra_free(packed_matrix_t *p) {
 	free(d->launch);
 
 	d->spmv_engine_free(d->spmv_engine);
-	unload_dynamic_lib(d->spmv_engine_handle);
+	if (d->spmv_engine_handle != NULL)
+		unload_dynamic_lib(d->spmv_engine_handle);
 
 	CUDA_TRY(cuCtxDestroy(d->gpu_context))
 	/* CUDA_TRY(cuDevicePrimaryCtxRelease(d->gpu_info->device_handle)) */

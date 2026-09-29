@@ -56,6 +56,9 @@ void cuGetErrorMessage(CUresult result, int line);
 
 void gpu_init(gpu_config_t *config);
 
+CUresult cuda_load_embedded_module(CUmodule *module,
+		const void *fatbin, const char *ptx, const char *module_name);
+
 #define CUDA_TRY(func) \
 	{ 			 				\
 		CUresult status = func;				\

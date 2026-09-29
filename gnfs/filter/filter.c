@@ -6,16 +6,17 @@ errors.
 
 Optionally, please be nice and tell me if you find this source to be
 useful. Again optionally, if you add to the functionality present here
-please consider making those additions public too, so that others may 
-benefit from your work.	
+please consider making those additions public too, so that others may
+benefit from your work.
 
 $Id$
 --------------------------------------------------------------------*/
 
 #include "filter.h"
+#include "rmap.h"
 
 /*--------------------------------------------------------------------*/
-static void find_fb_size(factor_base_t *fb, 
+static void find_fb_size(factor_base_t *fb,
 			uint32 limit_r, uint32 limit_a,
 			uint32 *entries_r_out, uint32 *entries_a_out) {
 
@@ -23,8 +24,8 @@ static void find_fb_size(factor_base_t *fb,
 	uint32 entries_r = 0;
 	uint32 entries_a = 0;
 
-	/* If the filtering bounds are extremely large, just 
-	   estimate the target as the number of primes less than 
+	/* If the filtering bounds are extremely large, just
+	   estimate the target as the number of primes less than
 	   the filtering bounds */
 
 	if (limit_r > 20000000 && limit_a > 20000000) {
@@ -33,7 +34,7 @@ static void find_fb_size(factor_base_t *fb,
 		return;
 	}
 
-	init_prime_sieve(&prime_sieve, 0, 
+	init_prime_sieve(&prime_sieve, 0,
 			MAX(limit_r, limit_a) + 1000);
 
 	while (1) {
@@ -46,7 +47,7 @@ static void find_fb_size(factor_base_t *fb,
 			break;
 
 		if (p < limit_r) {
-			num_roots = poly_get_zeros(roots, &fb->rfb.poly, p, 
+			num_roots = poly_get_zeros(roots, &fb->rfb.poly, p,
 							&high_coeff, 1);
 			if (high_coeff == 0)
 				num_roots++;
@@ -54,7 +55,7 @@ static void find_fb_size(factor_base_t *fb,
 		}
 
 		if (p < limit_a) {
-			num_roots = poly_get_zeros(roots, &fb->afb.poly, p, 
+			num_roots = poly_get_zeros(roots, &fb->afb.poly, p,
 							&high_coeff, 1);
 			if (high_coeff == 0)
 				num_roots++;
@@ -70,22 +71,23 @@ static void find_fb_size(factor_base_t *fb,
 /*--------------------------------------------------------------------*/
 static uint32 check_excess(filter_t *filter) {
 
-	/* give up if there is not enough excess 
+	/* give up if there is not enough excess
 	   to form a matrix */
 
 	uint32 relations_needed = 0;
 
 	if (filter->num_relations < filter->num_ideals ||
-	    filter->num_relations - filter->num_ideals < 
+	    filter->num_relations - filter->num_ideals <
 	    				filter->target_excess) {
-		relations_needed = 1000000;
-
+		uint64 needed64 = 1000000;
 		if (filter->num_relations > filter->num_ideals) {
-			relations_needed = 3 * (filter->target_excess -
-					(filter->num_relations - 
-				 	 filter->num_ideals));
-			relations_needed = MAX(relations_needed, 1000000);
+			uint64 excess = (uint64)filter->num_relations - filter->num_ideals;
+			uint64 deficit = (uint64)filter->target_excess - excess;
+			needed64 = 3 * deficit;
+			if (needed64 < 1000000)
+				needed64 = 1000000;
 		}
+		relations_needed = needed64 > UINT32_MAX ? UINT32_MAX : (uint32)needed64;
 		free(filter->relation_array);
 		free(filter->relation_ptr);
 		filter->relation_array = NULL;
@@ -99,9 +101,19 @@ static void dump_relation_numbers(msieve_obj *obj, filter_t *filter) {
 	uint32 i;
 	char buf[256];
 	FILE *relation_fp;
+	nfs_rmap_reader_t map;
+	uint32 have_map = 0;
 	relation_ideal_t *r = filter->relation_array;
 
-	sprintf(buf, "%s.d", obj->savefile.name);
+	if (filter->lp_needs_rmap) {
+		if (nfs_rmap_reader_open(obj, &map, 1, UINT64_MAX) != 0) {
+			logprintf(obj, "error: this filtered dataset requires a valid committed relation map\n");
+			exit(-1);
+		}
+		have_map = 1;
+	}
+
+	get_filter_tmp_name(obj, buf, sizeof(buf), ".d");
 	relation_fp = fopen(buf, "wb");
 	if (relation_fp == NULL) {
 		logprintf(obj, "error: reldump can't open out file\n");
@@ -109,17 +121,28 @@ static void dump_relation_numbers(msieve_obj *obj, filter_t *filter) {
 	}
 
 	for (i = 0; i < filter->num_relations; i++) {
-		fwrite(&r->rel_index, (size_t)1, sizeof(uint32), relation_fp);
+		uint64 source_id = have_map ? nfs_rmap_get(obj, &map, r->rel_index) :
+			(uint64)r->rel_index;
+		if (fwrite(&source_id, sizeof(uint64), 1, relation_fp) != 1) {
+			logprintf(obj, "error: write failed creating relation keep-list\n");
+			exit(-1);
+		}
 		r = next_relation_ptr(r);
 	}
-	fclose(relation_fp);
+	if (fflush(relation_fp) != 0 || ferror(relation_fp) ||
+	    fclose(relation_fp) != 0) {
+		logprintf(obj, "error: write failed finalizing relation keep-list\n");
+		exit(-1);
+	}
+	if (have_map)
+		nfs_rmap_reader_close(&map);
 }
 
 /*--------------------------------------------------------------------*/
-static void set_filtering_bounds(msieve_obj *obj, factor_base_t *fb, 
-			uint32 filtmin_r, uint32 filtmin_a, 
+static void set_filtering_bounds(msieve_obj *obj, factor_base_t *fb,
+			uint32 filtmin_r, uint32 filtmin_a,
 			uint32 *entries_r_out, uint32 *entries_a_out,
-			uint32 num_relations, uint32 force_small, 
+			uint64 num_relations, uint32 force_small,
 			filter_t *filter) {
 
 	uint32 entries_r, entries_a;
@@ -141,7 +164,14 @@ static void set_filtering_bounds(msieve_obj *obj, factor_base_t *fb,
 	find_fb_size(fb, filtmin_r, filtmin_a, &entries_r, &entries_a);
 	filter->filtmin_r = filtmin_r;
 	filter->filtmin_a = filtmin_a;
-	filter->target_excess = entries_r + entries_a;
+	{
+		uint64 target = (uint64)entries_r + entries_a;
+		if (target > UINT32_MAX) {
+			logprintf(obj, "error: filtering target excess exceeds 32-bit common-filter capacity\n");
+			exit(-1);
+		}
+		filter->target_excess = (uint32)target;
+	}
 
 	*entries_r_out = entries_r;
 	*entries_a_out = entries_a;
@@ -159,20 +189,28 @@ static void set_filtering_bounds(msieve_obj *obj, factor_base_t *fb,
 
 #define DEFAULT_TARGET_DENSITY 90.0
 
-static uint32 do_merge(msieve_obj *obj, filter_t *filter, 
-			merge_t *merge, double target_density) {
+static uint32 do_merge(msieve_obj *obj, filter_t *filter,
+			merge_t *merge, double target_density,
+			const char *ckpt_path) {
 
 	uint32 relations_needed;
 	uint32 extra_needed = filter->target_excess;
 
-	/* make the clique removal more conservative by leaving 
-	   some of the excess; this makes the merge phase easier. 
-	   Note that the singleton removal probably threw away 
-	   many large ideals that occur too often to be worth 
-	   tracking, which forces the target matrix size to 
+	/* make the clique removal more conservative by leaving
+	   some of the excess; this makes the merge phase easier.
+	   Note that the singleton removal probably threw away
+	   many large ideals that occur too often to be worth
+	   tracking, which forces the target matrix size to
 	   increase, so that target_excess is larger now */
 
-	filter->target_excess *= FINAL_EXCESS_FRACTION;
+	{
+		double target = filter->target_excess * FINAL_EXCESS_FRACTION;
+		if (target > UINT32_MAX) {
+			logprintf(obj, "error: adjusted filtering target exceeds 32-bit capacity\n");
+			return UINT32_MAX;
+		}
+		filter->target_excess = (uint32)target;
+	}
 
 	if ((relations_needed = check_excess(filter)) > 0)
 		return relations_needed;
@@ -185,8 +223,12 @@ static uint32 do_merge(msieve_obj *obj, filter_t *filter,
 	if (target_density != 0)
 		merge->target_density = target_density;
 
-	if (filter_make_relsets(obj, filter, merge, extra_needed) != 0)
+	if (filter_make_relsets(obj, filter, merge, extra_needed,
+				ckpt_path) != 0) {
+		if (merge->relset_array != NULL || merge->data_pool != NULL)
+			filter_free_relsets(merge);
 		return 1000000;
+	}
 
 	return 0;
 }
@@ -197,7 +239,7 @@ static uint32 do_merge(msieve_obj *obj, filter_t *filter,
 static uint32 do_partial_filtering(msieve_obj *obj, filter_t *filter,
 				merge_t *merge, uint32 entries_r,
 				uint32 entries_a, double target_density,
-				uint32 max_weight) {
+				uint32 max_weight, const char *ckpt_path) {
 
 	uint32 relations_needed;
 	uint32 num_relations = filter->num_relations;
@@ -216,16 +258,17 @@ static uint32 do_partial_filtering(msieve_obj *obj, filter_t *filter,
 
 		filter_read_lp_file(obj, filter, max_weight);
 
-		if ((relations_needed = do_merge(obj, filter, 
-						merge, target_density)) > 0)
+		if ((relations_needed = do_merge(obj, filter,
+						merge, target_density,
+						ckpt_path)) > 0)
 			return relations_needed;
 
-		/* accept the collection of generated cycles 
+		/* accept the collection of generated cycles
 		   if the matrix they form is dense enough or
 		   max_weight has been incremented enough */
 
 		if (merge->avg_cycle_weight > 63.0 ||
-		    max_weight >= MAX_KEEP_WEIGHT - 5) 
+		    max_weight >= MAX_KEEP_WEIGHT - 5)
 			break;
 
 		logprintf(obj, "matrix not dense enough, retrying\n");
@@ -242,13 +285,15 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	merge_t merge;
 	uint32 filtmin_r, filtmin_a;
 	uint32 entries_r, entries_a;
-	uint32 num_relations;
+	uint64 num_relations;
 	uint32 relations_needed = 0;
 	factor_base_t fb;
 	time_t wall_time = time(NULL);
 	uint64 savefile_size = get_file_size(obj->savefile.name);
 	uint64 ram_size = 0;
-	uint32 max_relations = 0;
+	char ckpt_buf[256];
+	const char *ckpt_path = NULL;
+	uint64 max_relations = 0;
 	uint32 filter_bound = 0;
 	double target_density = 0;
 	double target_densities[16];
@@ -265,6 +310,24 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 		const char *tmp;
 
+		/* merge_ckpt=<path> records the relation sets just before the
+		   full merge, or restarts from that file when it exists, so the
+		   merge can be iterated on without repeating the hours of
+		   deterministic work in front of it */
+
+		tmp = strstr(obj->nfs_args, "merge_ckpt=");
+		if (tmp != NULL) {
+			size_t k = 0;
+
+			tmp += 11;
+			while (*tmp && *tmp != ',' && !isspace((int)(unsigned char)*tmp) &&
+					k < sizeof(ckpt_buf) - 1)
+				ckpt_buf[k++] = *tmp++;
+			ckpt_buf[k] = 0;
+			if (k > 0)
+				ckpt_path = ckpt_buf;
+		}
+
 		tmp = strstr(obj->nfs_args, "filter_mem_mb=");
 		if (tmp != NULL) {
 			ram_size = strtoull(tmp + 14, NULL, 10) << 20;
@@ -274,8 +337,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 		tmp = strstr(obj->nfs_args, "filter_maxrels=");
 		if (tmp != NULL) {
-			max_relations = strtoul(tmp + 15, NULL, 10);
-			logprintf(obj, "setting max relations to %u\n",
+			max_relations = strtoull(tmp + 15, NULL, 10);
+			logprintf(obj, "setting max relations to %" PRIu64 "\n",
 					max_relations);
 		}
 
@@ -346,10 +409,10 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 				tmp0--;
 			/* skip if this comma is inside a target_density= value */
 			if (tmp0 == obj->nfs_args || tmp0[-1] != '=') {
-				max_relations = strtoul(tmp + 1, NULL, 10);
+				max_relations = strtoull(tmp + 1, NULL, 10);
 				filter_bound = strtoul(tmp0, NULL, 10);
 
-				logprintf(obj, "setting max relations to %u\n",
+				logprintf(obj, "setting max relations to %" PRIu64 "\n",
 						max_relations);
 				logprintf(obj, "setting large prime bound to %u\n",
 						filter_bound);
@@ -369,13 +432,39 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 		printf("filtering failed to read polynomials\n");
 		exit(-1);
 	}
-	logprintf(obj, "estimated available RAM is %.1lf MB\n", 
+	logprintf(obj, "estimated available RAM is %.1lf MB\n",
 				(double)ram_size / 1048576);
+
+	/* a checkpoint makes everything below redundant: it already holds
+	   the relation sets the full merge starts from */
+
+	if (ckpt_path != NULL) {
+		uint32 ckpt_min_cycles = 0;
+
+		if (filter_merge_checkpoint_load(obj, &merge,
+				&ckpt_min_cycles, ckpt_path) == 0) {
+			if (target_density != 0)
+				merge.target_density = target_density;
+			if (filter_merge_full(obj, &merge,
+					ckpt_min_cycles) != 0) {
+				filter_free_relsets(&merge);
+				relations_needed = 1000000;
+				goto finished;
+			}
+			goto merge_done;
+		}
+	}
+
+	/* with a scratch directory configured, work from a local
+	   decompressed copy of the savefile */
+
+	savefile_stage(obj);
 
 	/* delete duplicate relations */
 
-	filtmin_r = filtmin_a = nfs_purge_duplicates(obj, &fb, 
-					max_relations, &num_relations);
+	filtmin_r = filtmin_a = nfs_purge_duplicates(obj, &fb,
+					max_relations, ram_size,
+					&num_relations);
 	if (filter_bound > 0)
 		filtmin_r = filtmin_a = filter_bound;
 
@@ -383,8 +472,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	   "small", this will be the only such pass */
 
 	set_filtering_bounds(obj, &fb, filtmin_r, filtmin_a,
-				&entries_r, &entries_a, num_relations, 
-				(uint32)(savefile_size < ram_size / 2), 
+				&entries_r, &entries_a, num_relations,
+				(uint32)(savefile_size < ram_size / 2),
 				&filter);
 
 	/* separate out the large ideals and delete singletons
@@ -392,19 +481,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	   first delete most of the singletons from the disk file */
 
 	nfs_write_lp_file(obj, &fb, &filter, max_relations, 0);
-
-	if (filter.lp_file_size > ram_size / 2) {
-		filter_purge_lp_singletons(obj, &filter, ram_size);
-#if 0
-		/* also delete most of the cliques from the disk
-		   file if it is still large, and there is a
-		   great deal of excess relations */
-
-		if (filter.lp_file_size > ram_size / 2) {
-			filter_purge_lp_cliques(obj, &filter);
-		}
-#endif
-	}
+	nfs_compact_lp_file(obj, &filter, ram_size);
+	/* save filter state before initial LP read for multi-density small path */
 	{
 	filter_read_lp_file(obj, &filter, 0);
 
@@ -416,7 +494,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 		if (num_densities <= 1) {
 			if ((relations_needed = do_merge(obj, &filter,
-							&merge, target_density)) > 0)
+							&merge, target_density,
+							ckpt_path)) > 0)
 				goto finished;
 		}
 		else {
@@ -473,7 +552,18 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 				filter_merge_init(obj, &filter);
 				filter_merge_2way(obj, &filter, &merge);
 				if (filter_merge_full(obj, &merge, extra_needed) != 0) {
-					if (d == 0) { relations_needed = 1000000; free(saved_rel_array); goto finished; }
+
+					/* do_merge() frees the half-built relsets before it
+					   returns; these loops have to do it themselves,
+					   and the finished: label does not */
+
+					if (merge.relset_array != NULL || merge.data_pool != NULL)
+						filter_free_relsets(&merge);
+					if (d == 0) {
+						relations_needed = 1000000;
+						free(saved_rel_array);
+						goto finished;
+					}
 					break;
 				}
 				filter_postproc_relsets(obj, &merge);
@@ -483,7 +573,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 				relations_needed = 0;
 			}
 			free(saved_rel_array);
-			sprintf(lp_filename, "%s.lp", obj->savefile.name);
+			get_filter_tmp_name(obj, lp_filename,
+					sizeof(lp_filename), ".lp");
 			remove(lp_filename);
 			wall_time = time(NULL) - wall_time;
 			logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);
@@ -508,6 +599,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 		filter.relation_array = NULL;
 
 		nfs_write_lp_file(obj, &fb, &filter, max_relations, 1);
+		nfs_compact_lp_file(obj, &filter, ram_size);
 
 		if (filter.lp_file_size < ram_size / 2) {
 
@@ -517,7 +609,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 			if (num_densities <= 1) {
 				filter_read_lp_file(obj, &filter, 0);
 				if ((relations_needed = do_merge(obj, &filter,
-							&merge, target_density)) > 0) {
+							&merge, target_density,
+							ckpt_path)) > 0) {
 					goto finished;
 				}
 			}
@@ -577,7 +670,18 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 					filter_merge_init(obj, &filter);
 					filter_merge_2way(obj, &filter, &merge);
 					if (filter_merge_full(obj, &merge, extra_needed) != 0) {
-						if (d == 0) { relations_needed = 1000000; free(saved_rel_array); goto finished; }
+
+						/* do_merge() frees the half-built relsets before it
+						   returns; these loops have to do it themselves,
+						   and the finished: label does not */
+
+						if (merge.relset_array != NULL || merge.data_pool != NULL)
+							filter_free_relsets(&merge);
+						if (d == 0) {
+							relations_needed = 1000000;
+							free(saved_rel_array);
+							goto finished;
+						}
 						break;
 					}
 					filter_postproc_relsets(obj, &merge);
@@ -587,7 +691,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 					relations_needed = 0;
 				}
 				free(saved_rel_array);
-				sprintf(lp_filename, "%s.lp", obj->savefile.name);
+				get_filter_tmp_name(obj, lp_filename,
+						sizeof(lp_filename), ".lp");
 				remove(lp_filename);
 				wall_time = time(NULL) - wall_time;
 				logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);
@@ -606,7 +711,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 				if ((relations_needed = do_partial_filtering(obj,
 							&filter, &merge, entries_r,
 							entries_a, target_density,
-							max_weight)) > 0) {
+							max_weight, ckpt_path)) > 0) {
 					goto finished;
 				}
 			}
@@ -630,9 +735,17 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 					{
 						uint32 dn = do_partial_filtering(obj, &filter, &merge,
 								entries_r, entries_a, target_densities[d],
-								max_weight);
+								max_weight, NULL);
 						if (dn > 0) {
-							if (d == 0) { relations_needed = dn; goto finished; }
+
+							/* as above: nothing downstream frees these */
+
+							if (merge.relset_array != NULL || merge.data_pool != NULL)
+								filter_free_relsets(&merge);
+							if (d == 0) {
+								relations_needed = dn;
+								goto finished;
+							}
 							break;
 						}
 					}
@@ -642,7 +755,8 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 					filter_free_relsets(&merge);
 					relations_needed = 0;
 				}
-				sprintf(lp_filename, "%s.lp", obj->savefile.name);
+				get_filter_tmp_name(obj, lp_filename,
+						sizeof(lp_filename), ".lp");
 				remove(lp_filename);
 				wall_time = time(NULL) - wall_time;
 				logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);
@@ -654,10 +768,12 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 	/* single-density filtering succeeded; delete the LP file */
 
-	sprintf(lp_filename, "%s.lp", obj->savefile.name);
+	get_filter_tmp_name(obj, lp_filename, sizeof(lp_filename), ".lp");
 	remove(lp_filename);
 
 	/* optimize and then save the collection of relation-sets */
+
+merge_done:
 
 	filter_postproc_relsets(obj, &merge);
 	filter_dump_relsets(obj, &merge, "");
@@ -665,6 +781,16 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	wall_time = time(NULL) - wall_time;
 	logprintf(obj, "RelProcTime: %u\n", (uint32)wall_time);
 finished:
+
+	/* the matrix build reads the savefile once more. When it is going
+	   to run in this same invocation, leave the staged copy in place
+	   for it rather than decompressing the whole thing twice. */
+
+	if (relations_needed == 0 && (obj->flags & MSIEVE_FLAG_NFS_LA))
+		savefile_unstage_tmp(obj);
+	else
+		savefile_unstage(obj);
+
 	mpz_poly_free(&fb.rfb.poly);
 	mpz_poly_free(&fb.afb.poly);
 	return relations_needed;

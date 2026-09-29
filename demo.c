@@ -87,6 +87,9 @@ void print_usage(char *progname) {
 	printf("\noptions:\n"
 	         "   -s <name> save intermediate results to <name>\n"
 		 "             instead of the default %s\n"
+	         "   -scratch <dir> stage the savefile and filtering\n"
+	         "             intermediates in <dir>, e.g. node-local disk;\n"
+	         "             .cyc and .rmap stay beside the savefile\n"
 	         "   -l <name> append log information to <name>\n"
 		 "             instead of the default %s\n"
 	         "   -i <name> read one or more integers to factor from\n"
@@ -136,7 +139,7 @@ void print_usage(char *progname) {
 		 " the arguments are a space-delimited list of:\n"
 		 " polynomial selection options:\n"
 #ifdef HAVE_CUDA
-		 "   sortlib=X       use GPU sorting library X\n"
+		 "   sortlib=X       override built-in GPU sorting library with X\n"
 		 "   gpu_mem_mb=X    use X megabytes of GPU memory\n"
 #endif
 		 "   polydegree=X    select polynomials with degree X\n"
@@ -174,6 +177,7 @@ void print_usage(char *progname) {
 		 "   cado_filter=1    assume filtering used the CADO-NFS suite\n"
 #ifdef HAVE_CUDA
 		 "   block_nnz=X      use approx. X nonzeros per CUB SpMV block\n"
+		 "                    (100000 to 4000000000)\n"
 		 "   use_managed=1    store a matrix larger than will fit on the\n"
 		 "                    GPU in CUDA managed memory\n"
 		 "   single_copy=1    store only the matrix, not its transpose,\n"
@@ -216,7 +220,8 @@ void factor_integer(char *buf, uint32 flags,
 		    uint32 cache_size2,
 		    uint32 num_threads,
 		    uint32 which_gpu,
-		    const char *nfs_args) {
+		    const char *nfs_args,
+		    const char *scratch_dir) {
 	
 	char *int_start, *last;
 	msieve_obj *obj;
@@ -244,6 +249,8 @@ void factor_integer(char *buf, uint32 flags,
 					cpu, cache_size1, cache_size2,
 					num_threads, which_gpu,
 					nfs_args);
+	if (g_curr_factorization != NULL)
+		g_curr_factorization->scratch_dir = scratch_dir;
 	if (g_curr_factorization == NULL) {
 		printf("factoring initialization failed\n");
 		return;
@@ -344,6 +351,7 @@ int main(int argc, char **argv) {
 	uint32 num_threads = 0;
 	uint32 which_gpu = 0;
 	const char *nfs_args = NULL;
+	char *scratch_dir = NULL;
 		
 	get_cache_sizes(&cache_size1, &cache_size2);
 	cpu = get_cpu_type();
@@ -386,7 +394,9 @@ int main(int argc, char **argv) {
 			case 's':
 			case 'l':
 				if (i + 1 < argc && argv[i+1][0] != '-') {
-					if (tolower(argv[i][1]) == 'i')
+					if (strcmp(argv[i], "-scratch") == 0)
+						scratch_dir = argv[i+1];
+					else if (tolower(argv[i][1]) == 'i')
 						infile_name = argv[i+1];
 					else if (tolower(argv[i][1]) == 's') {
 						char *p;
@@ -598,7 +608,7 @@ int main(int argc, char **argv) {
 				max_relations, 
 				cpu, cache_size1, cache_size2,
 				num_threads, which_gpu,
-				nfs_args);
+				nfs_args, scratch_dir);
 	}
 	else if (manual_mode) {
 		while (1) {
@@ -611,7 +621,8 @@ int main(int argc, char **argv) {
 					&seed1, &seed2,
 					max_relations, 
 					cpu, cache_size1, cache_size2,
-					num_threads, which_gpu, nfs_args);
+					num_threads, which_gpu, nfs_args,
+					scratch_dir);
 			if (feof(stdin))
 				break;
 		}
@@ -631,7 +642,8 @@ int main(int argc, char **argv) {
 					&seed1, &seed2,
 					max_relations, 
 					cpu, cache_size1, cache_size2,
-					num_threads, which_gpu, nfs_args);
+					num_threads, which_gpu, nfs_args,
+					scratch_dir);
 			if (feof(infile))
 				break;
 		}
