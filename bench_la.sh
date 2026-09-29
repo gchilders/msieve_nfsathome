@@ -29,7 +29,8 @@
 #   ./bench_la.sh -d 90 -a "single_copy=1" -- -t 4
 #   ./bench_la.sh -d 90 -a "single_copy=1" -F
 #
-# One summary line per run is appended to bench/results.tsv.
+# One summary line per run is appended to bench/results.tsv; sparse_mb is
+# what the matrix takes on the card, streamed_mb what is copied in per pass.
 
 density=""
 nc2_args=""
@@ -205,6 +206,7 @@ fi
                         tail -5 "$dir/stdout.txt"; }
 
 sparse_mb=$(grep -o 'sparse matrix memory use: [0-9.]* MB' "$dir/stdout.txt" | awk '{print $5}')
+streamed_mb=$(grep -o 'streamed from host memory: [0-9.]* MB' "$dir/stdout.txt" | awk '{print $5}')
 
 echo
 echo "status:               $status"
@@ -212,12 +214,18 @@ echo "dims/sec:             $rate"
 echo "full-run ETA:         $eta_fmt (from dims/sec over the whole matrix)"
 echo "msieve's ETA:         ${msieve_eta:--} (remaining, at last progress line)"
 echo "ms per iteration:     $iter_ms (approx, VBITS-0.76 dims/iteration)"
-echo "sparse matrix on GPU: ${sparse_mb:--} MB"
+echo "sparse matrix on GPU: ${sparse_mb:--} MB (resident blocks + staging buffers)"
+# msieve reports 0.0 when nothing is streamed; only show real streaming
+awk -v s="${streamed_mb:-0}" 'BEGIN { exit !(s > 0) }' && \
+    echo "streamed from host:   $streamed_mb MB per pass"
 echo "peak VRAM:            $vram_peak MiB (${vram_base:-?} MiB in use before start)"
 [ $full = 1 ] && echo "factors:              $factors"
 
 results=bench/results.tsv
-[ -f $results ] || printf "date\tname\tdensity\targs\tstatus\tdims_per_sec\teta_full\tms_per_iter\tsparse_mb\tpeak_vram_mib\tbase_vram_mib\tfactors\tdir\n" > $results
-printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$stamp" "$name" \
+[ -f $results ] || printf "date\tname\tdensity\targs\tstatus\tdims_per_sec\teta_full\tms_per_iter\tsparse_mb\tpeak_vram_mib\tbase_vram_mib\tfactors\tdir\tstreamed_mb\n" > $results
+# files from before streaming lack the last column
+head -1 $results | grep -q streamed_mb || sed -i '1s/$/\tstreamed_mb/' $results
+printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$stamp" "$name" \
     "${density:-default}" "$nc2_args ${extra_opts[*]}" "$status" "$rate" \
-    "$eta_fmt" "$iter_ms" "${sparse_mb:--}" "$vram_peak" "${vram_base:-?}" "$factors" "$dir" >> $results
+    "$eta_fmt" "$iter_ms" "${sparse_mb:--}" "$vram_peak" "${vram_base:-?}" "$factors" "$dir" \
+    "${streamed_mb:--}" >> $results

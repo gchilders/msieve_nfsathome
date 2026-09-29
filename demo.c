@@ -180,6 +180,12 @@ void print_usage(char *progname) {
 		 "                    on the GPU (less memory, often faster)\n"
 		 "   spmv_kernel=X    SpMV gather kernel: auto (default),\n"
 		 "                    segscan or warpmerge\n"
+		 "   max_gpu_mem=X    matrix blocks that don't fit on the GPU\n"
+		 "                    are streamed from host memory; this\n"
+		 "                    gives the matrix and vectors X MB\n"
+		 "                    instead of the GPU's free memory\n"
+		 "   stream_frac=X    stream at least fraction X of the matrix\n"
+		 "   stream_slots=X   use X staging buffers for streaming (3)\n"
 #endif
 #ifdef HAVE_MPI
 		 "   mpi_nrows=X      use a grid with X rows\n"
