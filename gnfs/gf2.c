@@ -784,6 +784,11 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 			mpi_ncols = atoi(tmp1 + 1);
 		}
 #endif
+		if (strstr(obj->nfs_args, "cado_filter=1")) {
+			logprintf(obj, "error: cado_filter=1 is no longer "
+					"supported; filter with msieve instead\n");
+			exit(-1);
+		}
 		if (strstr(obj->nfs_args, "skip_matbuild=1")) {
 			logprintf(obj, "skipping matrix build\n");
 			skip_matbuild = 1;
@@ -809,34 +814,40 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 
 	/* handle select_density: rename .cyc.NNN and .mat.NNN to unsuffixed versions */
 	if (select_density > 0) {
+		char cyc_src[512], cyc_dst[512], mat_src[512], mat_dst[512];
 		char src[512], dst[512];
 		int dsuffix = (int)(select_density + 0.5);
-		sprintf(src, "%s.cyc.%d", obj->savefile.name, dsuffix);
-		sprintf(dst, "%s.cyc", obj->savefile.name);
-		if (access(src, F_OK) != 0) {
-			logprintf(obj, "error: cycle file '%s' not found\n", src);
-			exit(-1);
-		}
-		if (rename(src, dst) != 0) {
-			logprintf(obj, "error: cannot rename '%s' to '%s'\n", src, dst);
-			exit(-1);
-		}
-		/* The cycles are about to be installed under the plain name,
-		   so the matrix has to come with them. A density whose build
-		   failed leaves its .cyc.NNN behind with no .mat.NNN beside
-		   it, and carrying on from there would hand the solver
-		   whatever stale msieve.dat.mat happened to be lying about,
-		   whose cycles are not these. */
 
-		sprintf(src, "%s.mat.%d", obj->savefile.name, dsuffix);
-		sprintf(dst, "%s.mat", obj->savefile.name);
-		if (access(src, F_OK) != 0) {
-			logprintf(obj, "error: matrix file '%s' not found\n", src);
+		/* The cycles and the matrix are installed under the plain
+		   names together, so check both before touching either. A
+		   density whose build failed leaves its .cyc.NNN behind with
+		   no .mat.NNN beside it; carrying on from there would hand
+		   the solver whatever stale msieve.dat.mat happened to be
+		   lying about, whose cycles are not these, and renaming the
+		   cycles first would leave the job files half-switched */
+
+		sprintf(cyc_src, "%s.cyc.%d", obj->savefile.name, dsuffix);
+		sprintf(cyc_dst, "%s.cyc", obj->savefile.name);
+		sprintf(mat_src, "%s.mat.%d", obj->savefile.name, dsuffix);
+		sprintf(mat_dst, "%s.mat", obj->savefile.name);
+		if (access(cyc_src, F_OK) != 0) {
+			logprintf(obj, "error: cycle file '%s' not found\n", cyc_src);
 			exit(-1);
 		}
-		if (rename(src, dst) != 0) {
+		if (access(mat_src, F_OK) != 0) {
+			logprintf(obj, "error: matrix file '%s' not found (run "
+					"all_matbuild=1 first)\n", mat_src);
+			exit(-1);
+		}
+		if (rename(cyc_src, cyc_dst) != 0) {
 			logprintf(obj, "error: cannot rename '%s' to '%s'\n",
-					src, dst);
+					cyc_src, cyc_dst);
+			exit(-1);
+		}
+		if (rename(mat_src, mat_dst) != 0) {
+			logprintf(obj, "error: cannot rename '%s' to '%s'\n",
+					mat_src, mat_dst);
+			rename(cyc_dst, cyc_src);
 			exit(-1);
 		}
 		sprintf(src, "%s.mat.idx.%d", obj->savefile.name, dsuffix);

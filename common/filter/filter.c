@@ -37,7 +37,7 @@ $Id$
    the sizes and packing the reader depends on. */
 
 #define MERGE_CKPT_MAGIC "MSVMRG"
-#define MERGE_CKPT_VERSION 1
+#define MERGE_CKPT_VERSION 2
 #define MERGE_CKPT_BUFSIZE (4 * 1024 * 1024)
 
 typedef struct {
@@ -99,6 +99,9 @@ static uint32 ckpt_read(ckpt_io_t *io, void *dst, size_t len) {
 	return 1;
 }
 
+static uint32 get_committed_rmap_generation(msieve_obj *obj,
+					uint64 *generation);
+
 /*--------------------------------------------------------------------*/
 int32 filter_merge_checkpoint_save(msieve_obj *obj, merge_t *merge,
 				uint32 min_cycles, const char *path) {
@@ -107,6 +110,15 @@ int32 filter_merge_checkpoint_save(msieve_obj *obj, merge_t *merge,
 	ckpt_io_t io;
 	uint64 total_words = 0;
 	time_t start = time(NULL);
+	uint64 rmap_generation = 0;
+	uint32 have_rmap;
+
+	/* relation numbers in the relation sets are dense IDs whenever a
+	   relation map is in use, and only mean anything through that
+	   map; record which one, so a restart after another filtering
+	   run has replaced it is refused rather than misread */
+
+	have_rmap = get_committed_rmap_generation(obj, &rmap_generation);
 
 	io.fp = fopen(path, "wb");
 	if (io.fp == NULL) {
@@ -127,6 +139,8 @@ int32 filter_merge_checkpoint_save(msieve_obj *obj, merge_t *merge,
 		layout[3] = (uint32)sizeof(uint32);
 		ckpt_write(&io, MERGE_CKPT_MAGIC, 6);
 		ckpt_write(&io, layout, sizeof(layout));
+		ckpt_write(&io, &have_rmap, sizeof(uint32));
+		ckpt_write(&io, &rmap_generation, sizeof(uint64));
 	}
 	ckpt_write(&io, &merge->num_relsets, sizeof(uint32));
 	ckpt_write(&io, &merge->num_ideals, sizeof(uint32));
@@ -173,6 +187,8 @@ int32 filter_merge_checkpoint_load(msieve_obj *obj, merge_t *merge,
 	char magic[6];
 	uint32 layout[4];
 	uint32 num_relsets;
+	uint32 have_rmap, ckpt_have_rmap;
+	uint64 rmap_generation = 0, ckpt_rmap_generation;
 	time_t start = time(NULL);
 
 	io.fp = fopen(path, "rb");
@@ -200,6 +216,23 @@ int32 filter_merge_checkpoint_load(msieve_obj *obj, merge_t *merge,
 		logprintf(obj, "error: '%s' was written by a build with a "
 				"different relation-set layout; delete it and "
 				"let it be rebuilt\n", path);
+		free(io.buf);
+		fclose(io.fp);
+		return -1;
+	}
+
+	have_rmap = get_committed_rmap_generation(obj, &rmap_generation);
+	if (!ckpt_read(&io, &ckpt_have_rmap, sizeof(uint32)) ||
+	    !ckpt_read(&io, &ckpt_rmap_generation, sizeof(uint64))) {
+		logprintf(obj, "error: truncated merge checkpoint\n");
+		exit(-1);
+	}
+	if (ckpt_have_rmap != have_rmap ||
+	    (have_rmap && ckpt_rmap_generation != rmap_generation)) {
+		logprintf(obj, "error: '%s' was written against a different "
+				"relation map (%s.rmap) than the one there now; "
+				"delete it and let it be rebuilt\n", path,
+				obj->savefile.name);
 		free(io.buf);
 		fclose(io.fp);
 		return -1;
@@ -280,7 +313,8 @@ void filter_free_relsets(merge_t *merge) {
 	merge->num_ideals = 0;
 }
 
-static uint32 get_committed_rmap_generation(msieve_obj *obj, uint64 *generation) {
+static uint32 get_committed_rmap_generation(msieve_obj *obj,
+					uint64 *generation) {
 	char buf[256];
 	FILE *map_fp, *commit_fp;
 	uint64 magic, version, gen, count;
@@ -370,6 +404,32 @@ void filter_dump_relsets(msieve_obj *obj, merge_t *merge, const char *suffix) {
 }
 
 /*--------------------------------------------------------------------*/
+void filter_merge_checkpoint_commit(msieve_obj *obj, const char *path,
+				uint32 keep) {
+
+	char tmp_path[300];
+	FILE *probe;
+
+	if (path == NULL || snprintf(tmp_path, sizeof(tmp_path), "%s.tmp",
+			path) >= (int)sizeof(tmp_path))
+		return;
+
+	probe = fopen(tmp_path, "rb");
+	if (probe == NULL)
+		return;
+	fclose(probe);
+
+	if (!keep) {
+		remove(tmp_path);
+		return;
+	}
+	if (rename(tmp_path, path) != 0) {
+		logprintf(obj, "warning: cannot install merge checkpoint "
+				"'%s'; it is left in '%s'\n", path, tmp_path);
+	}
+}
+
+/*--------------------------------------------------------------------*/
 int32 filter_make_relsets(msieve_obj *obj, filter_t *filter,
 				merge_t *merge, uint32 min_cycles,
 				const char *ckpt_path) {
@@ -379,19 +439,25 @@ int32 filter_make_relsets(msieve_obj *obj, filter_t *filter,
 	filter_merge_2way(obj, filter, merge);
 
 	/* This is the last point at which the merge input is still exactly
-	   reproducible, so it is what a checkpoint records. do_partial_
-	   filtering() calls this routine again for each retry at a higher
-	   max_weight, and rewriting a multi-gigabyte dump every time would
-	   cost minutes for nothing, so only write one if there is none. */
+	   reproducible, so it is what a checkpoint records. A file already
+	   at ckpt_path is never overwritten (it may not be a checkpoint at
+	   all). do_partial_filtering() calls this routine again for each
+	   retry at a higher max_weight, and the checkpoint has to hold the
+	   attempt that was accepted, so each attempt goes to <path>.tmp and
+	   the caller installs it with filter_merge_checkpoint_commit() */
 
 	if (ckpt_path != NULL) {
 		FILE *probe = fopen(ckpt_path, "rb");
+		char tmp_path[300];
 
-		if (probe != NULL)
+		if (probe != NULL) {
 			fclose(probe);
-		else
+		}
+		else if (snprintf(tmp_path, sizeof(tmp_path), "%s.tmp",
+				ckpt_path) < (int)sizeof(tmp_path)) {
 			filter_merge_checkpoint_save(obj, merge, min_cycles,
-					ckpt_path);
+					tmp_path);
+		}
 	}
 
 	return filter_merge_full(obj, merge, min_cycles);

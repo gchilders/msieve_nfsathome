@@ -371,10 +371,10 @@ static void pack_matrix_block(block_row_t *b,
 	   nonzeros with a uint32; the block extractors are capped so this
 	   cannot happen, but a wrong answer here would be silent */
 
-	if (num_entries > MAX_BLOCK_NNZ) {
+	if (num_entries > (uint64)UINT32_MAX) {
 		printf("error: matrix block holds %" PRIu64 " nonzeros, above "
 			"the %u a CSR block can address; lower block_nnz\n",
-			num_entries, (uint32)MAX_BLOCK_NNZ);
+			num_entries, (uint32)UINT32_MAX);
 		exit(-1);
 	}
 
@@ -590,6 +590,17 @@ static void plan_add_block(block_plan_t *plan, uint32 start, uint32 size,
 			uint64 nnz, uint32 num_rows) {
 
 	uint32 n = plan->num_blocks;
+
+	/* caught here rather than in pack_matrix_block, before hours of
+	   building blocks; block_nnz stops at MAX_BLOCK_NNZ so that one
+	   column's overshoot still fits */
+
+	if (nnz > (uint64)UINT32_MAX) {
+		printf("error: matrix block %u would hold %" PRIu64 " nonzeros, "
+			"above the %u a CSR block can address; lower "
+			"block_nnz\n", n, nnz, (uint32)UINT32_MAX);
+		exit(-1);
+	}
 
 	if (n == plan->alloc) {
 		plan->alloc = MAX(100, 2 * plan->alloc);

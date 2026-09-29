@@ -996,8 +996,9 @@ Left as documented limitations:
   single-copy ~1GB, two-copy under the new row floor: 287M nnz = 1.25GB
   at VBITS=256 on C189) three buffers take 3-4GB and push more of the
   matrix out. Capping block_nnz while streaming would help that but
-  adds per-block row-pointer bytes (96MB per block at 24M rows); no
-  data yet to pick the balance.
+  adds per-block row-pointer bytes (96MB per block at 24M rows). First
+  data on the balance: the 2026-09-29 RTX 5090 section below, where
+  1.25x the default block_nnz was best.
 - MPI ranks sharing one GPU each plan against the same free memory
   (no regression: the old code ran out of memory there too); give each
   rank a max_gpu_mem share.
@@ -1169,3 +1170,55 @@ we ever tune the L2 fit for datacenter cards.
    - Cheap: each GPU rebuild is ~minutes against a ~29h solve.
    - Each MPI rank can pick its own size.
    - This is the robust answer for cards we cannot test.
+
+## 2026-09-29: RTX 5090, 41.6M-dim matrix (single copy + streaming)
+
+First real matrix that doesn't fit a 32GB card two-copy: TD=130 of the
+job after C189, 41,646,000 x 41,646,178, weight 6.44B (154.5/col). After
+reduction: 41,645,760 dims with 4.69B sparse nonzeros at VBITS=256
+(41,645,888 and 5.02B at VBITS=128; more dense rows are packed out at
+256). Rented RTX 5090 (96MB L2, 31.6GB free) on Vast, native Linux, so
+the 256MB streaming margin. bench_5090.sh (single_copy=1 at the default
+block_nnz, half and double it; stream_slots=2 if the default streams),
+then two more sizes by hand. bench_la.sh, 300s windows, one run each,
+GPU otherwise idle; the matrix loaded in ~89s every time. All runs passed
+the integrity check.
+
+| VBITS | block_nnz | blocks | streamed | dims/s | full ETA |
+|---:|---:|---:|---:|---:|---:|
+| 256 | 111M (default) | 40 | 6 blocks, 3.5 GB, 2 slots | 800.3 | 14h27m |
+| 256 | same, stream_slots=2 | 40 | same (default already used 2) | 803.2 | 14h24m |
+| 256 | **139M (1.25x)** | | 2.8 GB | **820.4** | **14h05m** |
+| 256 | 167M (1.5x) | | none | 745.2 | 15h31m |
+| 256 | 223M (2x) | | none | 607.0 | 19h03m |
+| 256 | 56M (0.5x) | 80 | 26 blocks, 9.7 GB, 2 slots | 522.7 | 22h07m |
+| 128 | 236M (default) | | none | 710.7 | 16h16m |
+| 128 | 118M (0.5x) | | none | 683.6 | 16h55m |
+| 128 | 472M (2x) | | none | 431.3 | 26h49m |
+
+Vectors take 8.9GB at VBITS=256 and 4.4GB at 128, which left 21.4GB and
+26.5GB for the sparse blocks. The single_copy 2*nrows floor (83M) didn't
+bind at either VBITS (no note).
+
+- VBITS=256 beat 128 by 13-15% even while streaming. That is the
+  opposite of the C189/5070 result, where the copies were the limit
+  and halving the vectors to keep more of the matrix resident won.
+  Here the streamed share is small (2.8-3.5GB of ~20GB). Each streamed
+  block is used by both products (snake order reuses the last one or
+  two), so roughly 6-7GB moves per ~310-320ms iteration, ~20GB/s. That
+  is below the 30-35GB/s the 5070 runs reached, so the copies should be
+  mostly hidden (inferred, not measured).
+- Block size matters more than streaming: 1.5x fits entirely and still
+  loses 9% to 1.25x with streaming; 2x loses 26%. The L2 formula's
+  default (L2/3 of columns) is near the optimum. Nudging it up trades
+  cache fit for fewer 167MB row-pointer arrays (one per block at 41.6M
+  rows) and less streaming, and 1.25x came out 2.5% ahead, within
+  noise of the default. No change to the formula from this.
+- Small blocks are costly at this height. Halving block_nnz doubles the
+  row-pointer arrays (+6.7GB at v256), which nearly tripled the
+  streaming and made it the slowest v256 run.
+- The planner fell back from 3 to 2 staging buffers at the default,
+  since 3 of the 584MB buffers didn't fit, so stream_slots=2 repeated
+  that layout. The two runs are within 0.4% of each other, a rough
+  measure of run-to-run noise.
+- Chosen for the real run: VBITS=256 single_copy=1 block_nnz=139000000.

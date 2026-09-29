@@ -426,7 +426,7 @@ uint32 find_large_ideals(relation_t *rel,
 
 		if (p > filtmin_a) {
 			ideal_t *ideal = out->ideal_list + num_ideals;
-			uint32 bmodp;
+			uint64 bmodp;	/* b and p can both pass 2^32 */
 
 			if (num_ideals >= TEMP_FACTOR_LIST_SIZE)
 				return TEMP_FACTOR_LIST_SIZE + 1;
@@ -447,7 +447,7 @@ uint32 find_large_ideals(relation_t *rel,
 				root = (uint64)mapped_a;
 				if (p < ((uint64)1 << 32)) {
 					root = mp_modmul_1((uint32)root,
-						    mp_modinv_1(bmodp,
+						    mp_modinv_1((uint32)bmodp,
 						    	(uint32)p), (uint32)p);
 				}
 				else {

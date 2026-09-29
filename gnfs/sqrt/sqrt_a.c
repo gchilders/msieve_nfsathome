@@ -662,9 +662,16 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 
 	/* attempt to compute the square root. 
 	   First multiply R(x) by prod(x), deleting prod(x) 
-	   since we won't need it beyond this point */
+	   since we won't need it beyond this point.
 
-	mpz_poly_mul(isqrt_mod_q, prod, alg_poly, 1, 1);
+	   No splitting, for the reason multiply_relations() gives: prod(x)
+	   is the full relation product, so each split coefficient multiply
+	   would copy its halves and sums at that size, d+1 of them at once,
+	   on top of the memory peak. The operands are also far from
+	   balanced (R(x) is only the size of q), where one Karatsuba level
+	   saves little */
+
+	mpz_poly_mul(isqrt_mod_q, prod, alg_poly, 1, 0);
 	mpz_poly_mod_q(isqrt_mod_q, q, isqrt_mod_q);
 
 	/* this is a little tricky. Up until now we've

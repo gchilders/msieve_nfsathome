@@ -52,7 +52,7 @@ int32 fplog_eval_poly(int64 a, uint64 b, mpz_t scratch,
 double get_log_base(mpz_poly_t *poly, 
 			int64 a0, int64 a1, uint64 b);
 
-uint32 read_last_line(msieve_obj *obj, mpz_t n);
+uint64 read_last_line(msieve_obj *obj, mpz_t n);
 
 void write_last_line(msieve_obj *obj, mpz_t n, uint64 b);
 

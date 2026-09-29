@@ -70,7 +70,7 @@ For large numbers Msieve runs the Number Field Sieve in three phases:
 **1. Filtering (`-nc1`)** — `gnfs/filter/filter.c` is the top-level entry point (`nfs_filter_relations`).
 - Removes duplicate relations (`gnfs/filter/duplicate.c`)
 - Writes a large-prime-only LP file (`gnfs/filter/singleton.c`: `nfs_write_lp_file`)
-- Runs disk-based singleton removal if the LP file is large (`common/filter/singleton.c`: `filter_purge_lp_singletons`)
+- Compacts the 64-bit LP file for common filtering, running disk-based singleton passes first if it is large (`gnfs/filter/singleton.c`: `nfs_compact_lp_file`)
 - Reads LP file into memory and runs in-memory singleton removal (`filter_read_lp_file` → `filter_purge_singletons_core`)
 - Runs clique removal, 2-way merge, full merge (`common/filter/`)
 - Writes cycle file `msieve.dat.cyc` (or `msieve.dat.cyc.NNN` for multi-density)
