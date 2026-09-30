@@ -153,14 +153,48 @@ typedef struct {
 	struct merge_mem_pool_t *data_pool; /* pooled storage for relation/ideal lists */
 } merge_t;
 
+/* clique removal stops once the excess falls to this multiple of
+   target_excess (see do_merge()), so target_excess is what decides the
+   excess the merge gets, and burying an ideal adds one to it. Both the
+   reader that applies the weight cap and the driver that spends the
+   excess need the number, so it lives here */
+
+#define FILTER_FINAL_EXCESS_FRACTION 1.16
+
+/* The weight cap decides how much of the matrix is buried and so, through
+   target_excess, how much excess the merge has to work with. It used to
+   be a side effect of which reader was chosen -- 200 for the one that
+   loads the whole LP file, a caller-supplied value starting at 20 for the
+   one that streams it -- which tied it to how much memory the dataset
+   needed rather than to anything about the dataset. It is now passed in
+   separately from the choice of reader.
+
+   20 is the default because it is the value the streaming reader has
+   always started at, and it has produced a matrix on every dataset
+   measured here. Raising it buries less, but the matrix that results is
+   set by target_density rather than by the cap (39% less burial moved a
+   C330 matrix by 0.96%), while the excess it gives up is what decides
+   whether a matrix can be built at all.
+
+   The first LP read keeps the historical 200, which buries next to
+   nothing. For a large dataset that read runs before singleton removal,
+   where no ideal is heavy yet and burying would be pointless. For a
+   dataset small enough that the read is the only one, the excess has
+   never been in question, so there is nothing to buy by burying and a
+   changed cap would only move every small job's output. */
+
+#define FILTER_DEFAULT_WEIGHT_CAP 20
+#define FILTER_FIRST_PASS_WEIGHT_CAP 200
+
 /* the large-prime-only versions of relations are assumed to
    start off in a disk file. The following reads the relations
    into filter->relation_array, skipping over ideals that occur
-   more and max_ideal_weight times. max_ideal_weight = 0 means
-   read the entire file into memory */
+   more than max_ideal_weight times. one_pass reads the whole file
+   into memory at once, which the caller picks on how much memory the
+   file needs; it has no bearing on the cap */
 
 void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
-				uint32 max_ideal_weight);
+				uint32 max_ideal_weight, uint32 one_pass);
 
 #if 0
 /* perform clique removal on relations packed into a disk file,

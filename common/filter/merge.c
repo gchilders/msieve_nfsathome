@@ -337,6 +337,13 @@ static uint32 store_next_relset_group(merge_aux_t *aux,
 }
 
 /*--------------------------------------------------------------------*/
+/* the smallest excess, as a fraction of the ideals left after the 2-way
+   merge, that the full merge is allowed to start from. Measured here:
+   1.6% failed, 3.9% was the thinnest that worked. Set below both, so it
+   only fires on datasets no thinner than one already known hopeless */
+
+#define MERGE_MIN_EXCESS_PERMIL 25
+
 #define NUM_CYCLE_BINS 9
 
 static int set_merge_cycle_targets(msieve_obj *obj, uint32 min_cycles,
@@ -455,11 +462,43 @@ int32 filter_merge_full(msieve_obj *obj, merge_t *merge, uint32 min_cycles) {
 	uint32 max_cycles;
 	int32 status = 0;
 
-	logprintf(obj, "commencing full merge\n");
-
 	relset_array = merge->relset_array;
 	num_relsets = merge->num_relsets;
 	num_ideals = merge->num_ideals;
+
+	/* As the comment above says, the cycles this can find are near
+	   R - I + C, and C is a small fraction of R - I. So the excess the
+	   2-way merge leaves is what bounds the answer, and the matrix has
+	   to cover a number of ideals of the order of I. Runs that built a
+	   matrix here had excess of 3.9% of I (a C232) up to 32% (a C258);
+	   the one that did not had 1.6%, found 22.3M cycles against the
+	   138.2M it needed, and took 7h49m to say so.
+
+	   Refuse below a fraction well under every success rather than
+	   spend the merge. The caller reports it as needing more relations,
+	   which is what a dataset this thin does need -- or a lower ideal
+	   weight cap, which buries more and so leaves more excess. */
+
+	if (num_relsets > num_ideals) {
+		uint64 excess = (uint64)num_relsets - num_ideals;
+
+		if (excess * 1000 < (uint64)num_ideals * MERGE_MIN_EXCESS_PERMIL) {
+			logprintf(obj, "error: %" PRIu64 " excess is %.2f%% of "
+					"%u ideals, too thin for a matrix; more "
+					"relations or a lower max_weight are "
+					"needed\n", excess,
+					100.0 * excess / num_ideals, num_ideals);
+			return 1;
+		}
+	}
+	else {
+		logprintf(obj, "error: %u relation sets do not exceed %u "
+				"ideals; no matrix can be built\n",
+				num_relsets, num_ideals);
+		return 1;
+	}
+
+	logprintf(obj, "commencing full merge\n");
 
 	/* initialize; all ideals start off inactive */
 

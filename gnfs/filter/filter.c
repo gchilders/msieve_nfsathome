@@ -181,8 +181,6 @@ static void set_filtering_bounds(msieve_obj *obj, factor_base_t *fb,
 /* the multiple of the amount of excess needed for
    merging to proceed */
 
-#define FINAL_EXCESS_FRACTION 1.16
-
 /* the default expected number of sparse nonzeros in the
    average matrix column (may be overriden if you know
    what you are doing) */
@@ -204,7 +202,7 @@ static uint32 do_merge(msieve_obj *obj, filter_t *filter,
 	   increase, so that target_excess is larger now */
 
 	{
-		double target = filter->target_excess * FINAL_EXCESS_FRACTION;
+		double target = filter->target_excess * FILTER_FINAL_EXCESS_FRACTION;
 		if (target > UINT32_MAX) {
 			logprintf(obj, "error: adjusted filtering target exceeds 32-bit capacity\n");
 			return UINT32_MAX;
@@ -261,7 +259,7 @@ static uint32 do_partial_filtering(msieve_obj *obj, filter_t *filter,
 		filter->num_relations = num_relations;
 		filter->num_ideals = num_ideals;
 
-		filter_read_lp_file(obj, filter, max_weight);
+		filter_read_lp_file(obj, filter, max_weight, 0);
 
 		if ((relations_needed = do_merge(obj, filter,
 						merge, target_density,
@@ -308,7 +306,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	double target_density = 0;
 	double target_densities[16];
 	uint32 num_densities = 0;
-	uint32 max_weight = 20;
+	uint32 max_weight = FILTER_DEFAULT_WEIGHT_CAP;
 	char lp_filename[256];
 
 	logprintf(obj, "\n");
@@ -520,7 +518,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	nfs_compact_lp_file(obj, &filter, ram_size);
 	/* save filter state before initial LP read for multi-density small path */
 	{
-	filter_read_lp_file(obj, &filter, 0);
+	filter_read_lp_file(obj, &filter, FILTER_FIRST_PASS_WEIGHT_CAP, 1);
 
 	if (savefile_size < ram_size / 2) {
 
@@ -544,7 +542,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 			/* run cliques once for all densities */
 			filter.target_excess = (uint32)(filter.target_excess *
-							FINAL_EXCESS_FRACTION);
+							FILTER_FINAL_EXCESS_FRACTION);
 			if ((relations_needed = check_excess(&filter)) > 0)
 				goto finished;
 			filter_purge_cliques(obj, &filter);
@@ -643,7 +641,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 			   complete in one pass */
 
 			if (num_densities <= 1) {
-				filter_read_lp_file(obj, &filter, 0);
+				filter_read_lp_file(obj, &filter, max_weight, 1);
 				if ((relations_needed = do_merge(obj, &filter,
 							&merge, target_density,
 							ckpt_path, 1)) > 0) {
@@ -657,12 +655,12 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 				size_t saved_rel_bytes;
 				uint32 saved_nr, saved_ni;
 				uint32 extra_needed;
-				filter_read_lp_file(obj, &filter, 0);
+				filter_read_lp_file(obj, &filter, max_weight, 1);
 				extra_needed = filter.target_excess;
 
 				/* run cliques once for all densities */
 				filter.target_excess = (uint32)(filter.target_excess *
-								FINAL_EXCESS_FRACTION);
+							FILTER_FINAL_EXCESS_FRACTION);
 				if ((relations_needed = check_excess(&filter)) > 0)
 					goto finished;
 				filter_purge_cliques(obj, &filter);

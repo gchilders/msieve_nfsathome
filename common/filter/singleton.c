@@ -230,21 +230,21 @@ static uint32 count_relation_ideals_parallel(relation_ideal_t **relation_ptr,
 
 #define WEIGHT_PROFILE_BUCKETS 256
 
-static void log_ideal_weight_profile(msieve_obj *obj, uint32 *counts,
-                uint32 num_ideals, uint32 num_relations,
-                uint32 min_keep, uint32 base_excess) {
+/* counts[] holds every ideal's weight; tally them into total[], with the
+   last bucket absorbing everything at or above it. Every cap used here is
+   smaller than that, so those ideals are buried under all of them. */
 
-    static const uint32 caps[] = { 10, 15, 20, 25, 30, 35, 40, 45,
-                    100, 200 };
-    const uint32 num_caps = sizeof(caps) / sizeof(caps[0]);
+static void build_weight_histogram(uint32 *counts, uint32 num_ideals,
+                uint64 *total) {
+
     uint64 *hist;
-    uint64 total[WEIGHT_PROFILE_BUCKETS];
     uint32 num_blocks;
     int nthreads = 1;
     int b;
-    uint32 i, c;
-    int64 margin;
+    uint32 i;
 
+    for (i = 0; i < WEIGHT_PROFILE_BUCKETS; i++)
+        total[i] = 0;
     if (num_ideals == 0)
         return;
 
@@ -258,9 +258,6 @@ static void log_ideal_weight_profile(msieve_obj *obj, uint32 *counts,
                     sizeof(uint64));
     num_blocks = (uint32)(((uint64)num_ideals +
             IDEAL_RENUMBER_BLOCK_SIZE - 1) / IDEAL_RENUMBER_BLOCK_SIZE);
-
-    /* the last bucket absorbs everything at or above it; every cap
-       reported below is smaller, so those ideals are buried either way */
 
 #pragma omp parallel for schedule(static)
     for (b = 0; b < (int)num_blocks; b++) {
@@ -285,6 +282,36 @@ static void log_ideal_weight_profile(msieve_obj *obj, uint32 *counts,
         total[i] = sum;
     }
     free(hist);
+}
+
+/* how many ideals a cap of w would bury, i.e. how much it would add to
+   target_excess */
+
+static uint64 weight_cap_bury(const uint64 *total, uint32 num_ideals,
+                uint32 min_keep, uint32 w) {
+
+    uint64 keep = 0;
+    uint32 i;
+
+    if (w > WEIGHT_PROFILE_BUCKETS - 2)
+        w = WEIGHT_PROFILE_BUCKETS - 2;
+    for (i = min_keep; i <= w; i++)
+        keep += total[i];
+    return (uint64)num_ideals - keep;
+}
+
+static void log_ideal_weight_profile(msieve_obj *obj, const uint64 *total,
+                uint32 num_ideals, uint32 num_relations,
+                uint32 min_keep, uint32 base_excess) {
+
+    static const uint32 caps[] = { 10, 15, 20, 25, 30, 35, 40, 45,
+                    100, 200 };
+    const uint32 num_caps = sizeof(caps) / sizeof(caps[0]);
+    uint32 c;
+    int64 margin;
+
+    if (num_ideals == 0)
+        return;
 
     /* the margin is the excess that is not an artifact of burial, so it
        is the same whatever cap is chosen; it bounds how far burial can
@@ -297,20 +324,81 @@ static void log_ideal_weight_profile(msieve_obj *obj, uint32 *counts,
 
     for (c = 0; c < num_caps; c++) {
         uint32 w = caps[c];
-        uint64 keep = 0;
         uint64 bury;
 
         if (w >= WEIGHT_PROFILE_BUCKETS - 1)
             continue;
 
-        for (i = min_keep; i <= w; i++)
-            keep += total[i];
-        bury = (uint64)num_ideals - keep;
+        bury = weight_cap_bury(total, num_ideals, min_keep, w);
 
         logprintf(obj, "  weight <= %3u: keep %" PRIu64 ", bury %" PRIu64
                 ", target excess %" PRIu64 "\n",
-                w, keep, bury, (uint64)base_excess + bury);
+                w, (uint64)num_ideals - bury, bury,
+                (uint64)base_excess + bury);
     }
+}
+
+/*--------------------------------------------------------------------*/
+/* Burying an ideal raises target_excess by one, and clique removal then
+   has to bring the excess down to FILTER_FINAL_EXCESS_FRACTION times it.
+   It only has margin to spend doing so, where margin is the excess that
+   burial did not create, so the cap cannot bury more than
+
+        margin / (FILTER_FINAL_EXCESS_FRACTION - 1)
+
+   ideals. Past that, check_excess() rejects the dataset after a full LP
+   read has already been paid for -- a C330 here would do that at a cap
+   of 10, wanting 202.9M against a ceiling of 165.6M. Raise the cap until
+   it fits instead, and say so.
+
+   Nothing here can tell whether a feasible cap leaves enough excess to
+   finish the merge; that is what the check after the 2-way merge is for.
+   This only rules out the caps that cannot work at all. */
+
+static uint32 fit_weight_cap_to_margin(msieve_obj *obj, const uint64 *total,
+                uint32 num_ideals, uint32 num_relations,
+                uint32 min_keep, uint32 base_excess, uint32 wanted) {
+
+    int64 margin = (int64)num_relations - (int64)num_ideals -
+                    (int64)base_excess;
+    uint64 ceiling;
+    uint32 w;
+
+    /* before singleton removal the ideals outnumber the relations and
+       there is no excess to reason about; the cap is not doing this job
+       at that stage, so leave it alone */
+
+    if (margin <= 0)
+        return wanted;
+
+    ceiling = (uint64)((double)margin /
+                    (FILTER_FINAL_EXCESS_FRACTION - 1.0));
+
+    for (w = wanted; w < WEIGHT_PROFILE_BUCKETS - 1; w++) {
+        uint64 bury = weight_cap_bury(total, num_ideals, min_keep, w);
+
+        if ((uint64)base_excess + bury <= ceiling) {
+            if (w != wanted)
+                logprintf(obj, "raising max weight from %u to %u: a "
+                        "target excess of %" PRIu64 " needs a margin of "
+                        "%" PRIu64 ", and there is %" PRId64 "\n",
+                        wanted, w,
+                        (uint64)base_excess + weight_cap_bury(total,
+                                num_ideals, min_keep, wanted),
+                        (uint64)(((uint64)base_excess + weight_cap_bury(
+                                total, num_ideals, min_keep, wanted)) *
+                                (FILTER_FINAL_EXCESS_FRACTION - 1.0)),
+                        margin);
+            return w;
+        }
+    }
+
+    /* no cap buries little enough; let the caller proceed and have
+       check_excess() report it in its own terms */
+
+    logprintf(obj, "warning: no ideal weight cap fits a margin of "
+            "%" PRId64 "\n", margin);
+    return wanted;
 }
 
 /*--------------------------------------------------------------------*/
@@ -400,8 +488,16 @@ static void filter_read_lp_file_1pass(msieve_obj *obj,
         }
     }
 
-    log_ideal_weight_profile(obj, counts, num_ideals, num_relations,
-            1, filter->target_excess);
+    {
+        uint64 weight_total[WEIGHT_PROFILE_BUCKETS];
+
+        build_weight_histogram(counts, num_ideals, weight_total);
+        log_ideal_weight_profile(obj, weight_total, num_ideals,
+                num_relations, 1, filter->target_excess);
+        max_ideal_weight = fit_weight_cap_to_margin(obj, weight_total,
+                num_ideals, num_relations, 1, filter->target_excess,
+                max_ideal_weight);
+    }
 
     j = renumber_ideal_counts(counts, num_ideals, 1, max_ideal_weight,
             UINT32_MAX, NULL);
@@ -443,7 +539,7 @@ static void filter_read_lp_file_1pass(msieve_obj *obj,
 
 /*--------------------------------------------------------------------*/
 void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
-                uint32 max_ideal_weight) {
+                uint32 max_ideal_weight, uint32 one_pass) {
     uint32 i, j, k;
     FILE *fp;
     char buf[256];
@@ -459,8 +555,12 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
     lp32_reader_t reader;
     size_t mem_use;
 
-    if (max_ideal_weight == 0) {
-        filter_read_lp_file_1pass(obj, filter, 200);
+    /* which reader to use is a question about how much memory the LP
+       file needs and is the caller's; the cap is a separate question
+       about the dataset, and both readers apply the one they are given */
+
+    if (one_pass) {
+        filter_read_lp_file_1pass(obj, filter, max_ideal_weight);
         filter_purge_singletons_core(obj, filter);
         return;
     }
@@ -489,8 +589,16 @@ void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
         exit(-1);
     }
 
-    log_ideal_weight_profile(obj, counts, num_ideals, num_relations,
-            0, filter->target_excess);
+    {
+        uint64 weight_total[WEIGHT_PROFILE_BUCKETS];
+
+        build_weight_histogram(counts, num_ideals, weight_total);
+        log_ideal_weight_profile(obj, weight_total, num_ideals,
+                num_relations, 0, filter->target_excess);
+        max_ideal_weight = fit_weight_cap_to_margin(obj, weight_total,
+                num_ideals, num_relations, 0, filter->target_excess,
+                max_ideal_weight);
+    }
 
     j = renumber_ideal_counts(counts, num_ideals, 0, max_ideal_weight,
             UINT32_MAX, NULL);
