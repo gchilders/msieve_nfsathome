@@ -86,7 +86,7 @@ typedef struct {
 	uint16 num_relations;     /* number of relations in this relation set */
 	uint16 num_small_ideals;  /* number of ideals that are not tracked */
 	uint16 num_large_ideals;  /* number of ideals that are tracked */
-	uint16 num_active_ideals; /* low 9 bits: number of ideals eligible for
+	uint16 num_active_ideals; /* low 11 bits: number of ideals eligible for
 				     merging (0 means relset is a cycle); high
 				     bits are private merge-allocation metadata */
 	uint32 *data;             /* the first num_relations elements are
@@ -97,15 +97,17 @@ typedef struct {
 				     are assumed sorted in ascending order */
 } relation_set_t;
 
-/* Full merge never permits 500 or more objects in a relation set, so nine
-   bits are sufficient for num_active_ideals.  Keep the payload-pool class in
-   otherwise-unused bits of the same uint16.  This preserves the historical
-   16-byte relation_set_t while allowing pooled payloads to retain their
-   original allocation class when inactive ideals are buried. */
-#define RELSET_ACTIVE_BITS 9
-#define RELSET_ACTIVE_MASK ((uint16)0x01ffU)
+/* num_active_ideals shares its uint16 with the payload-pool class, which
+   preserves the historical 16-byte relation_set_t while allowing pooled
+   payloads to retain their original allocation class when inactive ideals
+   are buried. The full merge never permits 500 or more objects in a
+   relation set, but the relation sets the 2-way merge hands it carry up to
+   MAX_2WAY_IDEALS - 1 = 999 large ideals, all of which can start out
+   active, so the count gets 11 bits (up to 2047) and the class the top 5 */
+#define RELSET_ACTIVE_BITS 11
+#define RELSET_ACTIVE_MASK ((uint16)0x07ffU)
 #define RELSET_ALLOC_SHIFT RELSET_ACTIVE_BITS
-#define RELSET_ALLOC_MASK  ((uint16)0x3e00U)
+#define RELSET_ALLOC_MASK  ((uint16)0xf800U)
 #define RELSET_ALLOC_EXTERNAL 31U
 
 static INLINE uint32 relation_set_num_active(const relation_set_t *r) {
@@ -160,13 +162,6 @@ typedef struct {
 void filter_read_lp_file(msieve_obj *obj, filter_t *filter,
 				uint32 max_ideal_weight);
 
-/* perform approximate singleton removal on relations packed
-   into a disk file, then prune the singletons from the file.
-   The relations are not read into memory */
-
-void filter_purge_lp_singletons(msieve_obj *obj, filter_t *filter,
-				uint64 ram_size);
-
 #if 0
 /* perform clique removal on relations packed into a disk file,
    then prune the singletons from the file. The relations are
@@ -204,6 +199,13 @@ int32 filter_merge_checkpoint_save(msieve_obj *obj, merge_t *merge,
 				uint32 min_cycles, const char *path);
 int32 filter_merge_checkpoint_load(msieve_obj *obj, merge_t *merge,
 				uint32 *min_cycles, const char *path);
+
+/* filter_make_relsets() writes each attempt's checkpoint to <path>.tmp;
+   this installs it as <path> once the caller has accepted the merge
+   that followed it (keep != 0), or discards it (keep == 0) */
+
+void filter_merge_checkpoint_commit(msieve_obj *obj, const char *path,
+				uint32 keep);
 
 void filter_free_relsets(merge_t *merge);
 

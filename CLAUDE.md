@@ -17,11 +17,14 @@ make all CUDA=90
 
 Other useful flags: `OMP=1` (default on), `MPI=1`, `ECM=1`, `VBITS=64` (default).
 
+CUDA builds on Linux produce one self-contained binary: the CUB sort/SpMV engines are linked in and the stage-1 and Lanczos kernels are embedded (fatbin plus PTX fallback), so no `.ptx`, `.fatbin` or `cub/*.so` files are needed at runtime. `CUDA_ARCHS="86 120"` embeds several architectures (oldest first; `CUDA_PTX_ARCH` defaults to the first); `CUDA=cc` still builds one. Plain `CUDA=1` builds whichever of 80/86/89/90/120 the installed nvcc supports, plus PTX for compute_80 and for the oldest architecture nvcc supports from sm_60 up. `CUDA_SINGLE_BINARY=0` restores the old external-file layout (the `WIN=1` default). Changing `VBITS` or the architectures rebuilds the GPU objects (via the `cub/.build_config` stamp), but not the host C objects, so `make clean` when switching VBITS.
+
 Clean: `make clean`
 
 There are no automated tests. Validation is done by running actual NFS
-factorizations; the small and medium jobs under c:/dev/numbers are gated on a
-byte-identical msieve.dat.cyc and msieve.dat.mat.
+factorizations; Greg gates filtering changes on a byte-identical msieve.dat.cyc
+and msieve.dat.mat for the small and medium jobs under c:/dev/numbers on his
+machine.
 
 ## Running
 
@@ -41,6 +44,14 @@ NFS options are passed as a quoted string:
 ./msieve -nc2 "select_density=100"
 ```
 
+### Setup helper script
+
+`setup_job.sh` prepares a working directory from downloaded NFS@Home job files: looks for `*.gz`, `*.fb`, and `*.ini` files, renames them to `msieve.dat.gz`, `msieve.fb`, `worktodo.ini`, and decompresses the `.gz`.
+
+### LA benchmark script
+
+`bench_la.sh` times Lanczos on a prebuilt matrix: `./bench_la.sh -d 90 -a "single_copy=1"` runs `-nc2 "skip_matbuild=1 ..."` on `msieve.dat.mat.90` in its own `bench/<name>-<stamp>/` directory (symlinks to the matrix, so the real job files are never written), measures dims/sec after warmup, stops msieve with SIGTERM (which runs the Lanczos integrity check) and appends a row to `bench/results.tsv`. `-F` instead lets the solve finish and runs `-nc3` in the same directory.
+
 ## Architecture
 
 This is a C library (`libmsieve.a`) plus a thin demo binary (`demo.c` → `msieve`). The library interface is in `include/msieve.h`.
@@ -59,7 +70,7 @@ For large numbers Msieve runs the Number Field Sieve in three phases:
 **1. Filtering (`-nc1`)** — `gnfs/filter/filter.c` is the top-level entry point (`nfs_filter_relations`).
 - Removes duplicate relations (`gnfs/filter/duplicate.c`)
 - Writes a large-prime-only LP file (`gnfs/filter/singleton.c`: `nfs_write_lp_file`)
-- Runs disk-based singleton removal if the LP file is large (`common/filter/singleton.c`: `filter_purge_lp_singletons`)
+- Compacts the 64-bit LP file for common filtering, running disk-based singleton passes first if it is large (`gnfs/filter/singleton.c`: `nfs_compact_lp_file`)
 - Reads LP file into memory and runs in-memory singleton removal (`filter_read_lp_file` → `filter_purge_singletons_core`)
 - Runs clique removal, 2-way merge, full merge (`common/filter/`)
 - Writes cycle file `msieve.dat.cyc` (or `msieve.dat.cyc.NNN` for multi-density)
@@ -92,8 +103,18 @@ Extensions added for NFS@Home distributed factoring workflows, all controlled vi
 - `select_density=100` — renames `msieve.dat.cyc.100` → `msieve.dat.cyc` and `msieve.dat.mat.100` → `msieve.dat.mat` (and `.mat.idx`), then skips the matrix build and runs Lanczos directly
 
 **Single-copy GPU matrix** (`common/lanczos/gpu/lanczos_matmul_gpu.c`, `cub/spmv_engine.cu`):
-- `single_copy=1` — stores only A on the GPU, not A^T; the transpose product scatters through A's column-slice blocks with atomic XOR (`spmv_engine_run_trans`). Its block_nnz default is a third of L2 worth of columns, floored at 2×nrows so the per-block row-pointer arrays stay under half the column indices; that saves ~40% of sparse-matrix VRAM on large-L2 cards (less on small-L2 ones). Speed depends on L2: on an RTX 5070 (48MB L2) it was 1.41x faster than two copies at VBITS=64, where both fit at their defaults (1163 vs 825 dims/s); on an RTX 3060 (3MB L2) it was ~19% slower than the two-copy default (251 vs 310 dims/s), so there it is only worth using when two copies don't fit
+- `single_copy=1` — stores only A on the GPU, not A^T; the transpose product scatters through A's column-slice blocks with atomic XOR (`spmv_engine_run_trans`). Its block_nnz default is a third of L2 worth of columns, floored at 2×nrows so the per-block row-pointer arrays stay under half the column indices; that saves ~40% of sparse-matrix VRAM on large-L2 cards (less on small-L2 ones). Speed depends on L2: on an RTX 5070 (48MB L2) it was 1.41x faster than two copies at VBITS=64, where both fit at their defaults (1163 vs 825 dims/s); on an RTX 3060 (3MB L2) it was ~19% slower than the two-copy default (251 vs 310 dims/s), and on an A100 MPI piece with 61M rows ~52% slower. The rule behind both losses: single copy only wins when its L2-sized blocks are bigger than its 2×nrows floor; when the floor binds, msieve logs a note that it will only save memory
+- Two-copy block_nnz default: half of L2 worth of columns, floored at max(128M, 12 × max(nrows, ncols) × sizeof(v_t) / 32). The row-proportional part (every block pays for a full row-pointer array and a rewrite of the whole output vector) only matters for tall pieces, e.g. MPI: on the A100 piece above the fixed 128M floor was 13.5% slower than 1.75B
 - `spmv_kernel=auto|segscan|warpmerge` — kernel for all gather SpMV launches (everything but the single-copy scatter). `auto` (default) picks per block: `segscan` (groups of VWORDS lanes per nonzero plus a segmented scan) below 8 nonzeros per row, else `warpmerge` (one warp per row segment)
+
+**Streaming matrix blocks from host memory** (`common/lanczos/gpu/lanczos_matmul_gpu.c`: `plan_matrix`, `choose_streamed`, `setup_schedule`, `stream_load`):
+- Automatic: if the sparse blocks don't fit in the GPU's free memory (less the Lanczos vectors and dense rows), an evenly spaced subset stays in pinned host memory and is copied into staging buffers on a separate stream every iteration, ahead of the SpMV that needs it. In single-copy mode the transpose product walks the blocks backwards so the last streamed blocks are reused. The copies are hidden while the streamed bytes per iteration copy faster than the iteration runs; on the C189 matrices they were the limit (~30-35 GB/s), so VBITS=128 (half-size vectors, more of the matrix resident) beat 256
+- `max_gpu_mem=MB` — memory for matrix + vectors, used instead of the free memory and without the margin (to leave headroom, or to claim memory WDDM would give up); `stream_frac=F` — stream at least that fraction (testing); `stream_slots=N` — staging buffers (default 3; fewer are used if 3 don't fit)
+- The whole block layout is planned before building (`plan_matrix`): forward blocks from the column weights, transpose blocks (two-copy) from prefix sums of per-row nonzero counts, using the same size search the old `extract_block_trans` did, so blocks are identical to before, but the transpose no longer rescans every nonzero at each search step. `gpu_matrix_init` builds exactly the planned blocks. Streamed blocks are packed straight into pinned memory; if pinning fails (WSL limits it), that block stays in ordinary memory with a warning and copies more slowly
+- A margin only decides how much to stream once streaming is unavoidable: 256MB natively, 1.5GB under WDDM (native Windows or WSL, detected via `/dev/dxg`). A matrix that fits without it is loaded whole, as before. If no streaming layout fits, it warns and tries to load the whole matrix. Not used with `use_managed=1` (the streaming options are ignored with a note)
+- On WSL with other GPU users (e.g. a browser), a matrix that fits still fills the card; with it nearly full, WDDM moved memory around and a C189 run got 3x slower, then hit NVIDIA driver faults. Use `max_gpu_mem` (e.g. 8500-10000 on a 12GB card) to keep headroom, or move other apps to an integrated GPU
+- Several MPI ranks sharing one GPU each plan against the same free memory; give each rank its own `max_gpu_mem` share there
+- Staging buffers are as large as the largest streamed block (up to 3 of them), so big blocks (e.g. VBITS=64 single-copy, or two-copy with the row floor) cost a lot of resident space when streaming; capping block size while streaming would trade that against per-block row-pointer overhead, untested
 
 ### Key data structures
 

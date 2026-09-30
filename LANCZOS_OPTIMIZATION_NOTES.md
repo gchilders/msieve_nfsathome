@@ -668,6 +668,10 @@ formula values (128-256M) are unaffected.
    are both one block; large multi-block settings were not tested on the
    3060, and on the V100 at VBITS=256 two 1.75B blocks were slightly
    slower than 128M (243.6 vs 246.3). Does not apply at VBITS=64.
+   Known failure (2026-09-27, A100 MPI 1x2, 61M-row piece): the fixed
+   128M floor is far too small when the GPU's piece has many rows. See
+   "A100 Feedback" at the end; a row-proportional floor was added
+   2026-09-28 (k=12, see there).
 3. If VRAM is tight: raise block_nnz first (frees per-block rowptr
    replicas and costs little speed at high VBITS); drop VBITS only as
    a last resort (-45% on small-L2 cards).
@@ -828,3 +832,393 @@ window was that far out of cache (3060 at VBITS=256), and then by ~7%.
 Not put in the default formula (one card type, threshold fitted to four
 points); see the exception under Tuning Heuristic rule 2 above. 3060
 VBITS=64 peak VRAM: 10.7GB at 128M, 9.9GB at 1024M.
+
+## 2026-09-25: Streaming Matrix Blocks From Host Memory
+
+Goal: matrices whose sparse part doesn't fit on the card, without
+use_managed's collapse (on WSL managed memory never migrates, and an
+LRU cache over a cyclic scan larger than memory misses on every page).
+Every iteration uses the whole matrix (single-copy: each block twice),
+so overflow blocks are re-copied every iteration; the question is only
+whether PCIe keeps up.
+
+Standalone CUDA tests on the RTX 5070 (PCIe 5.0 x16, WSL2, no matrix):
+
+- Pinned host-to-device: 48 GB/s at 16-512 MB chunks; pageable 10.6
+  GB/s. Pinned allocation: 8 GB in 8s, 16 GB in 21s, 32 GB in 221s
+  (the last with a filtering job holding most of the RAM).
+- Copies concurrent with a VRAM-heavy gather kernel: kernel +5.8%,
+  copies still 48.5 GB/s.
+- Pipeline simulation, 4 GB fake matrix in 16 x 256 MB chunks, 3
+  staging buffers, streamed chunks spread evenly. Time per pass is
+  about max(compute, streamed bytes / 46 GB/s):
+
+| kernel's matrix rate | 75% streamed | 100% streamed |
+|---|---:|---:|
+| 197 GB/s | +258% | +325% |
+| 61 GB/s (~single-copy at VBITS=256 on the 5070) | +2.0% | +22% |
+| 22 GB/s | +0.8% | +1.0% |
+| 6 GB/s | ~0% | +1.1% |
+
+Real estimates: single-copy TD=90 reads 4.66 GB twice per 159 ms
+iteration (~58 GB/s), two-copy 7.7 GB once per 260 ms (~30 GB/s), the
+3060 two-copy ~9 GB/s. VBITS=256 is the best case (matrix bytes per
+dimension scale as 1/VBITS). The Lanczos vectors (7 x ncols x 32 B at
+VBITS=256) stay on the card and become the VRAM limit.
+
+Implementation (lanczos_matmul_gpu.c): plan_matrix lays out every
+block before any is built. Forward blocks come from the column weights
+(each spans all rows and takes whole columns up to block_nnz).
+Two-copy transpose blocks come from prefix sums of per-row nonzero
+counts, running the same grow/shrink size search extract_block_trans
+used; that function is gone, and gpu_matrix_init now just collects the
+planned row ranges, so two-copy setup no longer rescans every nonzero
+per search step (checked block-for-block identical to the old search,
+see Review follow-up 2). If the blocks fit in the free memory less
+vectors and dense rows (counting 2MB average allocation rounding per
+block), they upload as they are built. Otherwise choose_streamed picks
+the fewest evenly spaced blocks whose removal makes the resident
+blocks plus the staging buffers (up to stream_slots, fewer if needed,
+each the largest streamed block, budgeted at 4MB worst-case rounding)
+fit, less a margin of 256MB natively or 1.5GB under WDDM. Streamed
+blocks are packed straight into pinned memory while building (ordinary
+memory, with a warning, if pinning fails). If no layout fits, it warns
+and loads everything as before. run_spmv_block makes the default
+stream wait on the block's copy event, records a freed event after the
+SpMV, then queues copies for the next num_slots-1 schedule entries on a
+non-blocking stream, evicting the buffered block used furthest in the
+future. The single-copy transpose walks the blocks backwards (reusing
+the last streamed blocks; harmless otherwise). With no more streamed
+blocks than buffers (only reachable with stream_frac) the blocks are
+copied once and stay, reported as 0 MB streamed. Options:
+max_gpu_mem=MB (used instead of the free memory, no margin),
+stream_frac=F, stream_slots=N.
+
+Validation on a synthetic 1.5M x 1.501M matrix (matgen: rows chosen
+with p ~ 1/(r+50), ~60 nonzeros/col, 89M nonzeros), VBITS=256, RTX
+5070, filtering job running on the CPU. All runs recovered 12
+dependencies and an independent check (every dependency's columns XOR
+to zero on every row) passed; SIGTERM checkpoint + -ncr restart with
+streaming also passed. Lanczos loop times (5875 iterations, ~19
+ms/iter, so per-iteration syncs weigh more than on real matrices):
+
+| config | streamed per pass | slots | loop time |
+|---|---:|---:|---:|
+| single_copy, 18 blocks of 4M, resident | 0 | - | 113-114s |
+| same, stream_frac=0.5 (10 of 18) | 196 MB x2 | 3 | 116s |
+| same, max_gpu_mem=640 (8 of 18) | 168 MB x2 | 3 | 114s |
+| same, stream_frac=0.75 (14 of 18) | 280 MB x2 | 3 / 6 | 125s / 118s |
+| same, stream_frac=1 | 364 MB x2 | 3 / 6 | 144s / 130s |
+| two-copy, block_nnz=8M, resident | 0 | - | 87s |
+| two-copy, stream_frac=0.5 (9 of 18) | 316 MB | 3 | 89-92s |
+
+### C189 (2026-09-25): a matrix that doesn't fit
+
+C189 matrices, too big for the 12 GB RTX 5070 even single-copy:
+TD=90 23.9M cols (2.06B sparse nnz), TD=110 22.3M (2.32B), TD=130
+21.2M (2.57B). WSL, 5-min windows (managed 10 min), one run each; the
+filtering/matbuild job was using the CPU and RAM for the first runs.
+
+| config | vectors | resident / streamed | dims/s | full ETA |
+|---|---:|---:|---:|---:|
+| TD=90 VBITS=256 single_copy | 5.1 GB | 14 / 24 of 38 blocks (6.4 GB) | 685 | 9h41m |
+| same, stream_slots=6 | 5.1 GB | 11 / 27 (7.2 GB) | 688 | 9h39m |
+| TD=90 VBITS=256 two-copy | 5.1 GB | 5 / 24 of 29 (13.3 GB) | 570 | 11h39m |
+| TD=90 VBITS=128 single_copy | 2.6 GB | 16 / 7 of 23 (2.9 GB) | 774 | 8h34m |
+| TD=110 VBITS=128 single_copy | | (3.7 GB) | 753 | 8h14m |
+| TD=130 VBITS=128 single_copy | | (4.2 GB) | 700 | 8h24m |
+| TD=90 old binary, two-copy, use_managed=1 | | block_nnz 128M | 197.5 | 33h38m |
+| same, block_nnz=1.75B | | | 204.9 | 32h25m |
+| TD=90 VBITS=128 single_copy use_managed=1 | | default block_nnz | 184.7 | 35h58m |
+| same, block_nnz=1.75B | | | 98.4 | 67h28m |
+
+Streaming is ~3.8x faster than the best use_managed run. Managed
+matrix setup took 29 min at 128M blocks (5.6 min at 1.75B); pinning the
+streamed blocks took 3-41 s. Streamed bytes per iteration work out to
+30-35 GB/s in all three layouts, below the 48 GB/s measured alone (the
+matbuild job competing for host memory bandwidth may be part of it), so
+these runs are copy-bound: speed follows streamed bytes per dimension.
+VBITS=128 wins by halving the vectors, which leaves more of the matrix
+resident; more staging buffers cost resident blocks. Density barely
+mattered (within noise). Single-copy row pointers are ~35% of each
+VBITS=256 block (96 MB per block at 23.9M rows), so compressing them
+for streamed blocks, larger streamed blocks, or moving rarely used
+vectors off the card are the next things to try.
+
+Rechecked after the review fixes (exact single-copy planning, streamed
+blocks packed straight into pinned memory), GPU otherwise idle: TD=90
+VBITS=128 single_copy 787.3 / 786.9 dims/s with the staging buffers
+allocated last and 785.6 / 787.9 with them allocated first (8h26m);
+same layout as before (7 of 23 blocks, 2.9 GB streamed). An earlier
+718 dims/s run of the same config was noise.
+
+VBITS=64 single_copy (same code, GPU idle): TD=90 fits entirely (8.9 GB
+sparse, 180M-nnz blocks) at 572.8 dims/s, 11h35m; TD=110 streams 4 of 11
+blocks (3.6 GB) at 413.2 dims/s, 15h00m; TD=130 streams 5 of 11 (5.2 GB)
+at 403.7 dims/s, 14h34m. So VBITS=128 with streaming beats even a fully
+resident VBITS=64 by ~37%. VBITS=64's default single-copy blocks are
+0.9-1 GB, so three staging buffers take ~3 GB and a matrix only ~0.4 GB
+over budget (TD=110) streams 3.6 GB; capping block_nnz when streaming
+would cut that, but not enough to catch VBITS=128 here.
+
+### Review follow-up 2 (2026-09-28)
+
+Second code review of the streaming code; no protocol bugs, fixes to
+the planning around it:
+- Layout planned up front for both copies (above). The prefix-sum
+  replay of extract_block_trans was checked block-for-block against a
+  saved copy of the old search (CPU harness): identical on the
+  synthetic matrix (block_nnz 4M-128M, 0 and 240 dense rows) and on the
+  2026-09-28 job's TD=90 matrix (18.9M rows) at 128M and 227M.
+- Margin under WDDM raised to 1.5GB when streaming (the C189 slowdown
+  and driver faults happened with ~250MB free); a matrix that fits
+  without the margin still loads whole.
+- Fit test uses 2MB average allocation rounding per block instead of
+  the 4MB worst case, so it no longer streams matrices the old code
+  loaded whole.
+- Pinning failure falls back to pageable memory for that block; empty
+  blocks no longer ask CUDA for zero bytes; the single_copy note is
+  skipped when block_nnz is set by hand.
+- End-to-end after the rewrite (2026-09-29): 12 of 13 synthetic suite
+  runs recovered 12 dependencies that passed the independent check;
+  real TD=90 (2026-09-28 job) two-copy and single-copy streaming runs
+  loaded as planned and passed the integrity check. The 13th run
+  (stream_frac=0.1) ended "lanczos error: not all columns used".
+  Replaying its logged seeds (14f3ca93 9c505a0b, via a scratch-only
+  seed override in demo.c) gave the same error at the same dimension
+  with no streaming at all, single- and two-copy, so it is that start
+  vector on the synthetic matrix: its Lanczos ends ~600 dimensions
+  below max_nrows - VBITS, where msieve's end-of-run check is known to
+  misfire. Fresh seeds passed that config 5 of 6 times.
+
+Left as documented limitations:
+- Staging buffers scale with block size. With big blocks (VBITS=64
+  single-copy ~1GB, two-copy under the new row floor: 287M nnz = 1.25GB
+  at VBITS=256 on C189) three buffers take 3-4GB and push more of the
+  matrix out. Capping block_nnz while streaming would help that but
+  adds per-block row-pointer bytes (96MB per block at 24M rows). First
+  data on the balance: the 2026-09-29 RTX 5090 section below, where
+  1.25x the default block_nnz was best.
+- MPI ranks sharing one GPU each plan against the same free memory
+  (no regression: the old code ran out of memory there too); give each
+  rank a max_gpu_mem share.
+- The k=12 row floor changes two-copy VBITS=256 defaults above ~10.7M
+  rows without a desktop recheck. On the 12GB 5070 such matrices now
+  stream, which confounds a comparison; the 32GB 5090 fits C189 TD=130
+  two-copy at VBITS=256 (19.2GB), so bench_la.sh there with
+  block_nnz=128000000 vs the default (254M) would check it.
+
+## 2026-09-27: A100 Feedback (Greg) — the 128M Floor Fails on Tall MPI Pieces
+
+Greg ran the new code (b61b5ac) on 2x A100 under MPI with a 1x2 grid.
+The first GPU's piece is 61010818 x 30505387, weight 3266389052
+(107.08/col). The GPU's sparse average column weight is 76.4, so about
+2.33B sparse nnz and an average row weight of ~38. The log line was
+"computed block_nnz 128000000 (L2 cache 41943040 bytes, average column
+weight 76.4)". VBITS was not stated: the formula gives 100M at VBITS=128
+and 50M at 256, so it is at least 128 either way (both hit the floor).
+Full-solve ETAs:
+
+| code | mode | block_nnz | kernel | ETA |
+|---|---|---|---|---:|
+| previous (pre-b61b5ac) | stock | 1.75B (old default) | - | 29h53m |
+| new | stock | 128M (new default, floor) | auto | 32h37m |
+| new | stock | 1.75B | auto | 28h44m |
+| new | stock | 1.75B | warpmerge | same as auto |
+| new | stock | not stated (probably 1.75B) | segscan | 29h18m |
+| new | single_copy | 122M default (2*nrows floor) | auto | 43h41m |
+| new | single_copy | below the floor (L2 fit) | auto | "a little slower still" |
+| new | single_copy | 1.75B | auto | 49h47m |
+
+What held up:
+- New inner/outer product and vector kernels: -3.9% ETA at matched
+  1.75B (29h53m -> 28h44m). This matches the 3060's +4%.
+- auto = warpmerge at 1.75B, as expected: blocks there have 29-57 nnz
+  per row, far above the segscan threshold of 8. Forced segscan was only
+  2% slower on these long rows. No change needed.
+
+What failed: the default block_nnz (+13.5% vs 1.75B) and single_copy
+(+52%).
+
+### Diagnosis: per-block cost scales with the piece's rows
+
+Every A*x block spans all nrows: it carries a full rowptr array and XORs
+into the whole output vector. Every A^T*x block spans all ncols. So each
+block costs about (2*sizeof(v_t) + 4) bytes per output row it touches,
+independent of block_nnz. The 128M floor was calibrated on square
+matrices with 9.5M-20M rows, and on this piece it gives far fewer
+nonzeros per output row per block:
+
+| matrix | rows | nnz per output row per block at 128M |
+|---|---:|---:|
+| 5070 C168 | 9.54M | 13.4 |
+| 5070/3060 C170 | 13.17M | 9.7 |
+| V100 | 20.2M | 6.3 |
+| Greg A100 (MPI 1x2 piece) | 61.0M | 2.1 (A*x), 4.2 (A^T*x) |
+
+The lowest value we ever tested was ~3 (V100 64M, 5070 C168 v256 32M),
+and it lost every time.
+
+Back-of-envelope: 128M gives 19 blocks per direction vs 2 at 1.75B, so
+17 extra blocks each way. Assumptions: 80-100% of rows touched per
+block, streaming at 1.55-2.0 TB/s HBM, full dimension 2*30.5M = 61M.
+
+| VBITS | iterations | observed extra | est. extra row-side traffic | est. time |
+|---:|---:|---:|---:|---:|
+| 128 | 479K | 29 ms/iter | 46-56 GB/iter | 23-36 ms |
+| 256 | 239K | 58 ms/iter | 86-106 GB/iter | 43-68 ms |
+
+The per-block overhead accounts for the whole loss, so the smaller
+window bought ~no L2 locality. That is expected: at 128M the A*x window
+is 27MB (v128) or 54MB (v256), and the A^T*x window is twice that
+(54/107MB) because rows are half as heavy as columns. That is against a
+40MB L2 that is really two 20MB partitions (see the caveat below).
+
+### Why not "just use max block size" on some cards
+
+Our own data argues against dropping the L2 fit:
+- 5070 C168 v256: one block was 16% slower than the 128M floor (1208 vs
+  1435).
+- V100 v256: 256M beat 1.75B by ~6% (257.5 vs 243.6) even though the
+  window was 12x L2.
+- 5070 C170 v256: 256M beat 1024M (981 vs 833, noisy under WDDM
+  pressure).
+
+Only the 3060 v256 (+7%) and this A100 run preferred the largest blocks.
+The fix belongs in the floor, not in the L2 targeting.
+
+### Proposed fix (implemented 2026-09-28, k=12)
+
+Make the floor proportional to the piece's rows, in `lanczos_matmul_gpu.c`
+where the two-copy path does `computed = MAX(computed, 128000000)`:
+
+    floor = MAX(128M, k * MAX(nrows, ncols) * sizeof(v_t) / 32),  k = 12
+
+In words: a block must gather at least k times as many 32-byte sectors
+as it rewrites in its output vector. The sizeof(v_t)/32 factor is there
+because a row rewrite costs 2*sizeof(v_t), while a missed gather costs a
+full 32B sector at any VBITS. That is why the V100 at v64 still wants
+128M. Use p->nrows/p->ncols, i.e. the local MPI piece. Effect of k=12:
+
+| card / matrix | VBITS | current | k=12 floor | new | measured |
+|---|---:|---:|---:|---:|---|
+| 5070 C168 | 64 | 278M | 29M | 278M | optimum ~256M |
+| 5070 C168 | 128 | 139M | 57M | 139M | optimum 128M |
+| 5070 C168 | 256 | 128M | 114M | 128M | optimum 128M |
+| 5070 C170 TD=90 | 256 | 128M | 158M | 158M | 128M OOM, 256M 981 |
+| V100 | 64 | 128M | 61M | 128M | optimum 128M |
+| V100 | 256 | 128M | 242M | 242M | optimum 256M (+4.5% vs 128M) |
+| 3060 C170 | 64 | 128M | 40M | 128M | 128M, +8% over 1 block |
+| 3060 C170 | 256 | 128M | 158M | 158M | 1 block +7% over 128M |
+| A100 piece | 128 | 128M | 366M (7 blocks) | 366M | est. ~4% behind 1.75B |
+| A100 piece | 256 | 128M | 732M (4 blocks) | 732M | est. ~1.5% behind 1.75B |
+
+Every default that matched a measured optimum is unchanged. The two that
+did not (V100 v256, 3060 v256) move in the right direction. On the A100
+piece, the estimated loss vs hand-set 1.75B drops from 13.5% to ~1.5-4%.
+k=13 would still leave the 5070 C168 v256 alone (124M) and gives the
+A100 piece 3 blocks at v256.
+
+Possible refinements:
+- Size the two directions separately. A*x windows use the column weight
+  and A^T*x windows use the row weight; these differ 2x on a 1x2 MPI
+  piece, so one block_nnz cannot suit both.
+- Balance block sizes. At 732M the A100 piece splits into
+  732/732/732/135M, and the tiny last block still pays full rowptr and
+  output costs.
+
+### Single copy: same mechanism, and a usable predictor
+
+Single copy won only where its L2 fit ((L2/3)/sizeof(v_t) * col weight)
+cleared its 2*nrows floor:
+- 5070: 38M vs 26M floor. Won.
+- 3060: 2.4M vs 26M. Lost 19%.
+- A100 piece: 33M (v256) vs 122M. Lost 52%.
+
+Proposal: when single_copy=1 is requested and the floor binds, log that
+it is expected to be slower than two copies and only saves VRAM. Update
+the CLAUDE.md single_copy paragraph with the A100 result.
+
+### Caveat: A100 L2 partitioning (unverified)
+
+The formula takes CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE at face value. On
+A100 (and H100), L2 is two partitions, and each caches data for the SMs
+attached to it. Data that every SM gathers may therefore be held in both
+halves, so the usable capacity would be closer to 20MB. This does not
+matter for Greg's run, where the floor dominates, but it would matter if
+we ever tune the L2 fit for datacenter cards.
+
+### Next steps
+
+1. Ask Greg for his VBITS, and for ETAs after warmup at block_nnz =
+   512M, 768M and 1G (two-copy, auto kernel). This shows whether the
+   row floor is enough or the A100 really wants max beyond the per-block
+   overhead. It is also our first data on a piece with more than 20M
+   rows.
+2. Done 2026-09-28: the k=12 row floor (two-copy default is now
+   max(L2 fit, 128M, 12*max(nrows,ncols)*sizeof(v_t)/32)). Still to
+   re-check on the 5070: C168 defaults should be unchanged, and C170
+   v256 moves 128M -> 158M, so check its VRAM and speed.
+3. Done 2026-09-28: msieve logs a note when single_copy's L2-sized
+   blocks fall below its 2*nrows floor (expect it to be slower than two
+   copies, only saving memory), and CLAUDE.md describes both floors.
+4. If Greg's sweep does not fit the model: add a startup autotune that
+   times a few SpMV iterations at 2-3 block sizes and keeps the fastest.
+   - Safe: the host matrix (p->unpacked_cols) lives for the whole
+     solve, and block layout does not change results (byte-identical
+     checkpoints, 2026-06-10).
+   - Cheap: each GPU rebuild is ~minutes against a ~29h solve.
+   - Each MPI rank can pick its own size.
+   - This is the robust answer for cards we cannot test.
+
+## 2026-09-29: RTX 5090, 41.6M-dim matrix (single copy + streaming)
+
+First real matrix that doesn't fit a 32GB card two-copy: TD=130 of the
+job after C189, 41,646,000 x 41,646,178, weight 6.44B (154.5/col). After
+reduction: 41,645,760 dims with 4.69B sparse nonzeros at VBITS=256
+(41,645,888 and 5.02B at VBITS=128; more dense rows are packed out at
+256). Rented RTX 5090 (96MB L2, 31.6GB free) on Vast, native Linux, so
+the 256MB streaming margin. bench_5090.sh (single_copy=1 at the default
+block_nnz, half and double it; stream_slots=2 if the default streams),
+then two more sizes by hand. bench_la.sh, 300s windows, one run each,
+GPU otherwise idle; the matrix loaded in ~89s every time. All runs passed
+the integrity check.
+
+| VBITS | block_nnz | blocks | streamed | dims/s | full ETA |
+|---:|---:|---:|---:|---:|---:|
+| 256 | 111M (default) | 40 | 6 blocks, 3.5 GB, 2 slots | 800.3 | 14h27m |
+| 256 | same, stream_slots=2 | 40 | same (default already used 2) | 803.2 | 14h24m |
+| 256 | **139M (1.25x)** | | 2.8 GB | **820.4** | **14h05m** |
+| 256 | 167M (1.5x) | | none | 745.2 | 15h31m |
+| 256 | 223M (2x) | | none | 607.0 | 19h03m |
+| 256 | 56M (0.5x) | 80 | 26 blocks, 9.7 GB, 2 slots | 522.7 | 22h07m |
+| 128 | 236M (default) | | none | 710.7 | 16h16m |
+| 128 | 118M (0.5x) | | none | 683.6 | 16h55m |
+| 128 | 472M (2x) | | none | 431.3 | 26h49m |
+
+Vectors take 8.9GB at VBITS=256 and 4.4GB at 128, which left 21.4GB and
+26.5GB for the sparse blocks. The single_copy 2*nrows floor (83M) didn't
+bind at either VBITS (no note).
+
+- VBITS=256 beat 128 by 13-15% even while streaming. That is the
+  opposite of the C189/5070 result, where the copies were the limit
+  and halving the vectors to keep more of the matrix resident won.
+  Here the streamed share is small (2.8-3.5GB of ~20GB). Each streamed
+  block is used by both products (snake order reuses the last one or
+  two), so roughly 6-7GB moves per ~310-320ms iteration, ~20GB/s. That
+  is below the 30-35GB/s the 5070 runs reached, so the copies should be
+  mostly hidden (inferred, not measured).
+- Block size matters more than streaming: 1.5x fits entirely and still
+  loses 9% to 1.25x with streaming; 2x loses 26%. The L2 formula's
+  default (L2/3 of columns) is near the optimum. Nudging it up trades
+  cache fit for fewer 167MB row-pointer arrays (one per block at 41.6M
+  rows) and less streaming, and 1.25x came out 2.5% ahead, within
+  noise of the default. No change to the formula from this.
+- Small blocks are costly at this height. Halving block_nnz doubles the
+  row-pointer arrays (+6.7GB at v256), which nearly tripled the
+  streaming and made it the slowest v256 run.
+- The planner fell back from 3 to 2 staging buffers at the default,
+  since 3 of the 584MB buffers didn't fit, so stream_slots=2 repeated
+  that layout. The two runs are within 0.4% of each other, a rough
+  measure of run-to-run noise.
+- Chosen for the real run: VBITS=256 single_copy=1 block_nnz=139000000.

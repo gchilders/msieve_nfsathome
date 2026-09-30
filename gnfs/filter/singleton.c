@@ -629,6 +629,29 @@ static void nfs_install_compacted_files(msieve_obj *obj,
 } while (0)
 
 /*--------------------------------------------------------------------*/
+/* The size-based decisions below were made on the 32-bit LP file before
+   the 64-bit prefilter existed, and the in-memory filtering that follows
+   still reads that format, so measure in it. A 64-bit record is
+   8 + 2 + 8k bytes and a 32-bit one 8 + 4k (relation_ideal_t's header
+   is 8 bytes), which makes the 32-bit file S/2 + 3N for a 64-bit file of
+   S bytes holding N relations. */
+
+#define LP32_HEADER_BYTES 8
+
+typedef char lp32_header_check[(sizeof(relation_ideal_t) -
+		sizeof(((relation_ideal_t *)0)->ideal_list)) ==
+		LP32_HEADER_BYTES ? 1 : -1];
+
+static uint64 lp32_size_from_lp64(uint64 lp64_size, uint64 num_relations) {
+	return lp64_size / 2 + 3 * num_relations;
+}
+
+/* per-ideal relation counts saturate here instead of taking 64 bits:
+   only "fewer than 2" and "down to 0" matter, and a saturated count is
+   never decremented, so it can't reach either by mistake */
+
+#define LP_COUNT_MAX UINT32_MAX
+
 void nfs_compact_lp_file(msieve_obj *obj, filter_t *filter,
 			uint64 ram_size) {
 	uint64 i, j;
@@ -638,8 +661,9 @@ void nfs_compact_lp_file(msieve_obj *obj, filter_t *filter,
 	uint64 active_ideals = num_ideals;
 	uint64 num_singletons = 0;
 	uint32 num_passes = 0;
-	uint64 projected_file_size = filter->lp_file_size;
-	uint64 *counts = NULL;
+	uint64 projected_file_size = lp32_size_from_lp64(filter->lp_file_size,
+							start_relations);
+	uint32 *counts = NULL;
 	uint8 *alive = NULL;
 	FILE *in_fp, *out_fp, *map_fp = NULL;
 	nfs_buffered_reader_t reader;
@@ -674,7 +698,7 @@ void nfs_compact_lp_file(msieve_obj *obj, filter_t *filter,
 	/* Preserve the historical fast path only with substantial headroom below
 	   UINT32_MAX. Near the architectural ceiling, force disk singleton
 	   pruning so common-filter arithmetic and merge counters have room. */
-	if (filter->lp_file_size <= ram_size / 2 &&
+	if (projected_file_size <= ram_size / 2 &&
 	    start_relations <= NFS_COMMON_FILTER_SAFE_MAX &&
 	    num_ideals <= NFS_COMMON_FILTER_SAFE_MAX) {
 		uint64 dense_id = 0;
@@ -752,8 +776,8 @@ void nfs_compact_lp_file(msieve_obj *obj, filter_t *filter,
 		return;
 	}
 
-	counts = (uint64 *)xcalloc(nfs_checked_array_size(obj, num_ideals,
-							sizeof(uint64),
+	counts = (uint32 *)xcalloc(nfs_checked_array_size(obj, num_ideals,
+							sizeof(uint32),
 							"large-ideal frequency table"), 1);
 	alive = (uint8 *)xmalloc(nfs_checked_array_size(obj,
 			(start_relations + 7) / 8, sizeof(uint8),
@@ -774,7 +798,8 @@ void nfs_compact_lp_file(msieve_obj *obj, filter_t *filter,
 				logprintf(obj, "error: invalid 64-bit ideal ID in LP file\n");
 				exit(-1);
 			}
-			counts[ideal_list[j]]++;
+			if (counts[ideal_list[j]] != LP_COUNT_MAX)
+				counts[ideal_list[j]]++;
 		}
 	}
 
@@ -816,13 +841,15 @@ void nfs_compact_lp_file(msieve_obj *obj, filter_t *filter,
 				num_singletons++;
 				for (j = 0; j < ideal_count; j++) {
 					uint64 id = ideal_list[j];
-					if (counts[id] != 0 && --counts[id] == 0)
+					if (counts[id] != 0 &&
+					    counts[id] != LP_COUNT_MAX &&
+					    --counts[id] == 0)
 						active_ideals--;
 				}
 			}
 			else {
-				projected_file_size += sizeof(uint64) + 2 * sizeof(uint8) +
-					(uint64)ideal_count * sizeof(uint64);
+				projected_file_size += LP32_HEADER_BYTES +
+					(uint64)ideal_count * sizeof(uint32);
 			}
 		}
 		logprintf(obj, "pass %u: found %" PRIu64 " singletons; %" PRIu64
@@ -844,11 +871,14 @@ void nfs_compact_lp_file(msieve_obj *obj, filter_t *filter,
 		exit(-1);
 	}
 
+	/* the remap fits: j stops at active_ideals, checked above to be
+	   at most NFS_COMMON_FILTER_SAFE_MAX, below the sentinel */
+
 	for (i = j = 0; i < num_ideals; i++) {
 		if (counts[i] != 0)
-			counts[i] = j++;
+			counts[i] = (uint32)j++;
 		else
-			counts[i] = UINT64_MAX;
+			counts[i] = UINT32_MAX;
 	}
 	if (j != active_ideals) {
 		logprintf(obj, "error: ideal-count mismatch during LP compaction\n");
@@ -894,8 +924,8 @@ void nfs_compact_lp_file(msieve_obj *obj, filter_t *filter,
 		packed.gf2_factors = gf2_factors;
 		packed.connected = 0;
 		for (k = 0; k < ideal_count; k++) {
-			uint64 mapped = counts[ideal_list[k]];
-			if (mapped == UINT64_MAX || mapped > UINT32_MAX) {
+			uint32 mapped = counts[ideal_list[k]];
+			if (mapped == UINT32_MAX) {
 				logprintf(obj, "error: invalid ideal remap during LP compaction\n");
 				exit(-1);
 			}

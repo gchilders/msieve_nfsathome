@@ -68,6 +68,12 @@ void savefile_free(savefile_t *s);
 void get_filter_tmp_name(msieve_obj *obj, char *buf,
 			size_t buf_len, const char *suffix);
 
+/* drop obj->scratch_dir if it is the savefile's own directory (see
+   savefile.c); decided once per object, at the first call. The phases
+   that use scratch paths call it on entry */
+
+void savefile_check_scratch(msieve_obj *obj);
+
 /* copy the savefile into obj->scratch_dir, decompressing it, and make
    subsequent reads use that copy; returns nonzero if staging happened.
    savefile_unstage() deletes it along with any filtering intermediates

@@ -26,3 +26,6 @@ download.sh
 jobname.txt
 .pastebin_credentials
 bench/
+*_embed.c
+msieve_bin2c
+msieve_bin2c.exe

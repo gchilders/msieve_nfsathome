@@ -191,7 +191,7 @@ static void set_filtering_bounds(msieve_obj *obj, factor_base_t *fb,
 
 static uint32 do_merge(msieve_obj *obj, filter_t *filter,
 			merge_t *merge, double target_density,
-			const char *ckpt_path) {
+			const char *ckpt_path, uint32 commit_ckpt) {
 
 	uint32 relations_needed;
 	uint32 extra_needed = filter->target_excess;
@@ -227,9 +227,14 @@ static uint32 do_merge(msieve_obj *obj, filter_t *filter,
 				ckpt_path) != 0) {
 		if (merge->relset_array != NULL || merge->data_pool != NULL)
 			filter_free_relsets(merge);
+		filter_merge_checkpoint_commit(obj, ckpt_path, 0);
 		return 1000000;
 	}
 
+	/* a caller that may still reject this merge commits it itself */
+
+	if (commit_ckpt)
+		filter_merge_checkpoint_commit(obj, ckpt_path, 1);
 	return 0;
 }
 
@@ -260,16 +265,21 @@ static uint32 do_partial_filtering(msieve_obj *obj, filter_t *filter,
 
 		if ((relations_needed = do_merge(obj, filter,
 						merge, target_density,
-						ckpt_path)) > 0)
+						ckpt_path, 0)) > 0) {
+			/* a rejected earlier attempt may have left one */
+			filter_merge_checkpoint_commit(obj, ckpt_path, 0);
 			return relations_needed;
+		}
 
 		/* accept the collection of generated cycles
 		   if the matrix they form is dense enough or
 		   max_weight has been incremented enough */
 
 		if (merge->avg_cycle_weight > 63.0 ||
-		    max_weight >= MAX_KEEP_WEIGHT - 5)
+		    max_weight >= MAX_KEEP_WEIGHT - 5) {
+			filter_merge_checkpoint_commit(obj, ckpt_path, 1);
 			break;
+		}
 
 		logprintf(obj, "matrix not dense enough, retrying\n");
 		filter_free_relsets(merge);
@@ -303,6 +313,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 
 	logprintf(obj, "\n");
 	logprintf(obj, "commencing relation filtering\n");
+	savefile_check_scratch(obj);
 
 	/* parse arguments */
 
@@ -383,6 +394,18 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 			}
 		}
 
+		/* the checkpoint holds the relation sets of one merge; the
+		   multi-density paths run their own merges per density and
+		   write .cyc.NNN files, which it can neither record nor
+		   restart. Refuse the pair rather than write a plain .cyc
+		   that all_matbuild would never read */
+
+		if (ckpt_path != NULL && num_densities > 1) {
+			logprintf(obj, "error: merge_ckpt works with a single "
+					"target_density, not a list\n");
+			exit(-1);
+		}
+
 		tmp = strstr(obj->nfs_args, "max_weight=");
 		if (tmp != NULL) {
 			max_weight = strtoul(tmp + 11, NULL, 10);
@@ -447,7 +470,20 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 				merge.target_density = target_density;
 			if (filter_merge_full(obj, &merge,
 					ckpt_min_cycles) != 0) {
+				char failed[300];
+
+				/* reloading it would fail the same way on
+				   every later run, even after more relations
+				   are sieved; move it aside so the next run
+				   filters from the relations again */
+
 				filter_free_relsets(&merge);
+				if (snprintf(failed, sizeof(failed), "%s.failed",
+						ckpt_path) < (int)sizeof(failed) &&
+				    rename(ckpt_path, failed) == 0)
+					logprintf(obj, "merge from checkpoint "
+						"failed; moved it to '%s'\n",
+						failed);
 				relations_needed = 1000000;
 				goto finished;
 			}
@@ -495,7 +531,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 		if (num_densities <= 1) {
 			if ((relations_needed = do_merge(obj, &filter,
 							&merge, target_density,
-							ckpt_path)) > 0)
+							ckpt_path, 1)) > 0)
 				goto finished;
 		}
 		else {
@@ -610,7 +646,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 				filter_read_lp_file(obj, &filter, 0);
 				if ((relations_needed = do_merge(obj, &filter,
 							&merge, target_density,
-							ckpt_path)) > 0) {
+							ckpt_path, 1)) > 0) {
 					goto finished;
 				}
 			}

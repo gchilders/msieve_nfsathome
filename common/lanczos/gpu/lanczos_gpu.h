@@ -28,9 +28,34 @@ typedef struct {
 	uint32 num_cols;
 	uint32 num_col_entries;
 	uint32 blocksize;
+	uint32 start;                   /* first col (row for the transpose) */
 	CUdeviceptr col_entries;        /* uint32 */
 	CUdeviceptr row_entries;        /* uint32 */
+
+	/* column indices followed by row pointers (at row_offset), in
+	   host memory while the matrix is set up; for streamed blocks
+	   it stays there, pinned */
+	uint32 *host_data;
+	size_t row_offset;
+	size_t bytes;
+
+	/* nonzero if the block lives in host memory and is copied to
+	   the card for every product. sched_idx holds its positions in
+	   the stream schedule, for the forward and the single-copy
+	   transpose product */
+	uint32 streamed;
+	uint32 pinned;          /* host_data came from cuMemHostAlloc */
+	uint32 sched_idx[2];
 } block_row_t;
+
+/* a device buffer that streamed blocks are copied into */
+
+typedef struct {
+	CUdeviceptr buf;
+	block_row_t *blk;       /* block it holds, or being copied in */
+	CUevent ready;          /* the copy of blk is done */
+	CUevent freed;          /* the last kernel reading buf is done */
+} stream_slot_t;
 
 /* implementation-specific structure */
 
@@ -72,6 +97,17 @@ typedef struct {
 
 	/* store only A on the card; A^T * x scatters through A's blocks */
 	uint32 single_copy;
+
+	/* matrix blocks that don't fit on the card are streamed from
+	   pinned host memory. sched lists them in the order one Lanczos
+	   iteration uses them, so the copies can run ahead of the SpMV */
+	CUstream copy_stream;
+	uint32 num_slots;
+	stream_slot_t *slots;
+	uint32 sched_len;
+	block_row_t **sched;
+	size_t streamed_bytes;
+	size_t staging_bytes;
 
 } gpudata_t;
 

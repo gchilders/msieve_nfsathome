@@ -13,6 +13,9 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include "lanczos_gpu.h"
+#if !defined(WIN32) && !defined(_WIN64)
+#include <unistd.h>
+#endif
 #ifdef MSIEVE_CUDA_SINGLE_BINARY
 #include <cuda_embedded.h>
 
@@ -56,6 +59,13 @@ typedef struct {
    though only 16GB of it lands on the card. */
 
 #define MAX_BLOCK_NNZ 4000000000u
+
+/* Largest block that actually gets built. The SpMV kernels index
+   nonzeros in uint32 and step past a block's end by up to one warp
+   segment (TWarpItems <= 2048) plus a warp-strided load before they
+   compare, so a block right at 2^32-1 would wrap; keep 2^20 clear */
+
+#define MAX_CSR_BLOCK_NNZ ((uint64)UINT32_MAX - (1u << 20))
 
 #if 0
 // Tried using compressible memory on an A100. Did not help 
@@ -228,78 +238,28 @@ static uint64 extract_block(la_col_t *cols,
 }
 
 /*-------------------------------------------------------------------*/
-static uint64 extract_block_trans(la_col_t *cols,
+static uint64 extract_rows(la_col_t *cols, uint32 ncols,
 			uint32 row_min, uint32 row_max,
-			uint32 col_min, uint32 col_max,
-			uint64 nnz, uint32 num_dense_rows,
-			uint32 *blocksize,
 			entry_idx_t **entries_in,
 			uint64 *max_entries_in)
 {
+	/* collect the nonzeros in rows [row_min, row_max) of every
+	   column, for one block of the transpose. Where its rows start
+	   and end is decided beforehand, by plan_trans_blocks */
+
 	uint32 i, j;
 	uint64 num_entries = 0;
-	uint32 my_row_max, my_blocksize;
 	entry_idx_t *entries = *entries_in;
 	uint64 max_entries = *max_entries_in;
-	uint64 min_nnz = 9 * (nnz / 10);
-	/* the +10% search window has to stay inside what a block can hold */
-	uint64 max_nnz = MIN(11 * (nnz / 10), (uint64)MAX_BLOCK_NNZ);
 
-	/* Need to figure out what my_row_max to use to get about nnz nonzeros */
-
-	my_blocksize = *blocksize;
-	my_row_max = row_min + my_blocksize;
-	if (my_row_max > row_max) {
-		my_row_max = row_max;
-		my_blocksize = row_max - row_min;
-	}
-
-	while (1) {
-		num_entries = 0;
-		for (i = col_min; i < col_max; i++) {
-			la_col_t *col = cols + i;
-			for (j = 0; j < col->weight; j++) {
-				uint32 idx = col->data[j];
-				if (idx >= my_row_max) break;
-				if (idx >= row_min) num_entries++;
-			}
-		}
-		if (num_entries > max_nnz) {
-			my_blocksize = 4 * (my_blocksize / 5);
-			if ((row_min == 0) && (my_blocksize <= num_dense_rows)) {
-				/* just grab a few and continue */
-				my_row_max = num_dense_rows + 10;
-				break;
-			}
-			my_row_max = row_min + my_blocksize;
-			if (my_blocksize == 2) break;
-			min_nnz = 0;
-			continue;
-		}
-		if (num_entries < min_nnz) {
-			my_blocksize = 5 * (my_blocksize / 4);
-			my_row_max = row_min + my_blocksize;
-			if (my_row_max >= row_max) {
-				my_row_max = row_max;
-				break;
-			}
-			max_nnz = (uint64)MAX_BLOCK_NNZ;
-			continue;
-		}
-		break;
-	}
-
-	if (num_entries == 0) /* shouldn't happen */
-		my_row_max = MIN(my_row_max + 10, row_max);
-	num_entries = 0;
-	for (i = col_min; i < col_max; i++) {
+	for (i = 0; i < ncols; i++) {
 
 		la_col_t *col = cols + i;
 
 		for (j = 0; j < col->weight; j++) {
 			uint32 idx = col->data[j];
 
-			if (idx >= my_row_max)
+			if (idx >= row_max)
 				break;
 
 			if (idx >= row_min) {
@@ -321,7 +281,6 @@ static uint64 extract_block_trans(la_col_t *cols,
 		}
 	}
 
-	*blocksize = my_row_max - row_min;
 	*entries_in = entries;
 	*max_entries_in = max_entries;
 	return num_entries;
@@ -393,11 +352,21 @@ static void radix_sort(entry_idx_t *arr, uint64 n) {
 }
 
 /*-------------------------------------------------------------------*/
-static void pack_matrix_block(gpudata_t *d, block_row_t *b,
+static size_t block_bytes(uint64 num_entries, uint32 num_rows) {
+
+	/* a packed block: column indices padded to 256 bytes, then
+	   the row pointers */
+
+	return ((((size_t)num_entries + 63) & ~(size_t)63) +
+			num_rows + 1) * sizeof(uint32);
+}
+
+/*-------------------------------------------------------------------*/
+static void pack_matrix_block(block_row_t *b,
 			entry_idx_t *entries, uint64 num_entries,
 			uint32 row_min, uint32 row_max,
 			uint32 col_min, uint32 col_max,
-			uint32 is_trans)
+			uint32 is_trans, uint32 streamed)
 {
 
 	uint64 i, j;
@@ -409,19 +378,42 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 	   nonzeros with a uint32; the block extractors are capped so this
 	   cannot happen, but a wrong answer here would be silent */
 
-	if (num_entries > MAX_BLOCK_NNZ) {
+	if (num_entries > MAX_CSR_BLOCK_NNZ) {
 		printf("error: matrix block holds %" PRIu64 " nonzeros, above "
-			"the %u a CSR block can address; lower block_nnz\n",
-			num_entries, (uint32)MAX_BLOCK_NNZ);
+			"the %" PRIu64 " a CSR block can hold; lower block_nnz\n",
+			num_entries, MAX_CSR_BLOCK_NNZ);
 		exit(-1);
 	}
 
-	/* convert a block of matrix rows from COO to CSR format */
+	/* convert a block of matrix rows from COO to CSR format, in one
+	   host buffer: column indices, then the row pointers starting on
+	   a 256-byte boundary. A block that will be streamed goes
+	   straight into pinned memory. If the system won't pin any more
+	   (WSL limits pinned memory), it stays in ordinary memory: its
+	   copies then run several times slower, but the solve goes on */
 
-	col_entries = (uint32 *)xmalloc(num_entries *
-					sizeof(uint32));
-	row_entries = (uint32 *)xcalloc(num_rows + 1,
-					sizeof(uint32));
+	b->row_offset = ((size_t)num_entries + 63) & ~(size_t)63;
+	b->bytes = block_bytes(num_entries, num_rows);
+	b->streamed = streamed;
+	if (streamed &&
+	    cuMemHostAlloc((void **)&b->host_data, b->bytes, 0) ==
+	    						CUDA_SUCCESS) {
+		b->pinned = 1;
+	}
+	else {
+		static uint32 warned = 0;
+
+		if (streamed && !warned) {
+			printf("warning: cannot pin host memory for a "
+				"streamed block; copying it from ordinary "
+				"memory instead, which is slower\n");
+			warned = 1;
+		}
+		b->host_data = (uint32 *)xmalloc(b->bytes);
+	}
+	col_entries = b->host_data;
+	row_entries = b->host_data + b->row_offset;
+	memset(row_entries, 0, (num_rows + 1) * sizeof(uint32));
 
 	if (is_trans) {
 		for (i = 0; i < num_entries; i++) {
@@ -448,7 +440,8 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 			j = 0;
 		}
 	}
-	row_entries[entries[i-1].row_off - row_min] = (uint32)j;
+	if (num_entries > 0)
+		row_entries[entries[i-1].row_off - row_min] = (uint32)j;
 
 	/* the running total ends at num_entries, which the check above
 	   has already bounded to what a uint32 can hold */
@@ -463,187 +456,782 @@ static void pack_matrix_block(gpudata_t *d, block_row_t *b,
 	b->num_rows = num_rows;
 	b->num_cols = col_max - col_min;
 	b->num_col_entries = (uint32)num_entries;
+	b->col_entries = b->row_entries = 0;
 	printf("%" PRIu64 " %u %u\n", num_entries, num_rows, b->blocksize);
+}
+
+/*-------------------------------------------------------------------*/
+static void upload_block(gpudata_t *d, block_row_t *b) {
+
+	/* copy a block onto the card and drop its host copy. A block
+	   with no nonzeros still gets a (tiny) column array, since CUDA
+	   refuses zero-byte allocations */
+
+	size_t col_bytes = b->num_col_entries * sizeof(uint32);
+	size_t col_alloc = MAX(col_bytes, sizeof(uint32));
+	size_t row_bytes = (b->num_rows + 1) * sizeof(uint32);
+	uint32 *row_entries = b->host_data + b->row_offset;
 
 	if (d->use_cudamanaged) {
 		CUDA_TRY(cuMemAllocManaged(&b->col_entries,
-				num_entries * sizeof(uint32),
-				CU_MEM_ATTACH_GLOBAL))
-		CUDA_TRY(cuMemcpy(b->col_entries,
-				(CUdeviceptr) col_entries,
-				num_entries * sizeof(uint32)))
-		CUDA_TRY(my_cuMemAdvise(b->col_entries,
-				num_entries * sizeof(uint32),
+				col_alloc, CU_MEM_ATTACH_GLOBAL))
+		if (col_bytes > 0) {
+			CUDA_TRY(cuMemcpy(b->col_entries,
+				(CUdeviceptr) b->host_data, col_bytes))
+		}
+		CUDA_TRY(my_cuMemAdvise(b->col_entries, col_alloc,
 				CU_MEM_ADVISE_SET_READ_MOSTLY,
 				d->gpu_info->device_handle))
 
 		CUDA_TRY(cuMemAllocManaged(&b->row_entries,
-				(num_rows + 1) * sizeof(uint32),
-				CU_MEM_ATTACH_GLOBAL))
+				row_bytes, CU_MEM_ATTACH_GLOBAL))
 		CUDA_TRY(cuMemcpy(b->row_entries,
-				(CUdeviceptr) row_entries,
-				(num_rows + 1) * sizeof(uint32)))
-		CUDA_TRY(my_cuMemAdvise(b->row_entries,
-				(num_rows + 1) * sizeof(uint32),
+				(CUdeviceptr) row_entries, row_bytes))
+		CUDA_TRY(my_cuMemAdvise(b->row_entries, row_bytes,
 				CU_MEM_ADVISE_SET_READ_MOSTLY,
 				d->gpu_info->device_handle))
 	} else {
-		/* CUDA_TRY(allocateCompressible((void **)&b->col_entries, num_entries * sizeof(uint32), 1)) */
-		CUDA_TRY(cuMemAlloc(&b->col_entries,
-				num_entries * sizeof(uint32)))
-		CUDA_TRY(cuMemcpyHtoD(b->col_entries,
-				col_entries,
-				num_entries * sizeof(uint32)))
+		/* CUDA_TRY(allocateCompressible((void **)&b->col_entries, col_bytes, 1)) */
+		CUDA_TRY(cuMemAlloc(&b->col_entries, col_alloc))
+		if (col_bytes > 0) {
+			CUDA_TRY(cuMemcpyHtoD(b->col_entries,
+				b->host_data, col_bytes))
+		}
 
-		/* CUDA_TRY(allocateCompressible((void **)&b->row_entries, (num_rows + 1) * sizeof(uint32), 1)) */
-		CUDA_TRY(cuMemAlloc(&b->row_entries,
-				(num_rows + 1) * sizeof(uint32)))
+		/* CUDA_TRY(allocateCompressible((void **)&b->row_entries, row_bytes, 1)) */
+		CUDA_TRY(cuMemAlloc(&b->row_entries, row_bytes))
 		CUDA_TRY(cuMemcpyHtoD(b->row_entries,
-				row_entries,
-				(num_rows + 1) * sizeof(uint32)))
+				row_entries, row_bytes))
 	}
 
-	free(col_entries);
-	free(row_entries);
+	free(b->host_data);
+	b->host_data = NULL;
 }
 
 /*-------------------------------------------------------------------*/
-static void gpu_matrix_init(packed_matrix_t *p) {
+static size_t vector_mem_bytes(packed_matrix_t *p) {
 
+	/* the vectors used in the lanczos iteration, and the vv kernel
+	   scratch array */
+
+#ifdef HAVE_MPI
+	return (6 * (size_t)p->nsubcols +
+		2 * (size_t)MAX(p->nrows, p->ncols)) * sizeof(v_t) +
+		VBITS * sizeof(v_t);
+#else
+	return 7 * (size_t)p->max_ncols * sizeof(v_t) +
+			VBITS * sizeof(v_t);
+#endif
+}
+
+/*-------------------------------------------------------------------*/
+/* Streaming matrix blocks from the host.
+
+   Every Lanczos iteration multiplies by the whole matrix, so blocks
+   that don't fit on the card are copied in again every iteration,
+   through a few staging buffers on a separate stream while the SpMV
+   works on earlier blocks. The streamed blocks are spread evenly
+   through the order the iteration uses the blocks in, to keep the
+   copy engine busy the whole time. In single-copy mode the transpose
+   product runs through the blocks backwards, so the last streamed
+   blocks of the forward product are still in their buffers.
+
+   Pinned host-to-device copies ran at ~48 GB/s on an RTX 5070 (PCIe 5,
+   WSL), which hides the copies as long as the streamed bytes per
+   iteration take no longer to copy than the iteration takes. On the
+   C189 matrices in LANCZOS_OPTIMIZATION_NOTES.md they were the
+   limit, at 30-35 GB/s */
+
+#define NUM_STREAM_SLOTS 3
+
+/* room left on the card for the CUDA runtime, whatever the steps after
+   the iteration allocate, and, under the Windows driver model (native
+   Windows or WSL), for other programs using the card. It only decides
+   how much to stream once streaming is unavoidable: a matrix that fits
+   without it is loaded whole, as it always was. On WSL a C189 run that
+   streamed to within 256MB of full got 3x slower and later hit driver
+   faults (LANCZOS_OPTIMIZATION_NOTES.md), so WDDM gets more room */
+#define STREAM_MARGIN ((size_t)256 << 20)
+#define STREAM_MARGIN_WDDM ((size_t)1536 << 20)
+
+/* cuMemAlloc rounds large allocations up to 2MB, and a resident
+   block makes two of them: 4MB in the worst case, which a streaming
+   layout is budgeted with, and 2MB on average, which is used to
+   decide whether a matrix fits at all */
+#define BLOCK_ALLOC_SLACK ((size_t)4 << 20)
+#define BLOCK_ALLOC_SLACK_AVG ((size_t)2 << 20)
+
+enum {
+	PLACE_RESIDENT,  /* each block goes onto the card as it is built */
+	PLACE_STREAM     /* the blocks to stream were chosen from their
+			    sizes before building; those are packed
+			    straight into (pinned) host memory */
+};
+
+/* The layout of the sparse matrix, decided before any block is built:
+   every block, forward then transpose (the order one iteration uses
+   them), with the columns (forward) or rows (transpose) it covers,
+   its nonzeros and its packed size, plus which ones to stream */
+
+typedef struct {
+	size_t budget;          /* card memory the sparse blocks may use */
+	double frac;            /* stream at least this fraction */
+	uint32 max_slots;       /* staging buffers asked for */
+	uint32 mode;
+
+	uint32 num_blocks;
+	uint32 num_forward;
+	uint32 alloc;
+	uint32 *start;
+	uint32 *size;
+	uint64 *nnz;
+	size_t *bytes;
+
+	uint8 *streamed;        /* PLACE_STREAM only */
+	uint32 num_slots;
+	size_t slot_bytes;
+} block_plan_t;
+
+/*-------------------------------------------------------------------*/
+static void plan_add_block(block_plan_t *plan, uint32 start, uint32 size,
+			uint64 nnz, uint32 num_rows) {
+
+	uint32 n = plan->num_blocks;
+
+	/* caught here rather than in pack_matrix_block, before hours of
+	   building blocks; block_nnz stops at MAX_BLOCK_NNZ so that one
+	   column's overshoot still fits */
+
+	if (nnz > MAX_CSR_BLOCK_NNZ) {
+		printf("error: matrix block %u would hold %" PRIu64 " nonzeros, "
+			"above the %" PRIu64 " a CSR block can hold; lower "
+			"block_nnz\n", n, nnz, MAX_CSR_BLOCK_NNZ);
+		exit(-1);
+	}
+
+	if (n == plan->alloc) {
+		plan->alloc = MAX(100, 2 * plan->alloc);
+		plan->start = (uint32 *)xrealloc(plan->start,
+					plan->alloc * sizeof(uint32));
+		plan->size = (uint32 *)xrealloc(plan->size,
+					plan->alloc * sizeof(uint32));
+		plan->nnz = (uint64 *)xrealloc(plan->nnz,
+					plan->alloc * sizeof(uint64));
+		plan->bytes = (size_t *)xrealloc(plan->bytes,
+					plan->alloc * sizeof(size_t));
+	}
+	plan->start[n] = start;
+	plan->size[n] = size;
+	plan->nnz[n] = nnz;
+	plan->bytes[n] = block_bytes(nnz, num_rows);
+	plan->num_blocks++;
+}
+
+static void plan_free(block_plan_t *plan) {
+
+	free(plan->start);
+	free(plan->size);
+	free(plan->nnz);
+	free(plan->bytes);
+	free(plan->streamed);
+	memset(plan, 0, sizeof(block_plan_t));
+}
+
+/*-------------------------------------------------------------------*/
+static uint32 col_sparse_entries(la_col_t *col, uint32 nrows) {
+
+	/* how many of the column's row indices extract_block keeps */
+
+	uint32 j;
+
+	if (col->weight == 0 || col->data[col->weight - 1] < nrows)
+		return col->weight;
+	for (j = 0; j < col->weight && col->data[j] < nrows; j++)
+		;
+	return j;
+}
+
+/*-------------------------------------------------------------------*/
+static void plan_forward_blocks(packed_matrix_t *p, block_plan_t *plan) {
+
+	/* the forward product's blocks: whole columns until a block has
+	   block_nnz nonzeros. Every block spans all the rows */
+
+	uint32 i;
+	uint32 start = 0;
+
+	while (start < p->ncols) {
+		uint64 num = 0;
+
+		for (i = start; i < p->ncols && num < p->block_nnz; i++)
+			num += col_sparse_entries(p->unpacked_cols + i,
+						p->nrows);
+		plan_add_block(plan, start, i - start, num, p->nrows);
+		start = i;
+	}
+	plan->num_forward = plan->num_blocks;
+}
+
+/*-------------------------------------------------------------------*/
+static void plan_trans_blocks(packed_matrix_t *p, block_plan_t *plan) {
+
+	/* the transpose's blocks: ranges of rows holding about block_nnz
+	   nonzeros, across all the columns. The first rows are the
+	   heaviest, so the search starts from a small range and grows or
+	   shrinks it by 5/4 steps, accepting 90-110% of block_nnz. That
+	   only ever needs the nonzeros in a range of rows, which prefix
+	   sums of the per-row counts give directly: one pass over the
+	   matrix instead of one per search step. The steps are those of
+	   the extract_block_trans this replaced, so the blocks are
+	   unchanged */
+
+	uint32 i, j;
+	uint32 nrows = p->nrows;
 	uint32 start_row = 0;
-	uint32 start_col = 0;
-	uint32 blocksize;
+	uint32 blocksize = p->block_nnz / 10000;
+	uint64 *below = (uint64 *)xcalloc((size_t)nrows + 1, sizeof(uint64));
+
+	for (i = 0; i < p->ncols; i++) {
+		la_col_t *col = p->unpacked_cols + i;
+		for (j = 0; j < col->weight && col->data[j] < nrows; j++)
+			below[col->data[j] + 1]++;
+	}
+	for (i = 0; i < nrows; i++)
+		below[i + 1] += below[i];
+
+#define ROWS_NNZ(lo, hi) \
+	(below[MIN(hi, nrows)] - below[MIN(lo, nrows)])
+
+	while (start_row < nrows) {
+
+		uint32 row_min = start_row;
+		uint32 row_max = nrows;
+		uint64 nnz = p->block_nnz;
+		uint64 min_nnz = 9 * (nnz / 10);
+		/* the +10% search window has to stay inside what a
+		   block can hold */
+		uint64 max_nnz = MIN(11 * (nnz / 10), (uint64)MAX_BLOCK_NNZ);
+		uint32 my_blocksize = blocksize;
+		uint32 my_row_max = row_min + my_blocksize;
+		uint64 num_entries;
+
+		if (my_row_max > row_max) {
+			my_row_max = row_max;
+			my_blocksize = row_max - row_min;
+		}
+
+		while (1) {
+			num_entries = ROWS_NNZ(row_min, my_row_max);
+			if (num_entries > max_nnz) {
+				my_blocksize = 4 * (my_blocksize / 5);
+				if ((row_min == 0) &&
+				    (my_blocksize <= p->num_dense_rows)) {
+					/* just grab a few and continue */
+					my_row_max = p->num_dense_rows + 10;
+					break;
+				}
+				my_row_max = row_min + my_blocksize;
+				if (my_blocksize == 2) break;
+				min_nnz = 0;
+				continue;
+			}
+			if (num_entries < min_nnz) {
+				my_blocksize = 5 * (my_blocksize / 4);
+				my_row_max = row_min + my_blocksize;
+				if (my_row_max >= row_max) {
+					my_row_max = row_max;
+					break;
+				}
+				max_nnz = (uint64)MAX_BLOCK_NNZ;
+				continue;
+			}
+			break;
+		}
+
+		/* num_entries is the count from the last search step,
+		   which after a shrink is not the final range's */
+
+		if (num_entries == 0) /* shouldn't happen */
+			my_row_max = MIN(my_row_max + 10, row_max);
+
+		blocksize = my_row_max - row_min;
+		plan_add_block(plan, row_min, blocksize,
+				ROWS_NNZ(row_min, my_row_max), p->ncols);
+		start_row += blocksize;
+	}
+#undef ROWS_NNZ
+
+	free(below);
+}
+
+/*-------------------------------------------------------------------*/
+static uint32 spaced_block(uint32 i, uint32 m, uint32 n) {
+
+	/* the i-th of m blocks spread evenly over n */
+
+	return (uint32)(((2 * (uint64)i + 1) * n) / (2 * (uint64)m));
+}
+
+static uint32 choose_streamed(block_plan_t *plan) {
+
+	/* Choose the fewest blocks m to stream, spread evenly through
+	   the order an iteration uses them, so that the resident blocks
+	   plus the staging buffers (as many as asked for, fewer if those
+	   don't fit, and never more than m, each the size of the largest
+	   streamed block) fit in the budget and at least a fraction frac
+	   of the matrix is streamed. Fills in plan->streamed, num_slots
+	   and slot_bytes; returns m, or 0 if nothing fits */
+
+	uint32 i, m, m0, slots;
+	uint32 n = plan->num_blocks;
+	const size_t *bytes = plan->bytes;
+	size_t total = 0, cost = 0, largest_all = 0;
+
+	for (i = 0; i < n; i++) {
+		total += bytes[i];
+		cost += bytes[i] + BLOCK_ALLOC_SLACK;
+		largest_all = MAX(largest_all, bytes[i]);
+	}
+
+	/* a streamed block frees at most the largest block's cost, and
+	   supplies at most the largest block's bytes, so fewer than m0
+	   blocks can never be enough */
+
+	m0 = 1;
+	if (cost > plan->budget)
+		m0 = MAX(m0, (uint32)((cost - plan->budget) /
+				(largest_all + BLOCK_ALLOC_SLACK)));
+	m0 = MAX(m0, (uint32)(plan->frac * total / largest_all));
+	m0 = MIN(m0, n);
+
+	for (m = m0; m <= n; m++) {
+		size_t sbytes = 0, scost = 0, largest = 0;
+
+		for (i = 0; i < m; i++) {
+			uint32 k = spaced_block(i, m, n);
+			sbytes += bytes[k];
+			scost += bytes[k] + BLOCK_ALLOC_SLACK;
+			largest = MAX(largest, bytes[k]);
+		}
+		if ((double)sbytes < plan->frac * total)
+			continue;
+
+		for (slots = MIN(plan->max_slots, m);
+				slots >= MIN(2, m); slots--) {
+			if (cost - scost + slots * (largest +
+					BLOCK_ALLOC_SLACK / 2) > plan->budget)
+				continue;
+
+			memset(plan->streamed, 0, n);
+			for (i = 0; i < m; i++)
+				plan->streamed[spaced_block(i, m, n)] = 1;
+			plan->num_slots = slots;
+			plan->slot_bytes = largest;
+			return m;
+		}
+	}
+	return 0;
+}
+
+/*-------------------------------------------------------------------*/
+static uint32 gpu_under_wddm(gpudata_t *d) {
+
+	/* whether the card is driven by the Windows display driver model,
+	   natively (unless in TCC mode) or through WSL */
+
+#if defined(WIN32) || defined(_WIN64)
+	int tcc = 0;
+
+	CUDA_TRY(cuDeviceGetAttribute(&tcc, CU_DEVICE_ATTRIBUTE_TCC_DRIVER,
+				d->gpu_info->device_handle))
+	return !tcc;
+#else
+	(void)d;
+	return access("/dev/dxg", F_OK) == 0;
+#endif
+}
+
+/*-------------------------------------------------------------------*/
+static void plan_matrix(msieve_obj *obj, packed_matrix_t *p,
+			block_plan_t *plan) {
+
+	uint32 i;
 	gpudata_t *d = (gpudata_t *)p->extra;
+	size_t free_mem, total_mem, vectors, dense, avail;
+	size_t fit_cost = 0;
+	size_t margin = gpu_under_wddm(d) ? STREAM_MARGIN_WDDM :
+						STREAM_MARGIN;
+	const char *tmp;
 
-	uint32 num_block_rows = 0;
-	uint32 num_trans_block_rows = 0;
-	uint32 num_block_rows_alloc = 100;
-	uint32 num_trans_block_rows_alloc = 100;
-	block_row_t *block_rows = (block_row_t *)xmalloc(
-					num_block_rows_alloc *
-					sizeof(block_row_t));
-	block_row_t *trans_block_rows = (block_row_t *)xmalloc(
-					num_trans_block_rows_alloc *
-					sizeof(block_row_t));
+	memset(plan, 0, sizeof(block_plan_t));
+	plan->mode = PLACE_RESIDENT;
+	plan->max_slots = NUM_STREAM_SLOTS;
 
+	/* every block's extent and size, forward and (two-copy)
+	   transpose; gpu_matrix_init builds exactly these */
+
+	plan_forward_blocks(p, plan);
+	if (!d->single_copy)
+		plan_trans_blocks(p, plan);
+
+	if (d->use_cudamanaged) {
+		if (obj->nfs_args != NULL &&
+		    (strstr(obj->nfs_args, "max_gpu_mem=") ||
+		     strstr(obj->nfs_args, "stream_frac=") ||
+		     strstr(obj->nfs_args, "stream_slots=")))
+			logprintf(obj, "note: max_gpu_mem, stream_frac and "
+					"stream_slots are ignored with "
+					"use_managed=1\n");
+		return;
+	}
+
+	/* what the sparse blocks may use: the free memory now, less the
+	   vectors and dense rows (allocated later), and when streaming,
+	   less a margin. max_gpu_mem=MB is used instead of the free
+	   memory, with no margin, as the memory the matrix and vectors
+	   may take; stream_frac=F streams at least that fraction of the
+	   sparse matrix and stream_slots=N sets the number of staging
+	   buffers */
+
+	CUDA_TRY(cuMemGetInfo(&free_mem, &total_mem))
+	vectors = vector_mem_bytes(p);
+	dense = ((p->num_dense_rows + VBITS - 1) / VBITS) *
+			(size_t)p->ncols * sizeof(v_t);
+	avail = free_mem > vectors + dense ? free_mem - vectors - dense : 0;
+
+	if (obj->nfs_args != NULL &&
+	    (tmp = strstr(obj->nfs_args, "max_gpu_mem=")) != NULL) {
+		size_t limit = (size_t)strtoull(tmp + 12, NULL, 10) << 20;
+		avail = limit > vectors + dense ? limit - vectors - dense : 0;
+		margin = 0;
+	}
+	plan->budget = avail > margin ? avail - margin : 0;
+
+	if (obj->nfs_args != NULL &&
+	    (tmp = strstr(obj->nfs_args, "stream_frac=")) != NULL) {
+		plan->frac = atof(tmp + 12);
+		if (!(plan->frac > 0))		/* also catches NaN */
+			plan->frac = 0;
+		if (plan->frac > 1)
+			plan->frac = 1;
+	}
+	if (obj->nfs_args != NULL &&
+	    (tmp = strstr(obj->nfs_args, "stream_slots=")) != NULL)
+		plan->max_slots = MIN(16, MAX(2, atoi(tmp + 13)));
+
+	for (i = 0; i < plan->num_blocks; i++)
+		fit_cost += plan->bytes[i] + BLOCK_ALLOC_SLACK_AVG;
+
+	logprintf(obj, "GPU memory: %.0f MB free, %.0f MB for vectors, "
+			"%.0f MB for sparse matrix blocks (%.0f MB needed)\n",
+			(double)free_mem / 1048576, (double)vectors / 1048576,
+			(double)avail / 1048576, (double)fit_cost / 1048576);
+
+	if (plan->frac == 0 && fit_cost <= avail)
+		return;
+
+	plan->streamed = (uint8 *)xmalloc(plan->num_blocks);
+	if (choose_streamed(plan) == 0) {
+		logprintf(obj, "warning: cannot stream the matrix within "
+				"%.0f MB (a smaller block_nnz may help); "
+				"trying to load all of it onto the card\n",
+				(double)plan->budget / 1048576);
+		free(plan->streamed);
+		plan->streamed = NULL;
+		return;
+	}
+	if (margin > 0)
+		logprintf(obj, "leaving %u MB of GPU memory free while "
+				"streaming (use max_gpu_mem=N to change)\n",
+				(uint32)(margin >> 20));
+	plan->mode = PLACE_STREAM;
+}
+
+/*-------------------------------------------------------------------*/
+static void alloc_staging(gpudata_t *d, uint32 num_slots, size_t bytes) {
+
+	/* the staging buffers streamed blocks are copied into. They are
+	   the busiest memory on a nearly full card, so they are allocated
+	   before the resident blocks in case the last allocations are
+	   the ones WDDM would put in system memory; on the C189 TD=90
+	   matrix the order made no measurable difference */
+
+	uint32 i;
+
+	d->num_slots = num_slots;
+	d->slots = (stream_slot_t *)xcalloc(num_slots, sizeof(stream_slot_t));
+	for (i = 0; i < num_slots; i++) {
+		stream_slot_t *s = d->slots + i;
+		CUDA_TRY(cuMemAlloc(&s->buf, bytes))
+		CUDA_TRY(cuEventCreate(&s->ready, CU_EVENT_DISABLE_TIMING))
+		CUDA_TRY(cuEventCreate(&s->freed, CU_EVENT_DISABLE_TIMING))
+	}
+	CUDA_TRY(cuStreamCreate(&d->copy_stream, CU_STREAM_NON_BLOCKING))
+	d->staging_bytes = num_slots * bytes;
+}
+
+/*-------------------------------------------------------------------*/
+static void check_block(block_plan_t *plan, uint32 k, uint32 size,
+			uint64 num_entries) {
+
+	/* the planned counts come from the same column data, so this
+	   only fails on a bug */
+
+	if (size != plan->size[k] || num_entries != plan->nnz[k]) {
+		printf("error: matrix block %u has %u lines and %" PRIu64
+			" nonzeros, planned %u and %" PRIu64 "\n",
+			k, size, num_entries,
+			plan->size[k], plan->nnz[k]);
+		exit(-1);
+	}
+}
+
+static void gpu_matrix_init(packed_matrix_t *p, block_plan_t *plan) {
+
+	uint32 i;
+	gpudata_t *d = (gpudata_t *)p->extra;
+	uint32 streaming = (plan->mode == PLACE_STREAM);
+	uint32 num_trans = plan->num_blocks - plan->num_forward;
 	uint64 num_entries_alloc = 10000;
 	entry_idx_t *entries = (entry_idx_t *)xmalloc(
 					num_entries_alloc *
 					sizeof(entry_idx_t));
 
+	if (streaming)
+		alloc_staging(d, plan->num_slots, plan->slot_bytes);
+
 	/* deal with the dense rows */
 
 	copy_dense(p);
 
-	/* deal with the sparse rows */
+	/* deal with the sparse rows, block by block as planned. Blocks
+	   go onto the card as they are built, except those the plan
+	   streams, which are packed into host memory */
 
-	printf("converting matrix to CSR and copying it onto the GPU\n");
+	printf("converting matrix to CSR\n");
 
-	while (start_col < p->ncols) {
+	d->num_block_rows = plan->num_forward;
+	d->block_rows = (block_row_t *)xcalloc(MAX(1, plan->num_forward),
+					sizeof(block_row_t));
 
-		block_row_t *b;
+	for (i = 0; i < plan->num_forward; i++) {
+
+		block_row_t *b = d->block_rows + i;
+		uint32 blocksize;
 		uint64 num_entries;
 
 		num_entries = extract_block(p->unpacked_cols,
 					0, p->nrows,
-					start_col, p->ncols,
-				 	p->block_nnz,
+					plan->start[i],
+					plan->start[i] + plan->size[i],
+					(uint64)(-1),
 					&blocksize,
 					&entries,
 					&num_entries_alloc);
+		check_block(plan, i, blocksize, num_entries);
 
-		if (num_block_rows == num_block_rows_alloc) {
-			num_block_rows_alloc *= 2;
-			block_rows = (block_row_t *)xrealloc(
-					block_rows,
-					num_block_rows_alloc *
-					sizeof(block_row_t));
-		}
-
-		b = block_rows + num_block_rows++;
 		b->blocksize = blocksize;
-		pack_matrix_block(d, b, entries, num_entries,
-				0, p->nrows, 
-				start_col,
-				start_col + b->blocksize,
-				0);
-
-		start_col += b->blocksize;
+		b->start = plan->start[i];
+		pack_matrix_block(b, entries, num_entries,
+				0, p->nrows,
+				b->start, b->start + blocksize,
+				0, streaming && plan->streamed[i]);
+		if (!b->streamed)
+			upload_block(d, b);
 	}
 
-	d->num_block_rows = num_block_rows;
-	d->block_rows = block_rows;
+	/* the transpose of the matrix; in single-copy mode the
+	   transpose multiply reuses the blocks above instead */
 
-	/* handle the transpose of the matrix; in single-copy mode
-	   the transpose multiply reuses the blocks above instead */
+	d->num_trans_block_rows = num_trans;
+	d->trans_block_rows = (block_row_t *)xcalloc(MAX(1, num_trans),
+					sizeof(block_row_t));
 
-	/* First rows are heavy so suggest a small initial blocksize */
-	blocksize = p->block_nnz / 10000;
-	while (!d->single_copy && start_row < p->nrows) {
+	for (i = 0; i < num_trans; i++) {
 
-		block_row_t *b;
+		uint32 k = plan->num_forward + i;
+		block_row_t *b = d->trans_block_rows + i;
 		uint64 num_entries;
 
-		num_entries = extract_block_trans(p->unpacked_cols,
-					start_row,
-					p->nrows,
-					0, p->ncols,
-					p->block_nnz,
-					p->num_dense_rows,
-					&blocksize,
+		num_entries = extract_rows(p->unpacked_cols, p->ncols,
+					plan->start[k],
+					plan->start[k] + plan->size[k],
 					&entries,
 					&num_entries_alloc);
+		check_block(plan, k, plan->size[k], num_entries);
 
-		if (num_trans_block_rows == num_trans_block_rows_alloc) {
-			num_trans_block_rows_alloc *= 2;
-			trans_block_rows = (block_row_t *)xrealloc(
-					trans_block_rows,
-					num_trans_block_rows_alloc *
-					sizeof(block_row_t));
-		}
-
-		b = trans_block_rows + num_trans_block_rows++;
-		b->blocksize = blocksize;
-		pack_matrix_block(d, b, entries, num_entries,
-				0, p->ncols, 
-				start_row,
-				start_row + b->blocksize,
-				1);
-
-		start_row += b->blocksize;
+		b->blocksize = plan->size[k];
+		b->start = plan->start[k];
+		pack_matrix_block(b, entries, num_entries,
+				0, p->ncols,
+				b->start, b->start + b->blocksize,
+				1, streaming && plan->streamed[k]);
+		if (!b->streamed)
+			upload_block(d, b);
 	}
-
-	d->num_trans_block_rows = num_trans_block_rows;
-	d->trans_block_rows = trans_block_rows;
 
 	free(entries);
 }
 
 /*-------------------------------------------------------------------*/
+static void free_block(block_row_t *b) {
+
+	if (b->pinned) {
+		CUDA_TRY(cuMemFreeHost(b->host_data))
+	}
+	else if (b->streamed) {
+		free(b->host_data);
+	}
+	else {
+		CUDA_TRY(cuMemFree(b->row_entries))
+		CUDA_TRY(cuMemFree(b->col_entries))
+	}
+}
+
 static void gpu_matrix_free(packed_matrix_t *p) {
 
 	uint32 i;
 	gpudata_t *d = (gpudata_t *)p->extra;
 
-	for (i = 0; i < d->num_block_rows; i++) {
-		block_row_t *b = d->block_rows + i;
+	/* no copies may still be reading pinned host memory */
+	CUDA_TRY(cuCtxSynchronize())
 
-		CUDA_TRY(cuMemFree(b->row_entries))
-		CUDA_TRY(cuMemFree(b->col_entries))
-	}
+	for (i = 0; i < d->num_block_rows; i++)
+		free_block(d->block_rows + i);
 	free(d->block_rows);
 
-	for (i = 0; i < d->num_trans_block_rows; i++) {
-		block_row_t *b = d->trans_block_rows + i;
-
-		CUDA_TRY(cuMemFree(b->row_entries))
-		CUDA_TRY(cuMemFree(b->col_entries))
-	}
+	for (i = 0; i < d->num_trans_block_rows; i++)
+		free_block(d->trans_block_rows + i);
 	free(d->trans_block_rows);
+
+	for (i = 0; i < d->num_slots; i++) {
+		stream_slot_t *s = d->slots + i;
+		CUDA_TRY(cuMemFree(s->buf))
+		CUDA_TRY(cuEventDestroy(s->ready))
+		CUDA_TRY(cuEventDestroy(s->freed))
+	}
+	free(d->slots);
+	free(d->sched);
+	if (d->copy_stream != NULL)
+		CUDA_TRY(cuStreamDestroy(d->copy_stream))
 
 	for (i = 0; i < (p->num_dense_rows + VBITS - 1) / VBITS; i++)
 		CUDA_TRY(cuMemFree(d->dense_blocks[i]))
 	free(d->dense_blocks);
+}
+
+/*-------------------------------------------------------------------*/
+static void setup_schedule(msieve_obj *obj, packed_matrix_t *p,
+			block_plan_t *plan) {
+
+	/* the schedule: the streamed blocks in the order one iteration
+	   uses them. In single-copy mode each is used twice, forward
+	   and then (in reverse block order) by the transpose product */
+
+	uint32 i, m = 0, len = 0;
+	gpudata_t *d = (gpudata_t *)p->extra;
+	uint32 n = d->num_block_rows + d->num_trans_block_rows;
+	block_row_t **order;
+	size_t streamed_bytes = 0;
+
+	if (plan->mode != PLACE_STREAM)
+		return;
+
+	order = (block_row_t **)xmalloc(n * sizeof(block_row_t *));
+	for (i = 0; i < d->num_block_rows; i++)
+		order[i] = d->block_rows + i;
+	for (i = 0; i < d->num_trans_block_rows; i++)
+		order[d->num_block_rows + i] = d->trans_block_rows + i;
+
+	for (i = 0; i < n; i++) {
+		if (order[i]->streamed) {
+			m++;
+			streamed_bytes += order[i]->bytes;
+		}
+	}
+
+	d->sched = (block_row_t **)xmalloc(2 * m * sizeof(block_row_t *));
+	for (i = 0; i < n; i++) {
+		if (order[i]->streamed) {
+			order[i]->sched_idx[0] = len;
+			order[i]->sched_idx[1] = len;
+			d->sched[len++] = order[i];
+		}
+	}
+	if (d->single_copy) {
+		for (i = n; i-- > 0; ) {
+			if (order[i]->streamed) {
+				order[i]->sched_idx[1] = len;
+				d->sched[len++] = order[i];
+			}
+		}
+	}
+	d->sched_len = len;
+
+	/* with no more streamed blocks than buffers, each block gets
+	   copied in once and stays; nothing is copied per iteration */
+
+	d->streamed_bytes = (m > d->num_slots) ? streamed_bytes : 0;
+	if (d->streamed_bytes > 0)
+		logprintf(obj, "streaming %u of %u matrix blocks (%.0f MB) "
+				"from pinned host memory through %u %.0f MB "
+				"buffers\n", m, n,
+				(double)streamed_bytes / 1048576,
+				d->num_slots, (double)plan->slot_bytes / 1048576);
+	else
+		logprintf(obj, "%u of %u matrix blocks (%.0f MB) are held in "
+				"their own staging buffers; nothing is copied "
+				"per iteration\n", m, n,
+				(double)streamed_bytes / 1048576);
+
+	free(order);
+}
+
+/*-------------------------------------------------------------------*/
+static uint32 sched_distance(gpudata_t *d, block_row_t *b, uint32 pos) {
+
+	/* how many schedule entries from pos until b is used again */
+
+	uint32 d0 = (b->sched_idx[0] + d->sched_len - pos) % d->sched_len;
+	uint32 d1 = (b->sched_idx[1] + d->sched_len - pos) % d->sched_len;
+	return MIN(d0, d1);
+}
+
+/*-------------------------------------------------------------------*/
+static stream_slot_t * stream_load(gpudata_t *d, block_row_t *b,
+				uint32 pos) {
+
+	/* make sure block b is in a staging buffer or being copied into
+	   one. Otherwise evict the block that the schedule, from position
+	   pos, uses furthest in the future */
+
+	uint32 i;
+	uint32 victim = 0;
+	uint32 victim_dist = 0;
+	stream_slot_t *s;
+
+	for (i = 0; i < d->num_slots; i++) {
+		uint32 dist;
+
+		s = d->slots + i;
+		if (s->blk == b)
+			return s;
+
+		dist = (s->blk == NULL) ? d->sched_len :
+				sched_distance(d, s->blk, pos);
+		if (i == 0 || dist > victim_dist) {
+			victim = i;
+			victim_dist = dist;
+		}
+	}
+
+	s = d->slots + victim;
+	CUDA_TRY(cuStreamWaitEvent(d->copy_stream, s->freed, 0))
+	CUDA_TRY(cuMemcpyHtoDAsync(s->buf, b->host_data, b->bytes,
+				d->copy_stream))
+	CUDA_TRY(cuEventRecord(s->ready, d->copy_stream))
+	s->blk = b;
+	return s;
 }
 
 /*------------------------------------------------------------------------*/
@@ -788,6 +1376,8 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	gpu_config_t gpu_config;
 	gpu_info_t *gpu_info;
 	CUresult status;
+	block_plan_t plan;
+	uint32 floor_binds = 0;
 
 	/* select card, save info struct */
 
@@ -897,11 +1487,19 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	/* Set preferred nonzeros per matrix block. The default sizes the
 	   active input-vector window of each column-slice SpMV block to
 	   about half the L2 cache, with a floor that keeps per-block
-	   overhead (replicated row pointers, launch count) amortized.
-	   Within ~5% of the measured optimum on RTX 5070 (48MB L2) and
-	   Tesla V100 (6MB L2) at VBITS 64/128/256; on an RTX 3060 (3MB
-	   L2) at VBITS=256 a single block was ~7% faster. See
-	   LANCZOS_OPTIMIZATION_NOTES.md. Override with block_nnz=N
+	   overhead amortized. Every block spans all the rows (all the
+	   columns for the transpose): it carries a full row pointer
+	   array and rewrites the whole output vector, so the floor
+	   grows with the rows. A block must gather at least 12 times as
+	   many 32-byte sectors as it rewrites (2*sizeof(v_t) bytes per
+	   output row), and never fewer than 128M nonzeros. On a tall MPI
+	   piece (A100, 61M rows) the old fixed 128M floor was 13.5%
+	   slower than 1.75B; on the square matrices we tested the row
+	   floor leaves every measured optimum alone. Within ~5% of the
+	   measured optimum on RTX 5070 (48MB L2) and Tesla V100 (6MB L2)
+	   at VBITS 64/128/256; on an RTX 3060 (3MB L2) at VBITS=256 a
+	   single block was ~7% faster. See LANCZOS_OPTIMIZATION_NOTES.md.
+	   Override with block_nnz=N
 
 	   In single-copy mode the same window is also the output range
 	   of the transpose scatter, whose atomics are only cheap while
@@ -912,7 +1510,9 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	   full row pointer array, though, so on cards with a small L2
 	   the floor keeps those arrays to at most half the size of the
 	   column indices; otherwise they eat the memory the missing
-	   transpose saves */
+	   transpose saves. When that floor binds, single copy was
+	   slower than two copies everywhere we measured (RTX 3060 -19%,
+	   A100 MPI piece -52%): it then only saves memory */
 
 	p->block_nnz = 1750000000;
 	if (p->unpacked_cols != NULL && p->ncols > 0) {
@@ -932,11 +1532,19 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		computed = (uint64)((double)(l2_bytes /
 					(d->single_copy ? 3 : 2)) /
 					sizeof(v_t) * avg_col_weight);
-		if (d->single_copy)
-			computed = MAX(computed, MAX(16000000,
-						2 * (uint64)p->nrows));
-		else
-			computed = MAX(computed, 128000000);
+		if (d->single_copy) {
+			uint64 row_floor = MAX(16000000, 2 * (uint64)p->nrows);
+
+			if (computed < row_floor)
+				floor_binds = 1;
+			computed = MAX(computed, row_floor);
+		}
+		else {
+			uint64 row_floor = 12 * (uint64)MAX(p->nrows, p->ncols) *
+					sizeof(v_t) / 32;
+
+			computed = MAX(computed, MAX(128000000, row_floor));
+		}
 		computed = MIN(computed, (uint64)MAX_BLOCK_NNZ);
 		p->block_nnz = (uint32)computed;
 		logprintf(obj, "computed block_nnz %u (L2 cache %d bytes, "
@@ -971,8 +1579,14 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 			if (p->block_nnz < 100000) p->block_nnz = 100000;
 			if (p->block_nnz > MAX_BLOCK_NNZ)
 				p->block_nnz = MAX_BLOCK_NNZ;
+			floor_binds = 0;
 		}
 	}
+	if (floor_binds)
+		logprintf(obj, "note: single_copy's L2-sized blocks are "
+				"smaller than its row pointer floor; expect it "
+				"to be slower than two copies, only saving GPU "
+				"memory\n");
 	logprintf(obj, "nonzeros per matrix block: %u\n", p->block_nnz);
 
 	/* choose the kernel for the gather products (everything but
@@ -1016,9 +1630,12 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	/* Adjust L2 fetch granularity. Default is 128. Tried 32 for VBITS=256, but makes no difference */
 	/* if (gpu_info->compute_version_major >= 8) CUDA_TRY(cuCtxSetLimit(CU_LIMIT_MAX_L2_FETCH_GRANULARITY, 32)) */
 
-	/* set up the matrix on the card */
+	/* set up the matrix on the card, streaming what doesn't fit */
 
-	gpu_matrix_init(p);
+	plan_matrix(obj, p, &plan);
+	gpu_matrix_init(p, &plan);
+	setup_schedule(obj, p, &plan);
+	plan_free(&plan);
 }
 
 /*-------------------------------------------------------------------*/
@@ -1046,11 +1663,30 @@ void matrix_extra_free(packed_matrix_t *p) {
 /*-------------------------------------------------------------------*/
 static void run_spmv_block(gpudata_t *d, block_row_t *blk,
 			CUdeviceptr vector_in, CUdeviceptr vector_out,
-			spmv_engine_run_func run, const char *label) {
+			spmv_engine_run_func run, uint32 pass,
+			const char *label) {
 
 	spmv_data_t spmv_data;
+	stream_slot_t *slot = NULL;
+	uint32 pos = 0;
 
-	if (d->use_cudamanaged == 2) {
+	spmv_data.col_entries = blk->col_entries;
+	spmv_data.row_entries = blk->row_entries;
+
+	if (blk->streamed) {
+
+		/* a streamed block: wait for its copy, which was usually
+		   started while earlier blocks ran. pass is 1 for the
+		   single-copy transpose product */
+
+		pos = blk->sched_idx[pass];
+		slot = stream_load(d, blk, pos);
+		CUDA_TRY(cuStreamWaitEvent(NULL, slot->ready, 0))
+		spmv_data.col_entries = slot->buf;
+		spmv_data.row_entries = slot->buf +
+				blk->row_offset * sizeof(uint32);
+	}
+	else if (d->use_cudamanaged == 2) {
 		CUDA_TRY(my_cuMemPrefetchAsync(blk->col_entries,
 			blk->num_col_entries * sizeof(uint32),
 			d->gpu_info->device_handle, 0))
@@ -1060,8 +1696,6 @@ static void run_spmv_block(gpudata_t *d, block_row_t *blk,
 	}
 	spmv_data.num_rows = blk->num_rows;
 	spmv_data.num_col_entries = blk->num_col_entries;
-	spmv_data.col_entries = blk->col_entries;
-	spmv_data.row_entries = blk->row_entries;
 	spmv_data.vector_in = vector_in;
 	spmv_data.vector_out = vector_out;
 
@@ -1069,6 +1703,18 @@ static void run_spmv_block(gpudata_t *d, block_row_t *blk,
 	run(d->spmv_engine, &spmv_data);
 	LANCZOS_NVTX_POP();
 	(void)label;
+
+	if (slot != NULL) {
+		uint32 i;
+
+		/* the buffer can be reused once this SpMV is done; start
+		   copying the next streamed blocks the schedule needs */
+
+		CUDA_TRY(cuEventRecord(slot->freed, NULL))
+		for (i = 1; i < d->num_slots; i++)
+			stream_load(d, d->sched[(pos + i) % d->sched_len],
+					pos);
+	}
 }
 
 /*-------------------------------------------------------------------*/
@@ -1076,7 +1722,6 @@ static void mul_packed_gpu(packed_matrix_t *p,
 				gpuvec_t *x, gpuvec_t *b) {
 
 	uint32 i;
-	uint32 start_col = 0;
 	gpudata_t *d = (gpudata_t *)p->extra;
 
 	LANCZOS_NVTX_PUSH("mul_packed.memset", LANCZOS_NVTX_COLOR_MUL);
@@ -1092,10 +1737,9 @@ static void mul_packed_gpu(packed_matrix_t *p,
 		block_row_t *blk = d->block_rows + i;
 
 		run_spmv_block(d, blk,
-			(CUdeviceptr)((v_t *)x->gpu_vec + start_col),
-			b->gpu_vec, d->spmv_engine_run,
+			(CUdeviceptr)((v_t *)x->gpu_vec + blk->start),
+			b->gpu_vec, d->spmv_engine_run, 0,
 			"spmv_engine_run.normal");
-		start_col += blk->blocksize;
 	}
 	LANCZOS_NVTX_POP();
 
@@ -1134,35 +1778,31 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 
 		/* no transpose on the card: sweep through the matrix
 		   a block col at a time, scattering into that block's
-		   columns of b */
+		   columns of b. Going backwards starts with the blocks
+		   the forward product used last, which matters when
+		   they are streamed from the host */
 
-		uint32 start_col = 0;
-
-		for (i = 0; i < d->num_block_rows; i++) {
+		for (i = d->num_block_rows; i-- > 0; ) {
 
 			block_row_t *blk = d->block_rows + i;
 
 			run_spmv_block(d, blk, x->gpu_vec,
-				(CUdeviceptr)((v_t *)b->gpu_vec + start_col),
-				d->spmv_engine_run_trans,
+				(CUdeviceptr)((v_t *)b->gpu_vec + blk->start),
+				d->spmv_engine_run_trans, 1,
 				"spmv_engine_run.trans_scatter");
-			start_col += blk->blocksize;
 		}
 	}
 	else {
 		/* sweep through the transpose a block row at a time */
-
-		uint32 start_row = 0;
 
 		for (i = 0; i < d->num_trans_block_rows; i++) {
 
 			block_row_t *blk = d->trans_block_rows + i;
 
 			run_spmv_block(d, blk,
-				(CUdeviceptr)((v_t *)x->gpu_vec + start_row),
-				b->gpu_vec, d->spmv_engine_run,
+				(CUdeviceptr)((v_t *)x->gpu_vec + blk->start),
+				b->gpu_vec, d->spmv_engine_run, 0,
 				"spmv_engine_run.trans");
-			start_row += blk->blocksize;
 		}
 	}
 	LANCZOS_NVTX_POP();
@@ -1269,18 +1909,10 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 	size_t mem_use, tot_mem_use;
 	gpudata_t *d = (gpudata_t*) p->extra;
 
-	/* account for the vectors used in the lanczos iteration */
+	/* account for the vectors used in the lanczos iteration,
+	   and for the vv kernel scratch array */
 
-#ifdef HAVE_MPI
-	mem_use = (6 * p->nsubcols + 2 * 
-			MAX(p->nrows, p->ncols)) * sizeof(v_t);
-#else
-	mem_use = 7 * p->max_ncols * sizeof(v_t);
-#endif
-
-	/* and for the vv kernel scratch array */
-
-	mem_use += VBITS * sizeof(v_t);
+	mem_use = vector_mem_bytes(p);
 
 	tot_mem_use = mem_use;
 	printf("vector memory use: %.1f MB\n", (double)mem_use/1048576);
@@ -1295,20 +1927,29 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 
 	mem_use = 0;
 
-	/* matrix in CSR format */
+	/* matrix in CSR format, and its transpose, where on the card;
+	   streamed blocks only take up the staging buffers */
 	for (i = 0; i < d->num_block_rows; i++) {
 		block_row_t *b = d->block_rows + i;
-		mem_use += (b->num_rows + 1 + b->num_col_entries) * sizeof(uint32);
+		if (!b->streamed)
+			mem_use += (b->num_rows + 1 + b->num_col_entries) * sizeof(uint32);
 	}
 
-	/* transpose matrix in CSR format */
 	for (i = 0; i < d->num_trans_block_rows; i++) {
 		block_row_t *b = d->trans_block_rows + i;
-		mem_use += (b->num_rows + 1 + b->num_col_entries) * sizeof(uint32);
+		if (!b->streamed)
+			mem_use += (b->num_rows + 1 + b->num_col_entries) * sizeof(uint32);
 	}
+	mem_use += d->staging_bytes;
 
 	tot_mem_use += mem_use;
 	printf("sparse matrix memory use: %.1f MB\n", (double)mem_use/1048576);
+	if (d->num_slots > 0 && d->streamed_bytes == 0)
+		printf("streamed from host memory: 0.0 MB (blocks held in "
+			"their staging buffers)\n");
+	else
+		printf("streamed from host memory: %.1f MB\n",
+				(double)d->streamed_bytes/1048576);
 
 	return tot_mem_use;
 }

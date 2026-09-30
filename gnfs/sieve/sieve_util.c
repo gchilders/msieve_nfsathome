@@ -128,9 +128,9 @@ double get_log_base(mpz_poly_t *poly,
 }
 
 /*------------------------------------------------------------------*/
-uint32 read_last_line(msieve_obj *obj, mpz_t n) {
+uint64 read_last_line(msieve_obj *obj, mpz_t n) {
 
-	uint32 last_line = 0;
+	uint64 last_line = 0;
 	char buf[LINE_BUF_SIZE];
 	FILE *linefile;
 	mpz_t read_n;
@@ -146,7 +146,7 @@ uint32 read_last_line(msieve_obj *obj, mpz_t n) {
 		gmp_sscanf(buf + 2, "%Zd", read_n);
 	if (mpz_cmp(n, read_n) == 0) {
 		fgets(buf, (int)sizeof(buf), linefile);
-		last_line = atoi(buf);
+		last_line = strtoull(buf, NULL, 10);	/* write_last_line writes 64 bits */
 	}
 
 	fclose(linefile);

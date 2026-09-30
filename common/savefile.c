@@ -16,6 +16,20 @@ $Id$
 
 #define SAVEFILE_STAGE_BUF (4 * 1024 * 1024)
 
+#ifdef NO_ZLIB
+/* the stdio stand-ins for the zlib calls savefile_stage() makes beyond
+   the ones util.h maps. fread reports both end of file and failure as
+   a short count, so split them the way gzread does */
+
+static int stage_read(FILE *f, void *buf, unsigned len) {
+	size_t n = fread(buf, 1, len, f);
+	return (n == 0 && ferror(f)) ? -1 : (int)n;
+}
+#define gzread stage_read
+#define gzbuffer(f, n) setvbuf(f, NULL, _IOFBF, n)
+#define gzerror(f, e) (*(e) = -1, "read error")
+#endif
+
 /* we need a generic interface for reading and writing lines
    of data to the savefile while a factorization is in progress.
    This is necessary for two reasons: first, early msieve 
@@ -48,11 +62,73 @@ static const char *savefile_basename(const char *path) {
 	return slash;
 }
 
+/* A scratch directory that is really the savefile's own directory has to
+   be treated as no scratch at all: staging would open the savefile for
+   writing while reading it, then delete it, and the matrix build would
+   delete the finished matrix as its own work file. Comparing the path
+   strings misses "." against a bare file name, a trailing slash, and so
+   on, so compare what they refer to. */
+
+static uint32 same_directory(const char *a, const char *b) {
+
+#if defined(WIN32) || defined(_WIN64)
+	char full_a[MAX_PATH], full_b[MAX_PATH];
+	size_t la, lb;
+
+	if (_fullpath(full_a, a, sizeof(full_a)) == NULL ||
+	    _fullpath(full_b, b, sizeof(full_b)) == NULL)
+		return 0;
+	la = strlen(full_a);
+	lb = strlen(full_b);
+	while (la > 3 && (full_a[la-1] == '\\' || full_a[la-1] == '/'))
+		full_a[--la] = 0;
+	while (lb > 3 && (full_b[lb-1] == '\\' || full_b[lb-1] == '/'))
+		full_b[--lb] = 0;
+	return _stricmp(full_a, full_b) == 0;
+#else
+	struct stat sa, sb;
+
+	if (stat(a, &sa) != 0 || stat(b, &sb) != 0)
+		return 0;
+	return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+#endif
+}
+
+void savefile_check_scratch(msieve_obj *obj) {
+
+	char dir[256];
+	const char *base;
+	size_t len;
+
+	if (obj->scratch_checked)
+		return;
+	obj->scratch_checked = 1;
+	if (obj->scratch_dir == NULL)
+		return;
+
+	base = savefile_basename(obj->savefile.name);
+	len = (size_t)(base - obj->savefile.name);
+	if (len == 0)
+		snprintf(dir, sizeof(dir), ".");
+	else if (len < sizeof(dir))
+		snprintf(dir, sizeof(dir), "%.*s", (int)len, obj->savefile.name);
+	else
+		return;
+
+	if (same_directory(obj->scratch_dir, dir)) {
+		logprintf(obj, "scratch directory '%s' holds the savefile; "
+				"not using a scratch directory\n",
+				obj->scratch_dir);
+		obj->scratch_dir = NULL;
+	}
+}
+
 void get_filter_tmp_name(msieve_obj *obj, char *buf,
 			size_t buf_len, const char *suffix) {
 
 	int len;
 
+	savefile_check_scratch(obj);
 	if (obj->scratch_dir == NULL) {
 		len = snprintf(buf, buf_len, "%s%s", obj->savefile.name,
 				suffix);
@@ -115,6 +191,7 @@ uint32 savefile_stage(msieve_obj *obj) {
 	struct stat dummy;
 #endif
 
+	savefile_check_scratch(obj);
 	if (obj->scratch_dir == NULL || obj->savefile.staged_name != NULL)
 		return 0;
 
@@ -374,8 +451,10 @@ void savefile_open(savefile_t *s, uint32 flags) {
 	/* zlib defaults to an 8KB buffer, and refills it a great many
 	   times over a savefile of tens of gigabytes */
 
+#ifndef NO_ZLIB
 	if (!s->is_a_FILE)
 		gzbuffer((gzFile)s->fp, 1 << 20);
+#endif
 #endif
 
 	s->buf_off = 0;

@@ -52,22 +52,6 @@ else
 	LIBS += -ldl
 endif
 ifdef CUDA
-# Preserve the historical CUDA=cc interface for single-architecture builds,
-# and allow CUDA_ARCHS to request one executable containing several native
-# cubins. CUDA_ARCHS may be space- or comma-separated. The first architecture
-# is also the default PTX virtual architecture unless CUDA_PTX_ARCH is set.
-ifeq ($(CUDA),1)
-	CUDA_ARCHS ?= 80 86 89 90 120
-else
-	CUDA_ARCHS ?= $(CUDA)
-endif
-comma := ,
-CUDA_ARCH_LIST := $(strip $(subst $(comma), ,$(CUDA_ARCHS)))
-CUDA_PTX_ARCH ?= $(firstword $(CUDA_ARCH_LIST))
-CUDA_GENCODE := $(foreach arch,$(CUDA_ARCH_LIST),-gencode arch=compute_$(arch),code=sm_$(arch))
-CUDA_FATBIN_GENCODE := $(CUDA_GENCODE) \
-	-gencode arch=compute_$(CUDA_PTX_ARCH),code=compute_$(CUDA_PTX_ARCH)
-
 ifeq ($(WIN),1)
 	CUDA_ROOT = $(shell echo $$CUDA_PATH)
 	NVCC = "$(CUDA_ROOT)/bin/nvcc"
@@ -95,6 +79,43 @@ else
 	BIN2C = msieve_bin2c
 	CUDA_SINGLE_BINARY ?= 1
 endif
+
+# Preserve the historical CUDA=cc interface for single-architecture builds,
+# and allow CUDA_ARCHS to request one executable containing several native
+# cubins. CUDA_ARCHS may be space- or comma-separated. The first architecture
+# is also the default PTX virtual architecture unless CUDA_PTX_ARCH is set.
+#
+# CUDA=1 asks this nvcc which architectures it supports and builds native
+# code for the current cards among them (80 86 89 90 120), plus two PTX
+# images: one for the oldest supported architecture from sm_60 (the old
+# CUDA=1 default) up, so older cards can JIT it, and one for compute_80.
+# The driver JITs the newest PTX a card can run, so a card with no native
+# code here (e.g. sm_100) gets compute_80 code and CUB's tuning for it
+# rather than Pascal's. Toolkits too old to list architectures (before
+# 11.0) get the historical sm_60 build.
+CUDA_PTX_EXTRA =
+ifeq ($(CUDA),1)
+ifeq ($(origin CUDA_ARCHS),undefined)
+NVCC_ARCHS := $(patsubst compute_%,%,$(shell $(NVCC) --list-gpu-arch 2>/dev/null))
+ifeq ($(strip $(NVCC_ARCHS)),)
+	CUDA_ARCHS = 60
+else
+	CUDA_ARCHS = $(filter $(NVCC_ARCHS),80 86 89 90 120)
+	CUDA_PTX_ARCH ?= $(firstword $(filter $(NVCC_ARCHS),60 61 62 70 72 75 80))
+	CUDA_PTX_EXTRA = $(filter 80,$(NVCC_ARCHS))
+endif
+endif
+else
+	CUDA_ARCHS ?= $(CUDA)
+endif
+comma := ,
+space := $(subst ,, )
+CUDA_ARCH_LIST := $(strip $(subst $(comma), ,$(CUDA_ARCHS)))
+CUDA_PTX_ARCH ?= $(firstword $(CUDA_ARCH_LIST))
+CUDA_GENCODE := $(foreach arch,$(CUDA_ARCH_LIST),-gencode arch=compute_$(arch),code=sm_$(arch))
+CUDA_FATBIN_GENCODE := $(CUDA_GENCODE) \
+	$(foreach arch,$(sort $(CUDA_PTX_ARCH) $(CUDA_PTX_EXTRA)),-gencode arch=compute_$(arch),code=compute_$(arch))
+
 	CFLAGS += -I"$(CUDA_ROOT)/include" -Icub -DHAVE_CUDA
 ifeq ($(CUDA_SINGLE_BINARY),1)
 	CFLAGS += -DMSIEVE_CUDA_SINGLE_BINARY
@@ -371,9 +392,12 @@ help:
 	@echo "add 'WIN64=1 if building on 64-bit windows"
 	@echo "add 'ECM=1' if GMP-ECM is available (enables ECM)"
 	@echo "add 'CUDA=1' for Nvidia graphics card support"
-	@echo "     CUDA=1 defaults to 80 86 89 90 120"
+	@echo "     CUDA=1 builds native code for whichever of 80 86 89 90 120 nvcc"
+	@echo "     supports, plus PTX for compute_80 and for the oldest architecture"
+	@echo "     from sm_60 up that nvcc supports"
 	@echo "     use CUDA_ARCHS=\"80 86 89 90\" to embed several native architectures"
-	@echo "     CUDA_PTX_ARCH defaults to the first CUDA_ARCHS entry and supplies PTX fallback"
+	@echo "     CUDA_PTX_ARCH (with CUDA=cc or CUDA_ARCHS: the first CUDA_ARCHS"
+	@echo "     entry) supplies the PTX fallback"
 	@echo "     CUDA_SINGLE_BINARY=1 is the Unix default; =0 selects legacy external CUDA files"
 	@echo "add 'MPI=1' for parallel processing using MPI"
 	@echo "     add 'CUDAAWARE=1' if using CUDA-Aware MPI"
@@ -393,7 +417,7 @@ clean:
 	rm -f msieve msieve.exe demo.o libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
 		$(COMMON_GPU_OBJS) $(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) \
 		$(CUDA_ENGINE_OBJS) $(CUDA_EMBED_OBJS) *.ptx *.fatbin *_embed.c \
-		msieve_bin2c msieve_bin2c.exe
+		msieve_bin2c msieve_bin2c.exe cub/.build_config
 
 #----------------------------------------- build rules ----------------------
 
@@ -430,27 +454,41 @@ ifdef CUDA
 # converted to C arrays and linked into msieve. The standalone PTX is kept
 # separately because some driver/toolkit combinations have accepted raw PTX
 # after rejecting an otherwise valid fatbin container.
-stage1_core.ptx: $(NFS_GPU_HDR)
+# Rewrite cub/.build_config whenever VBITS or the architectures change, so
+# that everything compiled for them is rebuilt. The conditional rewrite keeps
+# its timestamp stable across unchanged builds.
+.PHONY: cub/.build_config_force
+cub/.build_config: cub/.build_config_force
+	@new="VBITS=$(VBITS) CUDA_ARCHS=$(CUDA_ARCH_LIST) PTX=$(CUDA_PTX_ARCH)"; \
+	old=$$(cat $@ 2>/dev/null || true); \
+	if [ "$$new" != "$$old" ]; then \
+		echo "cuda: build config changed ($$old -> $$new); rebuilding" >&2; \
+		echo "$$new" > $@; \
+	fi
+
+stage1_core.ptx: $(NFS_GPU_HDR) cub/.build_config
 	$(NVCC) -arch compute_$(CUDA_PTX_ARCH) -ptx -o $@ $<
 
-stage1_core.fatbin: $(NFS_GPU_HDR)
+stage1_core.fatbin: $(NFS_GPU_HDR) cub/.build_config
 	$(NVCC) $(CUDA_FATBIN_GENCODE) -fatbin -o $@ $<
 
-lanczos_kernel.ptx: $(COMMON_GPU_HDR)
+lanczos_kernel.ptx: $(COMMON_GPU_HDR) cub/.build_config
 	$(NVCC) -arch compute_$(CUDA_PTX_ARCH) -ptx -DVBITS=$(VBITS) -o $@ $<
 
-lanczos_kernel.fatbin: $(COMMON_GPU_HDR)
+lanczos_kernel.fatbin: $(COMMON_GPU_HDR) cub/.build_config
 	$(NVCC) $(CUDA_FATBIN_GENCODE) -fatbin -DVBITS=$(VBITS) -o $@ $<
 
 ifeq ($(CUDA_SINGLE_BINARY),1)
 # CUB engines are ordinary CUDA objects linked directly into the executable.
 # Include native SASS for every requested architecture and PTX for forward
 # compatibility, matching the module fatbins above.
-cub/sort_engine.o: cub/sort_engine.cu cub/sort_engine.h $(CUB_DEPS)
+cub/sort_engine.o: cub/sort_engine.cu cub/sort_engine.h $(CUB_DEPS) \
+		cub/.build_config
 	$(NVCC) $(CUDA_FATBIN_GENCODE) $(CUDA_HOST_FLAGS) -O3 \
 		-I. -Icub -I"$(CUDA_ROOT)/include" -c -o $@ $<
 
-cub/spmv_engine.o: cub/spmv_engine.cu cub/spmv_engine.h $(CUB_DEPS)
+cub/spmv_engine.o: cub/spmv_engine.cu cub/spmv_engine.h $(CUB_DEPS) \
+		cub/.build_config
 	$(NVCC) $(CUDA_FATBIN_GENCODE) $(CUDA_HOST_FLAGS) -O3 -DVBITS=$(VBITS) \
 		-I. -Icub -I"$(CUDA_ROOT)/include" -c -o $@ $<
 
@@ -472,8 +510,10 @@ lanczos_kernel_ptx_embed.c: lanczos_kernel.ptx $(BIN2C)
 %_embed.o: %_embed.c
 	$(CC) $(MACHINE_FLAGS) -c -o $@ $<
 else
-cub/built:
+# cub/Makefile takes bare SM numbers, comma-separated (sm=86,120)
+cub/built: cub/Makefile cub/spmv_engine.cu cub/spmv_engine.h \
+		cub/sort_engine.cu cub/sort_engine.h cub/.build_config
 	cd cub && make WIN=$(WIN) WIN64=$(WIN64) VBITS=$(VBITS) \
-		sm=$(firstword $(CUDA_ARCH_LIST))0 && cd ..
+		sm=$(subst $(space),$(comma),$(CUDA_ARCH_LIST)) && cd ..
 endif
 endif

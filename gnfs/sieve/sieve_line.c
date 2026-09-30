@@ -145,12 +145,12 @@ static void init_one_fb(msieve_obj *obj,
 
 static void free_one_sieve_fb(sieve_t *out_fb);
 
-static uint32 do_one_line(sieve_job_t *job, uint32 b_offset);
+static uint32 do_one_line(sieve_job_t *job, uint64 b_offset);
 
 static void init_one_sieve(sieve_t *out_fb,
 			uint32 num_buckets, 
 			int64 min_a, int64 max_a, 
-			uint64 min_b, uint32 b_offset);
+			uint64 min_b, uint64 b_offset);
 
 static void fill_one_block(sieve_t *sieve_fb, 
 			uint32 block, uint32 num_buckets);
@@ -179,7 +179,7 @@ static uint32 do_one_tf(sieve_t *sieve_fb, resieve_t *resieve,
 uint32 do_line_sieving(msieve_obj *obj, sieve_param_t *params, mpz_t n,
 			uint32 relations_found, uint32 max_relations) {
 
-	uint32 i;
+	uint64 i;	/* offset from min_b; the b range can pass 2^32 */
 	sieve_job_t job;
 	factor_base_t fb;
 	const char *lower_limit = NULL;
@@ -257,7 +257,7 @@ uint32 do_line_sieving(msieve_obj *obj, sieve_param_t *params, mpz_t n,
 	
 	logprintf(obj, "a range: [%" PRId64 ", %" PRId64 "]\n", 
 					job.min_a, job.max_a);
-	logprintf(obj, "b range: [%" PRId64 ", %" PRId64 "]\n", 
+	logprintf(obj, "b range: [%" PRIu64 ", %" PRIu64 "]\n", 
 					job.min_b, job.max_b);
 	logprintf(obj, "number of hash buckets: %u\n", job.num_buckets);
 	logprintf(obj, "sieve block size: %u\n", BLOCK_SIZE);
@@ -304,7 +304,7 @@ uint32 do_line_sieving(msieve_obj *obj, sieve_param_t *params, mpz_t n,
 	   so this is easy to implement */
 
 	obj->flags |= MSIEVE_FLAG_SIEVING_IN_PROGRESS;
-	for (i = 0; i <= (uint32)(job.max_b - job.min_b); i++) {
+	for (i = 0; i <= job.max_b - job.min_b; i++) {
 
 		relations_found += do_one_line(&job, i);
 
@@ -324,7 +324,7 @@ uint32 do_line_sieving(msieve_obj *obj, sieve_param_t *params, mpz_t n,
 
 		if (relations_found >= max_relations ||
 		    (obj->flags & MSIEVE_FLAG_STOP_SIEVING) ||
-		    i == (uint32)(job.max_b - job.min_b)) {
+		    i == job.max_b - job.min_b) {
 
 			/* finish up any batch factoring that's left */
 
@@ -557,7 +557,7 @@ static void free_one_sieve_fb(sieve_t *out_fb) {
 }
 
 /*------------------------------------------------------------------*/
-static uint32 do_one_line(sieve_job_t *job, uint32 b_offset)
+static uint32 do_one_line(sieve_job_t *job, uint64 b_offset)
 {
 	/* Perform all the sieving for one value of b */
 
@@ -619,7 +619,7 @@ static uint32 do_one_line(sieve_job_t *job, uint32 b_offset)
 static void init_one_sieve(sieve_t *out_fb,
 			uint32 num_buckets, 
 			int64 min_a, int64 max_a, 
-			uint64 min_b, uint32 b_offset) {
+			uint64 min_b, uint64 b_offset) {
 
 	/* initialize all of the sieve updates */
 

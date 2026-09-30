@@ -512,9 +512,16 @@ static void dup_read_batch(dup_reader_t *r, char *buf, uint64 *ords,
 	}
 
 	r->curr_relation += count;
-	if (r->max_relations && r->curr_relation >= r->max_relations) {
+
+	/* curr_relation starts at (uint64)-1, so it only means a relation
+	   number once some batch has held one */
+
+	if (count > 0 && r->max_relations &&
+	    r->curr_relation >= r->max_relations) {
 		uint64 excess = r->curr_relation - r->max_relations + 1;
 
+		if (excess > count)
+			excess = count;
 		r->curr_relation -= excess;
 		count -= (uint32)excess;
 		r->done = 1;

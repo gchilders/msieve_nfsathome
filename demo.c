@@ -174,7 +174,6 @@ void print_usage(char *progname) {
 		 "                    the matrix (stop before solving the matrix)\n"
 		 "   la_block=X       use a block size of X (512<=X<=65536)\n"
 		 "   la_superblock=X  use a superblock size of X\n"
-		 "   cado_filter=1    assume filtering used the CADO-NFS suite\n"
 #ifdef HAVE_CUDA
 		 "   block_nnz=X      use approx. X nonzeros per CUB SpMV block\n"
 		 "                    (100000 to 4000000000)\n"
@@ -184,6 +183,12 @@ void print_usage(char *progname) {
 		 "                    on the GPU (less memory, often faster)\n"
 		 "   spmv_kernel=X    SpMV gather kernel: auto (default),\n"
 		 "                    segscan or warpmerge\n"
+		 "   max_gpu_mem=X    matrix blocks that don't fit on the GPU\n"
+		 "                    are streamed from host memory; this\n"
+		 "                    gives the matrix and vectors X MB\n"
+		 "                    instead of the GPU's free memory\n"
+		 "   stream_frac=X    stream at least fraction X of the matrix\n"
+		 "   stream_slots=X   use X staging buffers for streaming (3)\n"
 #endif
 #ifdef HAVE_MPI
 		 "   mpi_nrows=X      use a grid with X rows\n"

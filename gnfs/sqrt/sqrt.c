@@ -436,6 +436,7 @@ uint32 nfs_find_factors(msieve_obj *obj, mpz_t n,
 
 	logprintf(obj, "\n");
 	logprintf(obj, "commencing square root phase\n");
+	savefile_check_scratch(obj);
 
 	memset(&fb, 0, sizeof(fb));
 	apoly = &fb.afb.poly;
