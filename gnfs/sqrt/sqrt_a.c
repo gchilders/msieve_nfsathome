@@ -664,12 +664,17 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	   First multiply R(x) by prod(x), deleting prod(x) 
 	   since we won't need it beyond this point.
 
-	   No splitting, for the reason multiply_relations() gives: prod(x)
-	   is the full relation product, so each split coefficient multiply
-	   would copy its halves and sums at that size, d+1 of them at once,
-	   on top of the memory peak. The operands are also far from
-	   balanced (R(x) is only the size of q), where one Karatsuba level
-	   saves little */
+	   No splitting, for the reason multiply_relations() gives: this is
+	   a memory peak, with prod(x), R(x) and the accumulators all live,
+	   and mpz_mul_par() holds about three times an operand in
+	   temporaries for each of the d1+1 coefficients it splits at once.
+
+	   That is the whole reason. The operands here are not lopsided:
+	   the mod q before the Newton loop leaves prod(x) the size of q,
+	   which is what R(x) is too, so this multiply has the same shape
+	   as the ones inside the loop -- and those do split. It is a trade
+	   made only where the peak is, not a point where splitting stops
+	   paying. */
 
 	mpz_poly_mul(isqrt_mod_q, prod, alg_poly, 1, 0);
 	mpz_poly_mod_q(isqrt_mod_q, q, isqrt_mod_q);
