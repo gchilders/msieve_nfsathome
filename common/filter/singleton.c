@@ -374,7 +374,10 @@ static uint32 fit_weight_cap_to_margin(msieve_obj *obj, const uint64 *total,
     ceiling = (uint64)((double)margin /
                     (FILTER_FINAL_EXCESS_FRACTION - 1.0));
 
-    for (w = wanted; w < WEIGHT_PROFILE_BUCKETS - 1; w++) {
+    /* stop where max_weight= stops, so the cap this installs is always
+       one the user could have named */
+
+    for (w = wanted; w <= FILTER_FIRST_PASS_WEIGHT_CAP; w++) {
         uint64 bury = weight_cap_bury(total, num_ideals, min_keep, w);
 
         if ((uint64)base_excess + bury <= ceiling) {

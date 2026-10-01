@@ -314,6 +314,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	double target_densities[16];
 	uint32 num_densities = 0;
 	uint32 max_weight = FILTER_DEFAULT_WEIGHT_CAP;
+	uint32 max_weight_given = 0;
 	char lp_filename[256];
 
 	logprintf(obj, "\n");
@@ -416,6 +417,7 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 			max_weight = strtoul(tmp + 11, NULL, 10);
 			if (max_weight >= 1 &&
 			    max_weight <= FILTER_FIRST_PASS_WEIGHT_CAP) {
+				max_weight_given = 1;
 				logprintf(obj, "setting initial max weight to %u\n",
 						max_weight);
 			}
@@ -531,7 +533,14 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 	nfs_compact_lp_file(obj, &filter, ram_size);
 	/* save filter state before initial LP read for multi-density small path */
 	{
-	filter_read_lp_file(obj, &filter, FILTER_FIRST_PASS_WEIGHT_CAP, 1);
+	/* this read wants no real cap of its own: for a large dataset it
+	   runs before singleton removal, where nothing is heavy yet. But
+	   for a dataset small enough to filter in this one pass it is the
+	   only read there is, so a cap the user named has nowhere else to
+	   take effect and would be silently dropped */
+
+	filter_read_lp_file(obj, &filter, max_weight_given ? max_weight :
+				FILTER_FIRST_PASS_WEIGHT_CAP, 1);
 
 	if (savefile_size < ram_size / 2) {
 
