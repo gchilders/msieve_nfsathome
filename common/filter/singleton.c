@@ -322,6 +322,19 @@ static void log_ideal_weight_profile(msieve_obj *obj, const uint64 *total,
             "base target excess %u, margin %" PRId64 "\n",
             num_ideals, num_relations, base_excess, margin);
 
+    /* The first read of a large dataset runs before any singleton has
+       been removed, so the ideals outnumber the relations and there is
+       no excess yet for a cap to spend or to protect. Every target
+       excess the table would print is a budget clique removal could not
+       reach, which is why fit_weight_cap_to_margin() leaves the cap
+       alone here. Say that rather than print ten rows of it. */
+
+    if (margin <= 0) {
+        logprintf(obj, "  no excess at this stage, so no cap is "
+                "chosen from it\n");
+        return;
+    }
+
     for (c = 0; c < num_caps; c++) {
         uint32 w = caps[c];
         uint64 bury;
