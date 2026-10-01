@@ -253,7 +253,13 @@ static uint32 do_partial_filtering(msieve_obj *obj, filter_t *filter,
 		max_weight = 25;
 	}
 
-	for (; max_weight < MAX_KEEP_WEIGHT; max_weight += 5) {
+	/* step the cap up while the matrix comes out too sparse. The
+	   increment is at the bottom so that a starting cap at or above
+	   where the stepping would stop still gets its one pass; in the
+	   for() a value of 45 or more ran the body zero times and returned
+	   success having filtered nothing */
+
+	for (;;) {
 
 		filter->target_excess = entries_r + entries_a;
 		filter->num_relations = num_relations;
@@ -281,6 +287,7 @@ static uint32 do_partial_filtering(msieve_obj *obj, filter_t *filter,
 
 		logprintf(obj, "matrix not dense enough, retrying\n");
 		filter_free_relsets(merge);
+		max_weight += 5;
 	}
 
 	return 0;
@@ -407,16 +414,22 @@ uint32 nfs_filter_relations(msieve_obj *obj, mpz_t n) {
 		tmp = strstr(obj->nfs_args, "max_weight=");
 		if (tmp != NULL) {
 			max_weight = strtoul(tmp + 11, NULL, 10);
-			if (max_weight < MAX_KEEP_WEIGHT) {
+			if (max_weight >= 1 &&
+			    max_weight <= FILTER_FIRST_PASS_WEIGHT_CAP) {
 				logprintf(obj, "setting initial max weight to %u\n",
 						max_weight);
 			}
 			else {
-#define str(s) #s
-#define xstr(s) str(s)
-				logprintf(obj, "initial max weight must be <= " xstr(MAX_KEEP_WEIGHT) "\n");
-#undef xstr
-#undef str
+				/* the bound used to be MAX_KEEP_WEIGHT, because
+				   the cap was only where the loop in
+				   do_partial_filtering() started and a larger
+				   value had nowhere to go. It now reaches the
+				   one-pass reader as well, where there is no
+				   loop and 200 is what that path applied by
+				   itself until this series */
+
+				logprintf(obj, "max weight must be between 1 and %u\n",
+						FILTER_FIRST_PASS_WEIGHT_CAP);
 				exit(-1);
 			}
 		}
