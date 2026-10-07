@@ -544,13 +544,31 @@ void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 
 
 	gpudata_t *d = (gpudata_t *)matrix->extra;
-	gpu_launch_t *launch = d->launch + GPU_K_OUTER_PROD;
-	uint32 num_threads, num_blocks;
+	gpu_launch_t *launch;
+	uint32 num_threads, num_blocks, max_threads;
 	
-	num_threads = MIN(256, launch->threads_per_block);	
+	/* the grouped kernel reads each vector element once for every
+	   two result words instead of once for every one, which is
+	   worth up to 2x on a big matrix and a small loss on a small
+	   one; see OUTER_PROD_BIG_MIN_N */
+
+	if (VWORDS > 1 && n >= OUTER_PROD_BIG_MIN_N) {
+		launch = d->launch + GPU_K_OUTER_PROD_BIG;
+		max_threads = MAX_OUTER_THREADS_BIG;
+	}
+	else {
+		launch = d->launch + GPU_K_OUTER_PROD;
+		max_threads = MAX_OUTER_THREADS;
+	}
+
+	/* the kernel sized its shared memory for max_threads, so a
+	   bigger block would overrun it; the block cap scales the
+	   other way so the grid keeps the same thread count */
+
+	num_threads = MIN(max_threads, launch->threads_per_block);
 	num_blocks = (n + num_threads - 1) / num_threads;
 
-	num_blocks = MIN(num_blocks, 10000); 
+	num_blocks = MIN(num_blocks, 10000 * (256 / max_threads));
 			/* (uint32)(125 * d->gpu_info->num_compute_units)); */
 
 	void *args[4] = {&x, &y, &xy, &n};

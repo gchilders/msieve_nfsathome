@@ -36,6 +36,7 @@ static const char * gpu_kernel_names[] =
 	"lanczos_kernel_xor",
 	"lanczos_kernel_inner_prod",
 	"lanczos_kernel_outer_prod",
+	"lanczos_kernel_outer_prod_big",
 };
  
 typedef struct {

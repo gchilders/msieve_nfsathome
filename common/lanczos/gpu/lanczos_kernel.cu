@@ -147,13 +147,126 @@ lanczos_kernel_inner_prod(v_t *y, v_t *v,
    one slot each), and lane k rotates its x word by k pieces so that
    the 16 lanes of a half-warp always update 16 different slots. That
    is 16 shared memory updates per element and word pair, half as many
-   as with 2-bit pieces */
+   as with 2-bit pieces.
 
-#define MAX_OUTER_THREADS 256
+   Sweeping w_x and w_y independently would make VWORDS * VWORDS passes
+   over x and y, and each pass reads one 8-byte word of every 32-byte
+   v_t (at VBITS=256). Consecutive elements are a whole v_t apart, so
+   each of those reads pulls its own sector and three quarters of the
+   DRAM traffic is thrown away. Carrying OUTER_GY y words through the
+   element loop at once lets a single read of y[i] serve all of them,
+   which cuts the passes to VWORDS * (VWORDS / OUTER_GY) at the cost of
+   OUTER_GY copies of the tables. The XORs are the same multiset in a
+   different order, so the result is bit-identical either way.
+
+   OUTER_GY_BIG = 2 is the measured optimum, not the largest value that
+   works. On a 2080 Ti at n=8M, VBITS=256, it is 1.5x the ungrouped
+   kernel; grouping 4 halves the passes again but needs four copies of
+   the tables, and the occupancy that costs drops it back to 1.13x. Two
+   copies at 128 threads need the same 30kB the ungrouped kernel uses at
+   256, so this stays inside the 48kB every architecture gives a block,
+   with no opt-in and no compute-capability floor.
+
+   This only pays on a large matrix, which is why both kernels are here
+   and mul_BxN_NxB_gpu() chooses between them on n; see the note on
+   OUTER_PROD_BIG_MIN_N. Below that the ungrouped kernel is faster, and
+   it stays the one small jobs run. */
+
+__global__ void
+lanczos_kernel_outer_prod_big(v_t *x, v_t *y,
+			v_t *xy, uint32 n)
+{
+	uint32 i, j, g, w_x, w_y0;
+	uint32 num_threads = gridDim.x * blockDim.x;
+	uint32 grid_id = blockIdx.x * blockDim.x + threadIdx.x;
+	uint32 tid = threadIdx.x;
+	uint32 k = tid % 16;
+	uint32 num_halves = blockDim.x / 16;
+	uint32 half_stride = 15 * 16;
+	uint32 copy_stride = num_halves * half_stride;
+	__shared__ uint64 scratch[OUTER_GY_BIG][MAX_OUTER_THREADS_BIG / 16][15][16];
+	uint64 *s = &scratch[0][tid / 16][0][0];
+	uint64 *flat = &scratch[0][0][0][0];
+
+	for (w_x = 0; w_x < VWORDS; w_x++) {
+		for (w_y0 = 0; w_y0 < VWORDS; w_y0 += OUTER_GY_BIG) {
+
+			for (i = tid; i < OUTER_GY_BIG * copy_stride; i += blockDim.x)
+				flat[i] = 0;
+			__syncthreads();
+
+			for (i = grid_id; i < n; i += num_threads) {
+				uint64 xi = x[i].w[w_x];
+				uint64 yi[OUTER_GY_BIG];
+
+#pragma unroll
+				for (g = 0; g < OUTER_GY_BIG; g++)
+					yi[g] = y[i].w[w_y0 + g];
+
+				if (k != 0)
+					xi = (xi >> (4 * k)) | (xi << (64 - 4 * k));
+
+#pragma unroll
+				for (j = 0; j < 16; j++) {
+					uint32 m = bfe(xi, 4 * j, 4);
+					uint32 nonzero = (m != 0);
+					uint32 off;
+
+					if (m == 0)
+						m = 1;
+					off = 16 * (m - 1) + ((k + j) & 15);
+
+#pragma unroll
+					for (g = 0; g < OUTER_GY_BIG; g++) {
+						s[g * copy_stride + off] ^=
+							nonzero ? yi[g] : 0;
+					}
+				}
+			}
+			__syncthreads();
+
+			/* fold the half-warp copies together, for each y word */
+
+			for (i = tid; i < OUTER_GY_BIG * half_stride; i += blockDim.x) {
+				uint64 *base = flat + (i / half_stride) *
+							copy_stride;
+				uint32 r = i % half_stride;
+				uint64 acc = base[r];
+
+				for (j = 1; j < num_halves; j++)
+					acc ^= base[j * half_stride + r];
+				base[r] = acc;
+			}
+			__syncthreads();
+
+			if (tid < 64) {
+				uint32 c = tid / 4;
+				uint32 b = tid % 4;
+				uint32 m;
+
+#pragma unroll
+				for (g = 0; g < OUTER_GY_BIG; g++) {
+					uint64 *base = flat + g * copy_stride;
+					uint64 res = 0;
+
+					for (m = 1; m < 16; m++) {
+						if (m & (1 << b))
+							res ^= base[(m - 1) * 16 + c];
+					}
+					atomicXor(&xy[64 * w_x + tid].w[w_y0 + g],
+							res);
+				}
+			}
+			__syncthreads();
+		}
+	}
+}
+
+/*------------- one y word at a time, as originally -----------------*/
 
 __global__ void
 lanczos_kernel_outer_prod(v_t *x, v_t *y,
-			v_t *xy, uint32 n) 
+			v_t *xy, uint32 n)
 {
 	uint32 i, j, w_x, w_y;
 	uint32 num_threads = gridDim.x * blockDim.x;
@@ -220,6 +333,8 @@ lanczos_kernel_outer_prod(v_t *x, v_t *y,
 		}
 	}
 }
+
+
 
 #ifdef __cplusplus
 }

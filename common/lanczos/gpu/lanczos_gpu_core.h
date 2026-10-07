@@ -15,6 +15,29 @@ $Id$
 #ifndef _COMMON_LANCZOS_GPU_LANCZOS_GPU_CORE_H_
 #define _COMMON_LANCZOS_GPU_LANCZOS_GPU_CORE_H_
 
+/* There are two outer product kernels; see the comments on them in
+   lanczos_kernel.cu. These constants live here, ahead of the device and
+   host split, because the kernels size their shared memory from them and
+   mul_BxN_NxB_gpu() has to launch a block each one has room for. Each
+   kernel needs OUTER_GY * (threads / 16) * 1920 bytes, so both come to
+   the same 30kB and both stay inside the 48kB a block gets everywhere. */
+
+#define MAX_OUTER_THREADS     256   /* lanczos_kernel_outer_prod */
+#define MAX_OUTER_THREADS_BIG 128   /* lanczos_kernel_outer_prod_big */
+
+#define OUTER_GY_BIG (VWORDS >= 2 ? 2 : 1)
+
+/* Below this many vector elements the grouped kernel loses: each thread
+   has only an element or two to work on, so the per pass overhead it
+   halves is not what the kernel is spending its time on, while the extra
+   copy of the tables costs occupancy either way. Measured on a 2080 Ti
+   at VBITS=256: 0.90x at n=550k, 0.92x at 2M, break even near 4M, 1.46x
+   at 8M, 1.97x at 64M. The matrices this matters for have tens of
+   millions of rows, so the threshold only has to keep small ones out;
+   8M is where the win is already clear rather than where it starts. */
+
+#define OUTER_PROD_BIG_MIN_N 8000000
+
 #if defined(__CUDACC__) /*------------- device code -------------*/
 
 typedef short int16;

@@ -126,6 +126,7 @@ enum {
 	GPU_K_XOR,
 	GPU_K_INNER_PROD,
 	GPU_K_OUTER_PROD,
+	GPU_K_OUTER_PROD_BIG,
 	NUM_GPU_FUNCTIONS /* must be last */
 };
 
