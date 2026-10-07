@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include "spmv_engine.h"
 
 #ifndef DISABLE_NVTX
@@ -275,10 +276,57 @@ __global__ void csr_spmv_xor_scatter_kernel(const uint32_t* __restrict__ rowptr,
 
 // ------------------------------- Host side ------------------------------- //
 
-// Engine state tuned on first run
-struct SpmvEngine { int threads_per_block; int warp_items; bool tuned; int kernel_mode; };
-
 enum { K_WARPMERGE, K_SEGSCAN, K_SCATTER };
+
+/* The heuristic below guesses a configuration from the row length
+   distribution; it never measures anything, and its constants cannot know
+   which card it is on. Since a matrix is multiplied tens of thousands of
+   times, the cheap way to settle it is to time the real products. Every
+   candidate computes the same answer -- the kernels differ only in the
+   order they XOR, which is associative -- so the solve runs normally while
+   the first few dozen calls try the alternatives, and only the handful
+   spent on a slower candidate is lost.
+
+   Each distinct block shape is tuned separately, because a matrix has
+   several blocks and the forward and transpose sweeps have different ones.
+   Timing uses a pair of events read back on a later call for that shape, so
+   nothing ever waits on the GPU; a sample whose events are not ready yet is
+   dropped rather than waited for. */
+
+#ifndef SPMV_TUNE_SAMPLES
+#define SPMV_TUNE_SAMPLES 3   /* sweeps over the candidate list */
+#endif
+#ifndef SPMV_TUNE_WARMUP
+#define SPMV_TUNE_WARMUP 8       /* calls skipped while the clocks ramp */
+#endif
+#define SPMV_TUNE_SLOTS 64
+
+static const int spmv_tune_wi[4] = { 256, 512, 1024, 2048 };
+static const int spmv_tune_tpb[2] = { 256, 512 };
+
+typedef struct {
+    int num_rows;
+    uint32_t nnz;
+    int trans;
+
+    int warmup;
+    int cand;            /* candidate being timed */
+    int round;           /* sweeps completed over all candidates */
+    float cand_ms[16];   /* best time seen per candidate */
+    int best_cand;       /* < 0 means fall back to the heuristic */
+    float best_ms;
+    int done;
+
+    int pending;         /* the events hold a timed launch */
+    cudaEvent_t e0, e1;
+} spmv_tune_t;
+
+// Engine state: the guessed starting configuration
+struct SpmvEngine {
+    int threads_per_block; int warp_items; bool tuned; int kernel_mode;
+    int ntune;
+    spmv_tune_t tune[SPMV_TUNE_SLOTS];
+};
 
 // In SPMV_KERNEL_AUTO mode, blocks averaging fewer nonzeros per row than
 // this use segscan, the rest warpmerge
@@ -286,7 +334,7 @@ enum { K_WARPMERGE, K_SEGSCAN, K_SCATTER };
 #define SEGSCAN_MAX_ROW_MEAN 8
 #endif
 
-static void spmv_autotune(SpmvEngine* eng, const uint32_t* d_rowptr, int num_rows) {
+static void spmv_guess_config(SpmvEngine* eng, const uint32_t* d_rowptr, int num_rows) {
     if (eng->tuned || num_rows <= 0) return;
     std::vector<uint32_t> h_rowptr(num_rows + 1);
     cudaMemcpy(h_rowptr.data(), d_rowptr, (num_rows + 1) * sizeof(uint32_t), cudaMemcpyDeviceToHost);
@@ -353,7 +401,7 @@ static void spmv_autotune(SpmvEngine* eng, const uint32_t* d_rowptr, int num_row
     eng->tuned = true;
 
 #ifdef SPMV_DEBUG
-    printf("[spmv] tuned: TPB=%d warp_items=%d (mean=%.1f p90=%u p99=%u max=%u empties=%.1f%%)\n",
+    printf("[spmv] guess: TPB=%d warp_items=%d (mean=%.1f p90=%u p99=%u max=%u empties=%.1f%%)\n",
            TPB, warp_items, mean, p90, p99, max_row, 100.0 * empty_frac);
 #endif
 }
@@ -371,6 +419,7 @@ SPMV_API void* spmv_engine_init(int* vbits) {
     e->warp_items = 512;        // default
     e->tuned = false;
     e->kernel_mode = SPMV_KERNEL_AUTO;
+    e->ntune = 0;
     return (void*)e;
 }
 
@@ -381,7 +430,17 @@ SPMV_API void spmv_engine_set_kernel(void* e, int kernel) {
     reinterpret_cast<SpmvEngine*>(e)->kernel_mode = kernel;
 }
 
-SPMV_API void spmv_engine_free(void* e) { delete reinterpret_cast<SpmvEngine*>(e); }
+SPMV_API void spmv_engine_free(void* e) {
+    SpmvEngine* eng = reinterpret_cast<SpmvEngine*>(e);
+    int i;
+    if (eng == NULL)
+        return;
+    for (i = 0; i < eng->ntune; i++) {
+        if (eng->tune[i].e0) cudaEventDestroy(eng->tune[i].e0);
+        if (eng->tune[i].e1) cudaEventDestroy(eng->tune[i].e1);
+    }
+    delete eng;
+}
 
 template<int TWarpItems>
 static void spmv_launch(int kernel, int blocks, int tpb, const uint32_t* rowptr,
@@ -408,6 +467,90 @@ static void spmv_launch(int kernel, int blocks, int tpb, const uint32_t* rowptr,
     }
 }
 
+/* candidate space: warp_items x threads-per-block, and for the gather
+   products the choice of kernel as well, unless the caller pinned one */
+
+static int spmv_tune_ncand(const SpmvEngine* eng, int trans) {
+    int nkern = (trans || eng->kernel_mode != SPMV_KERNEL_AUTO) ? 1 : 2;
+    return nkern * 4 * 2;
+}
+
+static void spmv_tune_cand(const SpmvEngine* eng, int trans, int idx,
+                           int* kernel, int* wi, int* tpb) {
+    int nkern = (trans || eng->kernel_mode != SPMV_KERNEL_AUTO) ? 1 : 2;
+    *tpb = spmv_tune_tpb[idx % 2];
+    *wi  = spmv_tune_wi[(idx / 2) % 4];
+    if (trans)
+        *kernel = K_SCATTER;
+    else if (nkern == 1)
+        *kernel = (eng->kernel_mode == SPMV_KERNEL_SEGSCAN) ?
+                        K_SEGSCAN : K_WARPMERGE;
+    else
+        *kernel = (idx / 8) ? K_SEGSCAN : K_WARPMERGE;
+}
+
+/* one entry per block shape; shapes are stable across iterations, and two
+   blocks that happen to share one are interchangeable for tuning anyway */
+
+static spmv_tune_t* spmv_tune_slot(SpmvEngine* eng, int num_rows,
+                                   uint32_t nnz, int trans) {
+    spmv_tune_t* t;
+    int i;
+
+    for (i = 0; i < eng->ntune; i++) {
+        t = &eng->tune[i];
+        if (t->num_rows == num_rows && t->nnz == nnz && t->trans == trans)
+            return t;
+    }
+    if (eng->ntune >= SPMV_TUNE_SLOTS)
+        return NULL;            /* keep the heuristic for the rest */
+
+    t = &eng->tune[eng->ntune++];
+    memset(t, 0, sizeof(*t));
+    t->num_rows = num_rows;
+    t->nnz = nnz;
+    t->trans = trans;
+    t->best_cand = -1;
+    t->best_ms = 1e30f;
+    for (i = 0; i < 16; i++)
+        t->cand_ms[i] = 1e30f;
+    if (cudaEventCreateWithFlags(&t->e0, cudaEventDefault) != cudaSuccess ||
+        cudaEventCreateWithFlags(&t->e1, cudaEventDefault) != cudaSuccess) {
+        cudaGetLastError();
+        t->done = 1;            /* no events: stay with the heuristic */
+    }
+    return t;
+}
+
+static void spmv_dispatch(int kernel, int warp_items, int blocks, int tpb,
+                          const uint32_t* rowptr, const uint32_t* colidx,
+                          const v_t* x, v_t* y, int num_rows,
+                          uint32_t total_nnz, bool trans) {
+    switch (warp_items) {
+        case 256:
+            SPMV_NVTX_PUSH(trans ? "spmv_run_trans[wi=256]" : "spmv_run[wi=256]");
+            spmv_launch<256>(kernel, blocks, tpb, rowptr, colidx, x, y, num_rows, total_nnz);
+            SPMV_NVTX_POP();
+            break;
+        case 1024:
+            SPMV_NVTX_PUSH(trans ? "spmv_run_trans[wi=1024]" : "spmv_run[wi=1024]");
+            spmv_launch<1024>(kernel, blocks, tpb, rowptr, colidx, x, y, num_rows, total_nnz);
+            SPMV_NVTX_POP();
+            break;
+        case 2048:
+            SPMV_NVTX_PUSH(trans ? "spmv_run_trans[wi=2048]" : "spmv_run[wi=2048]");
+            spmv_launch<2048>(kernel, blocks, tpb, rowptr, colidx, x, y, num_rows, total_nnz);
+            SPMV_NVTX_POP();
+            break;
+        case 512:
+        default:
+            SPMV_NVTX_PUSH(trans ? "spmv_run_trans[wi=512]" : "spmv_run[wi=512]");
+            spmv_launch<512>(kernel, blocks, tpb, rowptr, colidx, x, y, num_rows, total_nnz);
+            SPMV_NVTX_POP();
+            break;
+    }
+}
+
 static void spmv_run_common(void* e, spmv_data_t* spmv_data, bool trans) {
     SpmvEngine* eng = reinterpret_cast<SpmvEngine*>(e);
 
@@ -419,15 +562,18 @@ static void spmv_run_common(void* e, spmv_data_t* spmv_data, bool trans) {
     const uint32_t total_nnz = spmv_data->num_col_entries;
     if (num_rows <= 0) return;
 
-    // Tune once (reads rowptr to host, negligible vs SpMV execution)
-    if (!eng->tuned) spmv_autotune(eng, rowptr, num_rows);
+    /* the row-length guess, used while the measured tuner warms up and
+       wherever it cannot run */
+    if (!eng->tuned) spmv_guess_config(eng, rowptr, num_rows);
 
+    /* the heuristic's choice, used during warmup and wherever the
+       measured tuner cannot run */
     int TPB = eng->threads_per_block;
-    const int warps_per_block = max(1, TPB / WARP_SIZE);
-    const uint64_t total_warps = ( (uint64_t)total_nnz + (uint64_t)eng->warp_items - 1 ) / (uint64_t)eng->warp_items;
-    const int blocks = (int)((total_warps + warps_per_block - 1) / warps_per_block);
-    const int tpb = warps_per_block * WARP_SIZE;
+    int warp_items = eng->warp_items;
     int kernel;
+    int timing = 0;
+    spmv_tune_t* t;
+
     if (trans)
         kernel = K_SCATTER;
     else if (eng->kernel_mode == SPMV_KERNEL_SEGSCAN)
@@ -438,29 +584,83 @@ static void spmv_run_common(void* e, spmv_data_t* spmv_data, bool trans) {
         kernel = (uint64_t)total_nnz < (uint64_t)SEGSCAN_MAX_ROW_MEAN * num_rows ?
                  K_SEGSCAN : K_WARPMERGE;
 
-    if (blocks > 0) {
-        switch (eng->warp_items) {
-            case 256:
-                SPMV_NVTX_PUSH(trans ? "spmv_run_trans[wi=256]" : "spmv_run[wi=256]");
-                spmv_launch<256>(kernel, blocks, tpb, rowptr, colidx, x, y, num_rows, total_nnz);
-                SPMV_NVTX_POP();
-                break;
-            case 1024:
-                SPMV_NVTX_PUSH(trans ? "spmv_run_trans[wi=1024]" : "spmv_run[wi=1024]");
-                spmv_launch<1024>(kernel, blocks, tpb, rowptr, colidx, x, y, num_rows, total_nnz);
-                SPMV_NVTX_POP();
-                break;
-            case 2048:
-                SPMV_NVTX_PUSH(trans ? "spmv_run_trans[wi=2048]" : "spmv_run[wi=2048]");
-                spmv_launch<2048>(kernel, blocks, tpb, rowptr, colidx, x, y, num_rows, total_nnz);
-                SPMV_NVTX_POP();
-                break;
-            case 512:
-            default:
-                SPMV_NVTX_PUSH(trans ? "spmv_run_trans[wi=512]" : "spmv_run[wi=512]");
-                spmv_launch<512>(kernel, blocks, tpb, rowptr, colidx, x, y, num_rows, total_nnz);
-                SPMV_NVTX_POP();
-                break;
+    t = spmv_tune_slot(eng, num_rows, total_nnz, trans ? 1 : 0);
+    if (t != NULL) {
+
+        /* collect the previous timed launch, if it has landed */
+
+        if (t->pending) {
+            float ms = 0.0f;
+            if (cudaEventQuery(t->e1) == cudaSuccess &&
+                cudaEventElapsedTime(&ms, t->e0, t->e1) == cudaSuccess) {
+                if (ms < t->cand_ms[t->cand])
+                    t->cand_ms[t->cand] = ms;
+                if (++t->cand >= spmv_tune_ncand(eng, t->trans)) {
+                    t->cand = 0;
+                    if (++t->round >= SPMV_TUNE_SAMPLES) {
+                        int c, n = spmv_tune_ncand(eng, t->trans);
+                        for (c = 0; c < n; c++) {
+                            if (t->cand_ms[c] < t->best_ms) {
+                                t->best_ms = t->cand_ms[c];
+                                t->best_cand = c;
+                            }
+                        }
+                        t->done = 1;
+#ifdef SPMV_DEBUG
+                        {
+                            int k, w, b;
+                            spmv_tune_cand(eng, t->trans, t->best_cand, &k, &w, &b);
+                            printf("[spmv] tuned %s block %d x %u: "
+                                   "kernel=%s wi=%d tpb=%d (%.3f ms)\n",
+                                   t->trans ? "trans" : "fwd",
+                                   t->num_rows, t->nnz,
+                                   k == K_SCATTER ? "scatter" :
+                                   (k == K_SEGSCAN ? "segscan" : "warpmerge"),
+                                   w, b, t->best_ms);
+                        }
+#endif
+                    }
+                }
+            }
+            else {
+                cudaGetLastError();   /* sample dropped, not an error */
+            }
+            t->pending = 0;
+        }
+
+        if (!t->done) {
+            if (t->warmup < SPMV_TUNE_WARMUP) {
+                t->warmup++;
+            }
+            else {
+                spmv_tune_cand(eng, t->trans, t->cand,
+                               &kernel, &warp_items, &TPB);
+                timing = 1;
+            }
+        }
+        else if (t->best_cand >= 0) {
+            spmv_tune_cand(eng, t->trans, t->best_cand,
+                           &kernel, &warp_items, &TPB);
+        }
+    }
+
+    {
+        const int warps_per_block = max(1, TPB / WARP_SIZE);
+        const uint64_t total_warps = ((uint64_t)total_nnz +
+                        (uint64_t)warp_items - 1) / (uint64_t)warp_items;
+        const int blocks = (int)((total_warps + warps_per_block - 1) /
+                        warps_per_block);
+        const int tpb = warps_per_block * WARP_SIZE;
+
+        if (blocks > 0) {
+            if (timing)
+                cudaEventRecord(t->e0);
+            spmv_dispatch(kernel, warp_items, blocks, tpb,
+                          rowptr, colidx, x, y, num_rows, total_nnz, trans);
+            if (timing) {
+                cudaEventRecord(t->e1);
+                t->pending = 1;
+            }
         }
     }
 
