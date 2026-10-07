@@ -591,8 +591,12 @@ static void spmv_run_common(void* e, spmv_data_t* spmv_data, bool trans) {
 
         if (t->pending) {
             float ms = 0.0f;
-            if (cudaEventQuery(t->e1) == cudaSuccess &&
-                cudaEventElapsedTime(&ms, t->e0, t->e1) == cudaSuccess) {
+            cudaError_t st = cudaEventQuery(t->e1);
+
+            if (st == cudaSuccess)
+                st = cudaEventElapsedTime(&ms, t->e0, t->e1);
+
+            if (st == cudaSuccess) {
                 if (ms < t->cand_ms[t->cand])
                     t->cand_ms[t->cand] = ms;
                 if (++t->cand >= spmv_tune_ncand(eng, t->trans)) {
@@ -622,8 +626,17 @@ static void spmv_run_common(void* e, spmv_data_t* spmv_data, bool trans) {
                     }
                 }
             }
-            else {
-                cudaGetLastError();   /* sample dropped, not an error */
+            else if (st == cudaErrorNotReady) {
+
+                /* the launch has not landed yet. Drop the sample rather
+                   than wait, and take the status off the runtime so the
+                   check at the end of this function does not read it as a
+                   failed launch. Only this one status is swallowed: any
+                   other error here is a real one, very likely an earlier
+                   kernel faulting asynchronously, and is left in place for
+                   that check to report. */
+
+                cudaGetLastError();
             }
             t->pending = 0;
         }
