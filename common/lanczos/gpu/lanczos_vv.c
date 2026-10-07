@@ -552,7 +552,7 @@ void mul_BxN_NxB_gpu(packed_matrix_t *matrix,
 	   worth up to 2x on a big matrix and a small loss on a small
 	   one; see OUTER_PROD_BIG_MIN_N */
 
-	if (VWORDS > 1 && n >= OUTER_PROD_BIG_MIN_N) {
+	if (OUTER_PROD_BIG_OK && n >= OUTER_PROD_BIG_MIN_N) {
 		launch = d->launch + GPU_K_OUTER_PROD_BIG;
 		max_threads = MAX_OUTER_THREADS_BIG;
 	}

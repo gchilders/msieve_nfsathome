@@ -27,16 +27,33 @@ $Id$
 
 #define OUTER_GY_BIG (VWORDS >= 2 ? 2 : 1)
 
+/* The grouped kernel walks the y words OUTER_GY_BIG at a time and does
+   not handle a short last group, so it is only correct when the groups
+   divide VWORDS evenly. VBITS of 192, 320 and 448 are all offered and
+   give an odd VWORDS; those keep the ungrouped kernel, which has no
+   such constraint. Getting this wrong would not crash -- it would read
+   one word past each v_t and XOR one word past the end of xy. */
+
+#define OUTER_PROD_BIG_OK (VWORDS > 1 && (VWORDS % OUTER_GY_BIG) == 0)
+
 /* Below this many vector elements the grouped kernel loses: each thread
    has only an element or two to work on, so the per pass overhead it
    halves is not what the kernel is spending its time on, while the extra
-   copy of the tables costs occupancy either way. Measured on a 2080 Ti
-   at VBITS=256: 0.90x at n=550k, 0.92x at 2M, break even near 4M, 1.46x
-   at 8M, 1.97x at 64M. The matrices this matters for have tens of
-   millions of rows, so the threshold only has to keep small ones out;
-   8M is where the win is already clear rather than where it starts. */
+   copy of the tables costs occupancy either way. Measured on a 2080 Ti,
+   grouped against ungrouped:
 
-#define OUTER_PROD_BIG_MIN_N 8000000
+	n	550k	2M	4M	8M	16M	32M	64M
+	VBITS=256	0.90	0.92	1.00	1.51	2.03	1.98	1.99
+	VBITS=128	-	-	-	0.93	1.06	1.25	1.29
+
+   VBITS=128 crosses over later and tops out lower, because it reads 8
+   bytes of a 16-byte v_t rather than 8 of 32, so there is half as much
+   wasted traffic to win back. Hence a threshold per vector width rather
+   than one number. Both are set where the win is already clear rather
+   than where it starts, since the matrices this is for have tens of
+   millions of rows and nothing is lost by being late. */
+
+#define OUTER_PROD_BIG_MIN_N (VWORDS >= 4 ? 8000000u : 16000000u)
 
 #if defined(__CUDACC__) /*------------- device code -------------*/
 
