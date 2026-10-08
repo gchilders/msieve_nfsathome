@@ -139,6 +139,68 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 		vv_copyin(z, host_w, n);
 	}
 
+	/* The generator annihilates y itself, not just the sequence seen
+	   through x, so sum_k A^k y F_k is zero. That is expected: it is
+	   f(A)y for a generator that is a multiple of X, and the vector
+	   we want comes from dividing that factor out first.
+
+	   In the block case the valuation is per column, so each column
+	   of the generator is shifted down by its own lowest nonzero
+	   term. What is evaluated is then killed by A^(e_j) but not,
+	   generically, by anything smaller, and the walk below finds
+	   exactly where each column dies. */
+
+	{
+		uint32 *shift = (uint32 *)xmalloc(VBITS * sizeof(uint32));
+		v_t *fs;
+		uint32 max_shift = 0, min_shift = degree + 1;
+
+		for (j = 0; j < VBITS; j++) {
+			shift[j] = degree + 1;
+			for (k = 0; k <= degree; k++) {
+				for (i = 0; i < VBITS; i++) {
+					if (v_bitset(f[(size_t)k * VBITS + i],
+							j))
+						break;
+				}
+				if (i < VBITS) {
+					shift[j] = k;
+					break;
+				}
+			}
+			if (shift[j] <= degree) {
+				max_shift = MAX(max_shift, shift[j]);
+				min_shift = MIN(min_shift, shift[j]);
+			}
+		}
+
+		fs = (v_t *)aligned_malloc((size_t)(degree + 1) *
+						VBITS * sizeof(v_t), 64);
+		for (i = 0; i < (uint32)(degree + 1) * VBITS; i++)
+			fs[i] = v_zero;
+
+		for (j = 0; j < VBITS; j++) {
+			if (shift[j] > degree)
+				continue;
+			for (k = 0; k + shift[j] <= degree; k++) {
+				v_t *src = f + (size_t)(k + shift[j]) * VBITS;
+				v_t *dst = fs + (size_t)k * VBITS;
+
+				for (i = 0; i < VBITS; i++) {
+					if (v_bitset(src[i], j))
+						bw_v_set_bit(dst + i, j);
+				}
+			}
+		}
+
+		logprintf(obj, "mksol: generator valuations run %u to %u\n",
+				min_shift, max_shift);
+
+		aligned_free(f);
+		f = fs;
+		free(shift);
+	}
+
 	vv_clear(w, n);
 	for (k = 0; ; k++) {
 
@@ -158,6 +220,25 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 	   throw it away; that is what the liveness mask prevents. */
 
 	vv_copyout(host_w, w, n);
+
+	{
+		/* If this is ever zero the valuations above were wrong and
+		   everything downstream is vacuous, so it is worth saying
+		   out loud rather than discovering it from an empty .dep */
+
+		v_t wacc = v_zero;
+
+		for (i = 0; i < n; i++)
+			wacc = v_or(wacc, host_w[i]);
+		if (v_is_all_zeros(wacc)) {
+			logprintf(obj, "error: Wiedemann solution block is "
+					"entirely zero\n");
+			goto cleanup;
+		}
+		logprintf(obj, "mksol: solution block has %u nonzero "
+				"columns\n", bw_v_popcount(wacc));
+	}
+
 	for (i = 0; i < max_ncols; i++)
 		host_res[i] = v_zero;
 	alive = v_zero;

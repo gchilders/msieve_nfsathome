@@ -111,6 +111,12 @@ typedef struct {
 int32 bw_krylov(msieve_obj *obj, packed_matrix_t *matrix,
 			bw_params_t *params, uint32 max_ncols);
 
+/* Reads the Krylov sequence, writes <savefile>.bw.f. The generator is
+   checked against the sequence before it is written, so a success here
+   means the relation mksol depends on actually holds */
+
+int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols);
+
 /* On success *solution_out is an aligned_malloc'd array of max_ncols
    v_t, one per matrix column, with dependency d in bit d. The caller
    owns it. post_lanczos_matrix may be NULL */

@@ -157,14 +157,12 @@ uint64 * block_wiedemann(msieve_obj *obj,
 	if (params.stage == BW_STAGE_LINGEN ||
 	    params.stage == BW_STAGE_ALL) {
 
-		logprintf(obj, "block Wiedemann: lingen is not implemented "
-				"yet; produce the generator separately and "
-				"then run bw_stage=mksol\n");
-		if (params.stage == BW_STAGE_ALL)
+		if (bw_lingen(obj, &params, max_ncols) != 0)
 			goto done;
 	}
 
-	if (params.stage == BW_STAGE_MKSOL) {
+	if (params.stage == BW_STAGE_MKSOL ||
+	    params.stage == BW_STAGE_ALL) {
 
 		v_t *solution = NULL;
 		uint32 num_found = 0;
