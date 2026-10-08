@@ -69,14 +69,18 @@ typedef struct {
 	uint32 seq;		/* which sequence this process computes */
 	uint32 stage;
 	uint32 seed1, seed2;	/* x and y come from here, so pinning these
-				   makes a run reproducible */
+				   makes a run reproducible. Only the Krylov
+				   stage needs to be told: it records the
+				   seeds in the sequence files, lingen copies
+				   them into the generator, and mksol takes
+				   them from there rather than from bw_seed= */
 } bw_params_t;
 
 /* the on-disk Krylov sequence. One header, then num_terms records of
    m_mult * VBITS v_t each: a_i is m rows of seq_width bits, and a row
    of VBITS bits is exactly one v_t */
 
-#define BW_SEQ_MAGIC 0x31535742		/* "BWS1" */
+#define BW_SEQ_MAGIC 0x32535742		/* "BWS2" */
 
 typedef struct {
 	uint32 magic;
@@ -87,6 +91,7 @@ typedef struct {
 	uint32 seq_width;	/* columns this sequence carries, = VBITS */
 	uint32 ncols;		/* N, the padded square dimension */
 	uint32 num_terms;	/* terms actually present */
+	uint32 seed1, seed2;	/* which x and y produced these terms */
 } bw_seq_header_t;
 
 #define BW_CHK_MAGIC 0x314b5742		/* "BWK1" */
@@ -94,7 +99,7 @@ typedef struct {
 /* the generator lingen produces and mksol consumes. One header, then
    degree+1 coefficient blocks of VBITS v_t each */
 
-#define BW_GEN_MAGIC 0x31465742		/* "BWF1" */
+#define BW_GEN_MAGIC 0x32465742		/* "BWF2" */
 
 typedef struct {
 	uint32 magic;
@@ -103,6 +108,9 @@ typedef struct {
 	uint32 n;
 	uint32 ncols;
 	uint32 degree;		/* coefficients are k = 0 .. degree */
+	uint32 seed1, seed2;	/* carried through from the sequence, so
+				   that mksol rebuilds the same y whether
+				   or not it was told bw_seed */
 } bw_gen_header_t;
 
 /* stage entry points. Each returns 0 on success and -1 if it stopped

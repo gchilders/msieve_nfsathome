@@ -79,6 +79,22 @@ static v_t *read_generator(msieve_obj *obj, bw_params_t *params,
 	}
 	fclose(fp);
 
+	/* Take the seeds from the generator rather than from the command
+	   line. They decide y, and the generator only annihilates the
+	   sequence built from the y the Krylov stage actually used; a
+	   mksol launched without the bw_seed= that the Krylov run was
+	   given would otherwise evaluate the generator against a
+	   different vector and quietly produce nothing. The seeds
+	   travelled here through the sequence files, so this is what was
+	   used, not what was asked for. */
+
+	if (hdr.seed1 != params->seed1 || hdr.seed2 != params->seed2) {
+		logprintf(obj, "using Wiedemann seed %u from the generator, "
+				"not %u\n", hdr.seed1, params->seed1);
+		params->seed1 = hdr.seed1;
+		params->seed2 = hdr.seed2;
+	}
+
 	*degree_out = hdr.degree;
 	return f;
 }
@@ -296,6 +312,27 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 		logprintf(obj, "warning: %u Wiedemann columns were still "
 				"alive after %u steps and are discarded\n",
 				bw_v_popcount(alive), (uint32)MKSOL_MAX_STEPS);
+	}
+
+	/* What survived has to be something. If no column ever died then
+	   nothing was kept, and the gate below would be asking whether
+	   the matrix kills the zero vector -- which it does, so every
+	   check from here on would pass while the dependencies written
+	   out were all zero, and the only sign of trouble would be
+	   -nc3 reporting "GCD is 1" sixty-four times hours later.
+
+	   The usual cause is y not matching the one the Krylov stage
+	   used, so that the generator annihilates a different sequence
+	   than the one being evaluated here. */
+
+	acc = v_zero;
+	for (i = 0; i < n; i++)
+		acc = v_or(acc, host_res[i]);
+	if (v_is_all_zeros(acc)) {
+		logprintf(obj, "error: no Wiedemann column reached the "
+				"nullspace within %u steps; the solution "
+				"would be empty\n", (uint32)MKSOL_MAX_STEPS);
+		goto cleanup;
 	}
 
 	/* Gate: whatever we kept must actually be killed by the matrix.

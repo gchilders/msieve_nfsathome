@@ -168,6 +168,8 @@ static FILE *open_sequence(msieve_obj *obj, bw_params_t *params,
 	hdr.seq_width = VBITS;
 	hdr.ncols = ncols;
 	hdr.num_terms = num_terms;
+	hdr.seed1 = params->seed1;
+	hdr.seed2 = params->seed2;
 
 	if (resume) {
 		bw_seq_header_t old;
@@ -175,11 +177,17 @@ static FILE *open_sequence(msieve_obj *obj, bw_params_t *params,
 		fp = fopen(buf, "r+b");
 		if (fp == NULL)
 			return NULL;
+
+		/* the seeds have to match as well: they decide x and y, so
+		   terms written under different ones do not belong to the
+		   same sequence even though everything else agrees */
+
 		if (fread(&old, sizeof(old), 1, fp) != 1 ||
 		    old.magic != BW_SEQ_MAGIC ||
 		    old.vbits != VBITS ||
 		    old.m != hdr.m || old.n != hdr.n ||
-		    old.ncols != ncols || old.num_terms < num_terms) {
+		    old.ncols != ncols || old.num_terms < num_terms ||
+		    old.seed1 != hdr.seed1 || old.seed2 != hdr.seed2) {
 			fclose(fp);
 			return NULL;
 		}
@@ -207,20 +215,34 @@ static FILE *open_sequence(msieve_obj *obj, bw_params_t *params,
 }
 
 /*-----------------------------------------------------------------------*/
-static void update_sequence_count(msieve_obj *obj, bw_params_t *params,
-				uint32 num_terms) {
+static int32 update_sequence_count(FILE *fp, uint32 num_terms) {
 
-	char buf[BW_PATH_LEN];
-	FILE *fp;
+	/* Rewrite the term count in the header, through the handle that
+	   is already open on the file rather than a second one: two
+	   handles on one file is the kind of thing that works until it
+	   does not, and a failure here is not cosmetic. The header count
+	   is half the restart state, so if it silently stops being
+	   updated the run becomes unresumable -- open_sequence() refuses
+	   a header holding fewer terms than the checkpoint claims, and
+	   every Krylov iteration computed so far is lost.
 
-	bw_seq_path(obj, params->seq, buf);
-	fp = fopen(buf, "r+b");
-	if (fp == NULL)
-		return;
+	   Returns 0 on success. The caller stops on failure, which leaves
+	   a consistent file rather than one that cannot be restarted. */
+
+	off_t pos = ftello(fp);
+
+	if (pos < 0)
+		return -1;
 	if (fseeko(fp, (off_t)offsetof(bw_seq_header_t, num_terms),
-				SEEK_SET) == 0)
-		fwrite(&num_terms, sizeof(uint32), 1, fp);
-	fclose(fp);
+				SEEK_SET) != 0)
+		return -1;
+	if (fwrite(&num_terms, sizeof(uint32), 1, fp) != 1)
+		return -1;
+	if (fflush(fp) != 0)
+		return -1;
+	if (fseeko(fp, pos, SEEK_SET) != 0)
+		return -1;
+	return 0;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -350,9 +372,22 @@ int32 bw_krylov(msieve_obj *obj, packed_matrix_t *matrix,
 			next_report = iter + 1 + report_interval;
 		}
 
+		/* an interrupt is honored at the next checkpoint, so that
+		   what is on disk is always consistent; ask for one right
+		   away rather than waiting out the rest of the interval,
+		   which is thousands of products on a large matrix */
+
+		if (obj->flags & MSIEVE_FLAG_STOP_SIEVING)
+			next_dump = iter + 1;
+
 		if (iter + 1 >= next_dump) {
 			fflush(seq_fp);
-			update_sequence_count(obj, params, iter + 1);
+			if (update_sequence_count(seq_fp, iter + 1) != 0) {
+				logprintf(obj, "error: cannot update Wiedemann "
+						"sequence header\n");
+				status = -1;
+				goto cleanup;
+			}
 			dump_krylov_state(obj, params, cur, n,
 					iter + 1, host_tmp);
 			next_dump = iter + 1 + dump_interval;
@@ -367,9 +402,14 @@ int32 bw_krylov(msieve_obj *obj, packed_matrix_t *matrix,
 	}
 
 	fflush(seq_fp);
+	if (update_sequence_count(seq_fp, num_terms) != 0) {
+		logprintf(obj, "error: cannot update Wiedemann sequence "
+				"header\n");
+		status = -1;
+		goto cleanup;
+	}
 	fclose(seq_fp);
 	seq_fp = NULL;
-	update_sequence_count(obj, params, num_terms);
 
 	logprintf(obj, "Krylov sequence %u complete, %u terms, %.1f sec\n",
 			params->seq, num_terms,

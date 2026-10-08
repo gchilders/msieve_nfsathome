@@ -177,6 +177,14 @@ static v_t *read_sequences(msieve_obj *obj, bw_params_t *params,
 		if (jb == 0) {
 			m = hdr.m;
 			num_terms = hdr.num_terms;
+
+			/* The sequences are the record of which x and y were
+			   used; carry that forward so the generator can say
+			   so too, and mksol need not be told again. */
+
+			params->seed1 = hdr.seed1;
+			params->seed2 = hdr.seed2;
+
 			a = (v_t *)aligned_malloc((size_t)num_terms * m * k *
 							sizeof(v_t), 64);
 			one = (v_t *)aligned_malloc((size_t)num_terms * m *
@@ -186,6 +194,19 @@ static v_t *read_sequences(msieve_obj *obj, bw_params_t *params,
 			logprintf(obj, "error: Wiedemann sequence %u holds "
 					"%u terms, expected %u\n", jb,
 					hdr.num_terms, num_terms);
+			fclose(fp);
+			goto fail;
+		}
+		else if (hdr.seed1 != params->seed1 ||
+			 hdr.seed2 != params->seed2) {
+
+			/* different seeds mean different x, so these terms
+			   are not part of the same sequence as sequence 0
+			   even though every other field agrees */
+
+			logprintf(obj, "error: Wiedemann sequence %u was "
+					"built with seed %u, sequence 0 with "
+					"%u\n", jb, hdr.seed1, params->seed1);
 			fclose(fp);
 			goto fail;
 		}
@@ -672,6 +693,8 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	hdr.n = n;
 	hdr.ncols = max_ncols;
 	hdr.degree = degree;
+	hdr.seed1 = params->seed1;
+	hdr.seed2 = params->seed2;
 	if (fwrite(&hdr, sizeof(hdr), 1, fp) != 1 ||
 	    fwrite(f, sizeof(v_t), (size_t)(degree + 1) * n, fp) !=
 			(size_t)(degree + 1) * n) {
