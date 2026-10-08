@@ -91,11 +91,48 @@ typedef struct {
 
 #define BW_CHK_MAGIC 0x314b5742		/* "BWK1" */
 
+/* the generator lingen produces and mksol consumes. One header, then
+   degree+1 coefficient blocks of VBITS v_t each */
+
+#define BW_GEN_MAGIC 0x31465742		/* "BWF1" */
+
+typedef struct {
+	uint32 magic;
+	uint32 vbits;
+	uint32 m;
+	uint32 n;
+	uint32 ncols;
+	uint32 degree;		/* coefficients are k = 0 .. degree */
+} bw_gen_header_t;
+
 /* stage entry points. Each returns 0 on success and -1 if it stopped
    early (interrupt, or a missing input from an earlier stage) */
 
 int32 bw_krylov(msieve_obj *obj, packed_matrix_t *matrix,
 			bw_params_t *params, uint32 max_ncols);
+
+/* On success *solution_out is an aligned_malloc'd array of max_ncols
+   v_t, one per matrix column, with dependency d in bit d. The caller
+   owns it. post_lanczos_matrix may be NULL */
+
+int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
+			bw_params_t *params, uint32 max_ncols,
+			v_t *post_lanczos_matrix,
+			v_t **solution_out, uint32 *num_deps_found);
+
+/* Small dense GF(2) helpers on v_t, in bw_gf2.c. That file depends on
+   nothing but this header, so it builds and tests on its own.
+
+   bw_gf2_nullspace finds a basis for the u with <rows[i], u> = 0 for
+   all i < num_rows, which must be at most VBITS. out needs room for
+   VBITS entries; returns how many were found, always at least
+   VBITS - num_rows */
+
+uint32 bw_v_parity(v_t a, v_t b);
+uint32 bw_v_popcount(v_t a);
+uint32 bw_v_lowest_set(v_t a, uint32 *bit);
+void bw_v_set_bit(v_t *a, uint32 bit);
+uint32 bw_gf2_nullspace(v_t *rows, uint32 num_rows, v_t *out);
 
 /* external interface, deliberately identical to block_lanczos() so the
    two are interchangeable at the call site in gnfs/gf2.c */

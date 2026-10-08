@@ -208,7 +208,9 @@ COMMON_SRCS = \
 	common/lanczos/lanczos_pre.c \
 	common/lanczos/matmul_util.c \
 	common/wiedemann/wiedemann.c \
+	common/wiedemann/bw_gf2.c \
 	common/wiedemann/krylov.c \
+	common/wiedemann/mksol.c \
 	common/smallfact/gmp_ecm.c \
 	common/smallfact/smallfact.c \
 	common/smallfact/squfof.c \

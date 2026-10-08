@@ -90,6 +90,7 @@ uint64 * block_wiedemann(msieve_obj *obj,
 	packed_matrix_t packed_matrix;
 	bw_params_t params;
 	uint32 have_post_lanczos;
+	uint64 *deps = NULL;
 
 	*num_deps_found = 0;
 
@@ -154,15 +155,42 @@ uint64 * block_wiedemann(msieve_obj *obj,
 	}
 
 	if (params.stage == BW_STAGE_LINGEN ||
-	    params.stage == BW_STAGE_MKSOL ||
 	    params.stage == BW_STAGE_ALL) {
 
-		logprintf(obj, "block Wiedemann: lingen and mksol are not "
-				"implemented yet; stopping after Krylov\n");
+		logprintf(obj, "block Wiedemann: lingen is not implemented "
+				"yet; produce the generator separately and "
+				"then run bw_stage=mksol\n");
+		if (params.stage == BW_STAGE_ALL)
+			goto done;
+	}
+
+	if (params.stage == BW_STAGE_MKSOL) {
+
+		v_t *solution = NULL;
+		uint32 num_found = 0;
+		uint32 i;
+
+		if (bw_mksol(obj, &packed_matrix, &params, max_ncols,
+				post_lanczos_matrix, &solution,
+				&num_found) != 0)
+			goto done;
+
+		if (num_found > 0) {
+			if (num_found > 64) {
+				logprintf(obj, "saving only 64 "
+						"dependencies\n");
+				num_found = 64;
+			}
+			deps = (uint64 *)xmalloc(max_ncols * sizeof(uint64));
+			for (i = 0; i < max_ncols; i++)
+				deps[i] = solution[i].w[0];
+			*num_deps_found = num_found;
+		}
+		aligned_free(solution);
 	}
 
 done:
 	packed_matrix_free(&packed_matrix);
 	free(post_lanczos_matrix);
-	return NULL;
+	return deps;
 }
