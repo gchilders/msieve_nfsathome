@@ -235,76 +235,66 @@ static uint32 check_generator(msieve_obj *obj, v_t *a, uint32 num_terms,
 }
 
 /*-----------------------------------------------------------------------*/
-int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
+/* A view of coefficients [first, first+len) of p. Shares storage, so it
+   is never freed */
 
-	uint32 m = 0, n = params->n_mult * VBITS;
-	uint32 b, num_terms, T;
-	uint32 t, i, j, r, c;
-	v_t *a = NULL, *f = NULL;
-	polmat_t pi, R;
-	uint32 *delta = NULL, *order = NULL, *is_pivot = NULL;
-	uint64 *dcol = NULL;
-	uint32 mwords;
-	uint32 degree = 0;
-	int32 status = -1;
-	time_t start_time;
-	char buf[BW_PATH_LEN];
-	FILE *fp;
-	bw_gen_header_t hdr;
+static void bmp_view(bmp_t *out, const bmp_t *in, uint32 first,
+			uint32 len) {
 
-	a = read_sequence(obj, params, max_ncols, &num_terms, &m);
-	if (a == NULL)
-		return -1;
+	out->nrows = in->nrows;
+	out->ncols = in->ncols;
+	out->rwords = in->rwords;
+	out->len = len;
+	out->data = in->data + (size_t)first * in->nrows * in->rwords;
+}
 
-	if (params->n_mult != 1) {
-		logprintf(obj, "error: lingen handles a single sequence so "
-				"far\n");
-		aligned_free(a);
-		return -1;
-	}
+/*-----------------------------------------------------------------------*/
+void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
+				bmp_t *pi_out) {
 
-	b = m + n;
-	T = num_terms;
-	mwords = (m + 63) / 64;
+	/* The base of the recursion, and the whole algorithm when the
+	   problem is small: eliminate the coefficient of X^t from the
+	   residual one t at a time, taking pivots in order of increasing
+	   column degree so the degrees stay balanced, and multiplying
+	   each pivot column by X.
 
-	logprintf(obj, "commencing Wiedemann lingen, %u terms, m = %u, "
-			"n = %u\n", num_terms, m, n);
-	logprintf(obj, "this is the quadratic generator; expect it to be "
-			"slow on a large matrix\n");
-	start_time = time(NULL);
+	   This works column at a time, so it wants the column-major
+	   layout rather than the coefficient-major one the multiply
+	   uses; the two conversions are linear in the size and happen
+	   once per call. */
 
-	/* R starts as G = [E | I], with E the reversed sequence so that
-	   the relations come out in the order mksol wants. pi starts as
-	   the identity. Both are capped at T coefficients: anything past
-	   the horizon is never read. */
+	uint32 m = G->nrows;
+	uint32 b = G->ncols;
+	uint32 mwords = (m + 63) / 64;
+	polmat_t R, pi;
+	uint32 *order, *is_pivot;
+	uint64 *dcol;
+	uint32 t, i, j, r, c, maxdelta;
 
 	pm_init(&R, m, b, T + 64);
 	pm_init(&pi, b, b, T + 64);
 
-	for (i = 0; i < T; i++) {
-		v_t *ai = a + (size_t)(T - 1 - i) * m;
+	for (t = 0; t < T; t++) {
+		const uint64 *gc = G->data +
+				(size_t)t * G->nrows * G->rwords;
 
 		for (r = 0; r < m; r++) {
-			for (c = 0; c < n; c++) {
-				if (v_bitset(ai[r], c))
-					pm_set_coeff(&R, c, r, i);
+			const uint64 *row = gc + (size_t)r * G->rwords;
+
+			for (c = 0; c < b; c++) {
+				if ((row[c >> 6] >> (c & 63)) & 1)
+					pm_set_coeff(&R, c, r, t);
 			}
 		}
 	}
-	for (r = 0; r < m; r++)
-		pm_set_coeff(&R, n + r, r, 0);
 	for (j = 0; j < b; j++)
 		pm_set_coeff(&pi, j, j, 0);
 
-	delta = (uint32 *)xcalloc(b, sizeof(uint32));
 	order = (uint32 *)xmalloc(b * sizeof(uint32));
 	is_pivot = (uint32 *)xmalloc(b * sizeof(uint32));
 	dcol = (uint64 *)xmalloc((size_t)b * mwords * sizeof(uint64));
 
 	for (t = 0; t < T; t++) {
-
-		/* the coefficient of X^t in R, one m-bit column per
-		   column of R */
 
 		for (j = 0; j < b; j++) {
 			uint64 *d = dcol + (size_t)j * mwords;
@@ -318,13 +308,11 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 			is_pivot[j] = 0;
 		}
 
-		/* visit columns in order of increasing degree, which is
-		   what keeps the basis minimal */
-
 		for (j = 0; j < b; j++)
 			order[j] = j;
 		for (i = 1; i < b; i++) {
 			uint32 key = order[i];
+
 			j = i;
 			while (j > 0 && delta[order[j - 1]] > delta[key]) {
 				order[j] = order[j - 1];
@@ -354,11 +342,6 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 			is_pivot[piv] = 1;
 			dp = dcol + (size_t)piv * mwords;
 
-			/* clear this row from every column that is not
-			   itself a pivot; a pivot column keeps whatever
-			   it has, because multiplying it by X moves this
-			   coefficient out of the way anyway */
-
 			for (c = 0; c < b; c++) {
 				uint64 *dc = dcol + (size_t)c * mwords;
 
@@ -380,37 +363,205 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 				delta[j]++;
 			}
 		}
-
-		if ((t & 1023) == 0) {
-			fprintf(stderr, "lingen %u of %u, %.1f%%\r", t, T,
-					100.0 * t / T);
-			fflush(stderr);
-		}
 	}
 
-	/* every coefficient below T must now be gone from R; that is the
-	   invariant the whole method rests on, and it is cheap to check */
+	/* How long the result actually is, measured rather than inferred.
 
-	for (t = 0; t < T; t++) {
-		for (j = 0; j < b; j++) {
-			for (r = 0; r < m; r++) {
-				if (pm_coeff(&R, j, r, t)) {
-					logprintf(obj, "error: lingen "
-						"residual is nonzero at "
-						"term %u\n", t);
-					goto cleanup;
+	   delta is the running total over the whole recursion, so sizing
+	   from it would allocate the accumulated degree at every leaf.
+	   But the local shift count is not a bound either: pivots are
+	   taken in order of global delta, so a column with few local
+	   shifts can have one with many XORed into it, and its degree is
+	   then larger than its own shift count. Truncating to that loses
+	   real coefficients, and the basis silently stops satisfying
+	   G pi = 0. */
+
+	maxdelta = 0;
+	for (c = 0; c < b; c++) {
+		for (r = 0; r < b; r++) {
+			uint64 *e = pm_entry(&pi, c, r);
+			uint32 w = pi.words;
+
+			while (w > 0 && e[w - 1] == 0)
+				w--;
+			if (w > 0) {
+				uint32 top = 64 * (w - 1);
+
+				for (i = 63; i > 0; i--) {
+					if (e[w - 1] & ((uint64)1 << i))
+						break;
 				}
+				maxdelta = MAX(maxdelta, top + i);
 			}
 		}
 	}
 
-	/* take the n columns of least degree and read the generator out
-	   of the top n rows of pi */
+	bmp_init(pi_out, b, b, maxdelta + 1);
+	for (t = 0; t <= maxdelta; t++) {
+		uint64 *pc = bmp_coeff(pi_out, t);
 
+		for (r = 0; r < b; r++) {
+			uint64 *row = pc + (size_t)r * pi_out->rwords;
+
+			for (c = 0; c < b; c++) {
+				if (pm_coeff(&pi, c, r, t))
+					row[c >> 6] |= (uint64)1 << (c & 63);
+			}
+		}
+	}
+
+	free(dcol);
+	free(is_pivot);
+	free(order);
+	pm_free(&pi);
+	pm_free(&R);
+}
+
+/*-----------------------------------------------------------------------*/
+#ifndef LINGEN_BASE_CASE
+#define LINGEN_BASE_CASE 64
+#endif
+
+void recursive_basis(const bmp_t *G, uint32 T, uint32 *delta,
+				bmp_t *pi_out) {
+
+	/* Divide and conquer on the order. Solve the first half, push the
+	   series through what that produced, and solve what is left of
+	   it; the two bases compose by multiplication.
+
+	   G * pi1 has its first T1 coefficients zero by construction,
+	   which is exactly what makes the slice at T1 the right input for
+	   the second half. */
+
+	uint32 T1, T2;
+	bmp_t Gv, pi1, pi2, E, Gsub;
+
+	if (T <= LINGEN_BASE_CASE) {
+		quadratic_basis(G, T, delta, pi_out);
+		return;
+	}
+
+	T1 = T / 2;
+	T2 = T - T1;
+
+	bmp_view(&Gv, G, 0, T1);
+	recursive_basis(&Gv, T1, delta, &pi1);
+
+	bmp_init(&E, G->nrows, pi1.ncols, T + pi1.len - 1);
+	{
+		bmp_t Gfull;
+
+		bmp_view(&Gfull, G, 0, T);
+		bmp_mul(&E, &Gfull, &pi1);
+	}
+
+	bmp_view(&Gsub, &E, T1, MIN(T2, E.len - T1));
+	recursive_basis(&Gsub, T2, delta, &pi2);
+
+	bmp_init(pi_out, pi1.nrows, pi2.ncols, pi1.len + pi2.len - 1);
+	bmp_mul(pi_out, &pi1, &pi2);
+
+	bmp_free(&E);
+	bmp_free(&pi2);
+	bmp_free(&pi1);
+}
+
+/*-----------------------------------------------------------------------*/
+int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
+
+	uint32 m = 0, n = params->n_mult * VBITS;
+	uint32 b, num_terms, T;
+	uint32 t, i, j, r, c;
+	v_t *a = NULL, *f = NULL;
+	bmp_t G, pi;
+	uint32 *delta = NULL, *order = NULL;
+	uint32 degree = 0;
+	int32 status = -1;
+	time_t start_time;
+	char buf[BW_PATH_LEN];
+	FILE *fp;
+	bw_gen_header_t hdr;
+
+	a = read_sequence(obj, params, max_ncols, &num_terms, &m);
+	if (a == NULL)
+		return -1;
+
+	if (params->n_mult != 1) {
+		logprintf(obj, "error: lingen handles a single sequence so "
+				"far\n");
+		aligned_free(a);
+		return -1;
+	}
+
+	b = m + n;
+	T = num_terms;
+
+	logprintf(obj, "commencing Wiedemann lingen, %u terms, m = %u, "
+			"n = %u\n", num_terms, m, n);
+	start_time = time(NULL);
+
+	/* G = [E | I] with E the reversed sequence, so that the relations
+	   come out as the correlation mksol needs rather than the
+	   convolution the basis naturally produces */
+
+	bmp_init(&G, m, b, T);
+	for (t = 0; t < T; t++) {
+		v_t *ai = a + (size_t)(T - 1 - t) * m;
+		uint64 *gc = bmp_coeff(&G, t);
+
+		for (r = 0; r < m; r++) {
+			uint64 *row = gc + (size_t)r * G.rwords;
+
+			for (c = 0; c < n; c++) {
+				if (v_bitset(ai[r], c))
+					row[c >> 6] |= (uint64)1 << (c & 63);
+			}
+			if (t == 0)
+				row[(n + r) >> 6] |=
+					(uint64)1 << ((n + r) & 63);
+		}
+	}
+
+	delta = (uint32 *)xcalloc(b, sizeof(uint32));
+	recursive_basis(&G, T, delta, &pi);
+
+	/* G pi must be zero below X^T; that is the whole invariant, and
+	   the recursion has enough moving parts to be worth checking */
+
+	{
+		bmp_t chk;
+		uint32 bad = 0;
+
+		bmp_init(&chk, m, b, T + pi.len - 1);
+		bmp_mul(&chk, &G, &pi);
+		for (t = 0; t < T && !bad; t++) {
+			uint64 *cc = bmp_coeff(&chk, t);
+			size_t w, num = (size_t)m * chk.rwords;
+
+			for (w = 0; w < num; w++) {
+				if (cc[w]) {
+					bad = 1;
+					break;
+				}
+			}
+		}
+		bmp_free(&chk);
+		if (bad) {
+			logprintf(obj, "error: lingen residual is nonzero "
+					"at term %u\n", t - 1);
+			goto cleanup;
+		}
+	}
+
+	/* read the generator out of the top n rows of the columns of
+	   least degree */
+
+	order = (uint32 *)xmalloc(b * sizeof(uint32));
 	for (j = 0; j < b; j++)
 		order[j] = j;
 	for (i = 1; i < b; i++) {
 		uint32 key = order[i];
+
 		j = i;
 		while (j > 0 && delta[order[j - 1]] > delta[key]) {
 			order[j] = order[j - 1];
@@ -422,18 +573,24 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	degree = 0;
 	for (i = 0; i < n; i++)
 		degree = MAX(degree, delta[order[i]]);
+	if (degree >= pi.len)
+		degree = pi.len - 1;
 
 	f = (v_t *)aligned_malloc((size_t)(degree + 1) * VBITS * sizeof(v_t),
 					64);
-	for (i = 0; i < (size_t)(degree + 1) * VBITS; i++)
+	for (i = 0; i < (uint32)(degree + 1) * VBITS; i++)
 		f[i] = v_zero;
 
 	for (i = 0; i < n; i++) {
 		uint32 col = order[i];
 
-		for (r = 0; r < n; r++) {
-			for (t = 0; t <= delta[col]; t++) {
-				if (pm_coeff(&pi, col, r, t))
+		for (t = 0; t <= degree; t++) {
+			uint64 *pc = bmp_coeff(&pi, t);
+
+			for (r = 0; r < n; r++) {
+				uint64 *row = pc + (size_t)r * pi.rwords;
+
+				if ((row[col >> 6] >> (col & 63)) & 1)
 					bw_v_set_bit(f + (size_t)t * VBITS + r,
 							i);
 			}
@@ -472,12 +629,10 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 
 cleanup:
 	aligned_free(f);
-	free(dcol);
-	free(is_pivot);
 	free(order);
 	free(delta);
-	pm_free(&pi);
-	pm_free(&R);
+	bmp_free(&pi);
+	bmp_free(&G);
 	aligned_free(a);
 	return status;
 }

@@ -126,6 +126,43 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 			v_t *post_lanczos_matrix,
 			v_t **solution_out, uint32 *num_deps_found);
 
+/* A matrix of GF(2) polynomials, held coefficient-major: coefficient k
+   is a whole dense nrows x ncols bit matrix, rows padded to a uint64
+   boundary. Multiplying two of these is a polynomial product whose
+   coefficients are matrices, so Karatsuba runs in the degree dimension
+   over a plain GF(2) matrix product and never needs the GF(2^w)
+   arithmetic a transform would. In lingen_matpoly.c */
+
+typedef struct {
+	uint32 nrows;
+	uint32 ncols;
+	uint32 rwords;		/* uint64 per row */
+	uint32 len;		/* coefficients */
+	uint64 *data;		/* [k][row][word] */
+} bmp_t;
+
+void bmp_init(bmp_t *p, uint32 nrows, uint32 ncols, uint32 len);
+void bmp_free(bmp_t *p);
+uint64 *bmp_coeff(bmp_t *p, uint32 k);
+
+/* c = a * b; c must already be len a->len + b->len - 1 and zeroed.
+   bmp_mul_school is the same product done the obvious way, kept as the
+   base of the recursion and as something to test against */
+
+void bmp_mul(bmp_t *c, const bmp_t *a, const bmp_t *b);
+void bmp_mul_school(bmp_t *c, const bmp_t *a, const bmp_t *b);
+
+/* The two halves of lingen, exposed so the recursion can be checked
+   against the base case on small random inputs rather than only on a
+   real sequence. Both take G (m x b, known to T coefficients) and the
+   running column degrees, and produce a basis pi with G pi = 0 mod
+   X^T. delta is updated in place */
+
+void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
+			bmp_t *pi_out);
+void recursive_basis(const bmp_t *G, uint32 T, uint32 *delta,
+			bmp_t *pi_out);
+
 /* Small dense GF(2) helpers on v_t, in bw_gf2.c. That file depends on
    nothing but this header, so it builds and tests on its own.
 
