@@ -14,6 +14,7 @@ $Id$
 
 #include <common.h>
 #include "gnfs.h"
+#include "../common/wiedemann/wiedemann.h"
 #include <dirent.h>
 
 /* the number of quadratic characters for each
@@ -1256,11 +1257,23 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 
 		/* solve the linear system */
 
-		dependencies = block_lanczos(obj,
+		/* block Lanczos unless the other solver was asked for */
+
+		if (obj->nfs_args != NULL &&
+		    strstr(obj->nfs_args, "solver=wiedemann") != NULL) {
+			dependencies = block_wiedemann(obj,
 					nrows, max_nrows, start_row,
 					num_dense_rows,
 					ncols, max_ncols, start_col,
 					cols, &deps_found);
+		}
+		else {
+			dependencies = block_lanczos(obj,
+					nrows, max_nrows, start_row,
+					num_dense_rows,
+					ncols, max_ncols, start_col,
+					cols, &deps_found);
+		}
 		if (deps_found)
 			dump_dependencies(obj, dependencies, max_ncols);
 		free(dependencies);

@@ -119,8 +119,12 @@ BIT7(56), BIT7(57), BIT7(58), BIT7(59), BIT7(60), BIT7(61), BIT7(62), BIT7(63),
 };
 
 /*-------------------------------------------------------------------*/
-static uint32 form_post_lanczos_matrix(msieve_obj *obj, uint32 *nrows, 
-				uint32 *dense_rows_out, 
+/* not static: block Wiedemann needs the same transformation, because
+   the packed matmuls require the dense row count to be a multiple of
+   VBITS and this is what arranges that */
+
+uint32 form_post_lanczos_matrix(msieve_obj *obj, uint32 *nrows,
+				uint32 *dense_rows_out,
 				uint32 ncols, la_col_t *cols,
 				v_t **post_lanczos_matrix) {
 

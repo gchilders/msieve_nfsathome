@@ -173,7 +173,19 @@ typedef struct packed_matrix_t {
 
 } packed_matrix_t;
 
-void packed_matrix_init(msieve_obj *obj, 
+/* Strip the densest POST_LANCZOS_ROWS rows out of the matrix and pack
+   a few more into dense format, leaving a dense row count that is a
+   multiple of VBITS. The packed matmuls require that, so both solvers
+   call this; the stripped rows are reinstated when the solution is
+   assembled. Returns nonzero if a post-Lanczos matrix was built.
+   Defined in lanczos.c */
+
+uint32 form_post_lanczos_matrix(msieve_obj *obj, uint32 *nrows,
+			uint32 *dense_rows_out,
+			uint32 ncols, la_col_t *cols,
+			v_t **post_lanczos_matrix);
+
+void packed_matrix_init(msieve_obj *obj,
 			packed_matrix_t *packed_matrix,
 			la_col_t *A, 
 			uint32 nrows, uint32 max_nrows, uint32 start_row, 

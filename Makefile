@@ -168,6 +168,7 @@ LIBS += -lgmp -lm -lpthread
 COMMON_HDR = \
 	aprcl/mpz_aprcl32.h \
 	common/lanczos/lanczos.h \
+	common/wiedemann/wiedemann.h \
 	common/filter/filter.h \
 	common/filter/filter_priv.h \
 	common/filter/merge_util.h \
@@ -206,6 +207,8 @@ COMMON_SRCS = \
 	common/lanczos/lanczos_matmul.c \
 	common/lanczos/lanczos_pre.c \
 	common/lanczos/matmul_util.c \
+	common/wiedemann/wiedemann.c \
+	common/wiedemann/krylov.c \
 	common/smallfact/gmp_ecm.c \
 	common/smallfact/smallfact.c \
 	common/smallfact/squfof.c \
