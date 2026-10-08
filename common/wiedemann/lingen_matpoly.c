@@ -33,6 +33,12 @@ $Id$
 #define BMP_KARATSUBA_CUTOFF 16
 #endif
 
+/* and below this many, spawning tasks for the sub-products costs more
+   than running them in turn */
+#ifndef BMP_TASK_CUTOFF
+#define BMP_TASK_CUTOFF 128
+#endif
+
 /* index of the lowest set bit; the argument is never zero */
 
 static INLINE uint32 bw_ctz64(uint64 x) {
@@ -248,9 +254,28 @@ static void bmp_mul_kara(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 	bmp_init(&z2, c->nrows, c->ncols, a1.len + b1.len - 1);
 	bmp_init(&z1, c->nrows, c->ncols, as.len + bs.len - 1);
 
-	bmp_mul_kara(&z0, &a0, &b0);
-	bmp_mul_kara(&z2, &a1, &b1);
-	bmp_mul_kara(&z1, &as, &bs);
+	/* The three sub-products share no state, and each one splits
+	   again, so tasks here give a deep and well balanced tree. Only
+	   worth the overhead while the pieces are still large; below
+	   that the sequential path is faster than scheduling it. */
+
+#ifdef HAVE_OMP
+	if (a->len >= BMP_TASK_CUTOFF && b->len >= BMP_TASK_CUTOFF) {
+#pragma omp task shared(z0, a0, b0)
+		bmp_mul_kara(&z0, &a0, &b0);
+#pragma omp task shared(z2, a1, b1)
+		bmp_mul_kara(&z2, &a1, &b1);
+#pragma omp task shared(z1, as, bs)
+		bmp_mul_kara(&z1, &as, &bs);
+#pragma omp taskwait
+	}
+	else
+#endif
+	{
+		bmp_mul_kara(&z0, &a0, &b0);
+		bmp_mul_kara(&z2, &a1, &b1);
+		bmp_mul_kara(&z1, &as, &bs);
+	}
 
 	/* z1 <- z1 - z0 - z2, which in characteristic 2 is an XOR */
 
@@ -272,9 +297,18 @@ static void bmp_mul_kara(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 void bmp_mul(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 
 	/* c = a * b. c must already be the right length, a->len +
-	   b->len - 1, and zeroed */
+	   b->len - 1, and zeroed.
+
+	   One team is created here and one thread starts the recursion;
+	   the sub-products below spawn into it. The team is built per
+	   call rather than per level, so the nesting costs nothing. */
 
 	if (a->len == 0 || b->len == 0)
 		return;
+
+#ifdef HAVE_OMP
+#pragma omp parallel
+#pragma omp single
+#endif
 	bmp_mul_kara(c, a, b);
 }
