@@ -123,71 +123,118 @@ static void pm_col_shift(polmat_t *p, uint32 j) {
 }
 
 /*-----------------------------------------------------------------------*/
-static v_t *read_sequence(msieve_obj *obj, bw_params_t *params,
+static v_t *read_sequences(msieve_obj *obj, bw_params_t *params,
 			uint32 ncols, uint32 *num_terms_out, uint32 *m_out) {
+
+	/* The n columns of the method are split into n_mult sequences of
+	   VBITS, each computed by its own process with nothing shared.
+	   Here they are put back together: term i is m rows of n bits,
+	   held as n_mult v_t per row, with block jb coming from file jb.
+	   Every file has to agree about m, n, the matrix, and how many
+	   terms it holds. */
 
 	char buf[BW_PATH_LEN];
 	FILE *fp;
 	bw_seq_header_t hdr;
-	v_t *a;
-	size_t num;
+	uint32 k = params->n_mult;
+	uint32 jb, t, r;
+	uint32 m = 0, num_terms = 0;
+	v_t *a = NULL, *one = NULL;
 
-	snprintf(buf, sizeof(buf), "%s.bw.a.%u", obj->savefile.name,
-			params->seq);
-	fp = fopen(buf, "rb");
-	if (fp == NULL) {
-		logprintf(obj, "error: cannot open Wiedemann sequence %s\n",
-				buf);
-		return NULL;
-	}
-	if (fread(&hdr, sizeof(hdr), 1, fp) != 1 ||
-	    hdr.magic != BW_SEQ_MAGIC) {
-		logprintf(obj, "error: Wiedemann sequence is corrupt\n");
+	for (jb = 0; jb < k; jb++) {
+		size_t num;
+
+		snprintf(buf, sizeof(buf), "%s.bw.a.%u",
+				obj->savefile.name, jb);
+		fp = fopen(buf, "rb");
+		if (fp == NULL) {
+			logprintf(obj, "error: cannot open Wiedemann "
+					"sequence %s\n", buf);
+			goto fail;
+		}
+		if (fread(&hdr, sizeof(hdr), 1, fp) != 1 ||
+		    hdr.magic != BW_SEQ_MAGIC) {
+			logprintf(obj, "error: Wiedemann sequence %u is "
+					"corrupt\n", jb);
+			fclose(fp);
+			goto fail;
+		}
+		if (hdr.vbits != VBITS || hdr.ncols != ncols ||
+		    hdr.m != params->m_mult * VBITS ||
+		    hdr.n != k * VBITS || hdr.seq != jb) {
+			logprintf(obj, "error: Wiedemann sequence %u does "
+					"not match this matrix\n", jb);
+			fclose(fp);
+			goto fail;
+		}
+		if (hdr.num_terms == 0) {
+			logprintf(obj, "error: Wiedemann sequence %u is "
+					"empty\n", jb);
+			fclose(fp);
+			goto fail;
+		}
+
+		if (jb == 0) {
+			m = hdr.m;
+			num_terms = hdr.num_terms;
+			a = (v_t *)aligned_malloc((size_t)num_terms * m * k *
+							sizeof(v_t), 64);
+			one = (v_t *)aligned_malloc((size_t)num_terms * m *
+							sizeof(v_t), 64);
+		}
+		else if (hdr.m != m || hdr.num_terms < num_terms) {
+			logprintf(obj, "error: Wiedemann sequence %u holds "
+					"%u terms, expected %u\n", jb,
+					hdr.num_terms, num_terms);
+			fclose(fp);
+			goto fail;
+		}
+
+		num = (size_t)num_terms * m;
+		if (fread(one, sizeof(v_t), num, fp) != num) {
+			logprintf(obj, "error: Wiedemann sequence %u is "
+					"truncated\n", jb);
+			fclose(fp);
+			goto fail;
+		}
 		fclose(fp);
-		return NULL;
-	}
-	if (hdr.vbits != VBITS || hdr.ncols != ncols ||
-	    hdr.m != params->m_mult * VBITS ||
-	    hdr.n != params->n_mult * VBITS) {
-		logprintf(obj, "error: Wiedemann sequence does not match "
-				"this matrix\n");
-		fclose(fp);
-		return NULL;
-	}
-	if (hdr.num_terms == 0) {
-		logprintf(obj, "error: Wiedemann sequence is empty\n");
-		fclose(fp);
-		return NULL;
+
+		for (t = 0; t < num_terms; t++) {
+			for (r = 0; r < m; r++) {
+				a[((size_t)t * m + r) * k + jb] =
+						one[(size_t)t * m + r];
+			}
+		}
 	}
 
-	num = (size_t)hdr.num_terms * hdr.m;
-	a = (v_t *)aligned_malloc(num * sizeof(v_t), 64);
-	if (fread(a, sizeof(v_t), num, fp) != num) {
-		logprintf(obj, "error: Wiedemann sequence is truncated\n");
-		aligned_free(a);
-		fclose(fp);
-		return NULL;
-	}
-	fclose(fp);
-
-	*num_terms_out = hdr.num_terms;
-	*m_out = hdr.m;
+	aligned_free(one);
+	*num_terms_out = num_terms;
+	*m_out = m;
 	return a;
+
+fail:
+	aligned_free(one);
+	aligned_free(a);
+	return NULL;
 }
 
 /*-----------------------------------------------------------------------*/
 static uint32 check_generator(msieve_obj *obj, v_t *a, uint32 num_terms,
-				uint32 m, uint32 degree, v_t *f,
-				uint32 num_checks) {
+				uint32 m, uint32 nblk, uint32 degree,
+				v_t *f, uint32 num_checks) {
 
 	/* The relation mksol relies on, tested directly on the sequence:
 	   sum_k a_{i+k} F_k must be zero. Sampled rather than exhaustive,
 	   because a full check costs as much as the generator did, and a
-	   wrong orientation or an off-by-one shows up immediately. */
+	   wrong orientation or an off-by-one shows up immediately.
+
+	   a_{i+k} is m rows of n bits, held as nblk v_t per row; F_k is
+	   n rows of VBITS bits, one v_t each. */
 
 	uint32 bad = 0;
-	uint32 c, k, r;
+	uint32 c, k, r, jb;
 	uint32 limit;
+	uint32 n = nblk * VBITS;
 	v_t *acc;
 
 	if (num_terms <= degree + 1)
@@ -204,19 +251,21 @@ static uint32 check_generator(msieve_obj *obj, v_t *a, uint32 num_terms,
 		for (r = 0; r < m; r++)
 			acc[r] = v_zero;
 
-		/* a_{i+k} is m rows of VBITS bits; F_k is VBITS rows of
-		   VBITS bits. Accumulate a_{i+k} * F_k */
-
 		for (k = 0; k <= degree; k++) {
-			v_t *ak = a + (size_t)(i + k) * m;
-			v_t *fk = f + (size_t)k * VBITS;
+			v_t *ak = a + (size_t)(i + k) * m * nblk;
+			v_t *fk = f + (size_t)k * n;
 
 			for (r = 0; r < m; r++) {
-				uint32 j;
+				for (jb = 0; jb < nblk; jb++) {
+					v_t w = ak[(size_t)r * nblk + jb];
+					uint32 j;
 
-				for (j = 0; j < VBITS; j++) {
-					if (v_bitset(ak[r], j))
-						acc[r] = v_xor(acc[r], fk[j]);
+					for (j = 0; j < VBITS; j++) {
+						if (v_bitset(w, j))
+							acc[r] = v_xor(acc[r],
+								fk[jb * VBITS
+									+ j]);
+					}
 				}
 			}
 		}
@@ -482,16 +531,9 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	FILE *fp;
 	bw_gen_header_t hdr;
 
-	a = read_sequence(obj, params, max_ncols, &num_terms, &m);
+	a = read_sequences(obj, params, max_ncols, &num_terms, &m);
 	if (a == NULL)
 		return -1;
-
-	if (params->n_mult != 1) {
-		logprintf(obj, "error: lingen handles a single sequence so "
-				"far\n");
-		aligned_free(a);
-		return -1;
-	}
 
 	b = m + n;
 	T = num_terms;
@@ -506,14 +548,20 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 
 	bmp_init(&G, m, b, T);
 	for (t = 0; t < T; t++) {
-		v_t *ai = a + (size_t)(T - 1 - t) * m;
+		v_t *ai = a + (size_t)(T - 1 - t) * m * params->n_mult;
 		uint64 *gc = bmp_coeff(&G, t);
 
 		for (r = 0; r < m; r++) {
 			uint64 *row = gc + (size_t)r * G.rwords;
 
+			/* column c of the sequence lives in block
+			   c / VBITS, which is the file it came from */
+
 			for (c = 0; c < n; c++) {
-				if (v_bitset(ai[r], c))
+				v_t w = ai[(size_t)r * params->n_mult +
+						c / VBITS];
+
+				if (v_bitset(w, c % VBITS))
 					row[c >> 6] |= (uint64)1 << (c & 63);
 			}
 			if (t == 0)
@@ -570,18 +618,24 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 		order[j] = key;
 	}
 
+	/* The solution block is VBITS wide, because that is what a v_t
+	   holds and what the dependency file records, so only the VBITS
+	   columns of least degree are kept. Each coefficient of the
+	   generator is then n rows of VBITS bits -- one v_t per row of
+	   y, across all the sequences. */
+
 	degree = 0;
-	for (i = 0; i < n; i++)
+	for (i = 0; i < VBITS; i++)
 		degree = MAX(degree, delta[order[i]]);
 	if (degree >= pi.len)
 		degree = pi.len - 1;
 
-	f = (v_t *)aligned_malloc((size_t)(degree + 1) * VBITS * sizeof(v_t),
+	f = (v_t *)aligned_malloc((size_t)(degree + 1) * n * sizeof(v_t),
 					64);
-	for (i = 0; i < (uint32)(degree + 1) * VBITS; i++)
+	for (i = 0; i < (uint32)(degree + 1) * n; i++)
 		f[i] = v_zero;
 
-	for (i = 0; i < n; i++) {
+	for (i = 0; i < VBITS; i++) {
 		uint32 col = order[i];
 
 		for (t = 0; t <= degree; t++) {
@@ -591,7 +645,7 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 				uint64 *row = pc + (size_t)r * pi.rwords;
 
 				if ((row[col >> 6] >> (col & 63)) & 1)
-					bw_v_set_bit(f + (size_t)t * VBITS + r,
+					bw_v_set_bit(f + (size_t)t * n + r,
 							i);
 			}
 		}
@@ -600,7 +654,8 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	logprintf(obj, "generator has degree %u, %.1f sec\n", degree,
 			difftime(time(NULL), start_time));
 
-	if (check_generator(obj, a, num_terms, m, degree, f, 64) != 0)
+	if (check_generator(obj, a, num_terms, m, params->n_mult, degree,
+			f, 64) != 0)
 		goto cleanup;
 
 	logprintf(obj, "generator verified against the sequence\n");
@@ -618,8 +673,8 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	hdr.ncols = max_ncols;
 	hdr.degree = degree;
 	if (fwrite(&hdr, sizeof(hdr), 1, fp) != 1 ||
-	    fwrite(f, sizeof(v_t), (size_t)(degree + 1) * VBITS, fp) !=
-			(size_t)(degree + 1) * VBITS) {
+	    fwrite(f, sizeof(v_t), (size_t)(degree + 1) * n, fp) !=
+			(size_t)(degree + 1) * n) {
 		logprintf(obj, "error: cannot write Wiedemann generator\n");
 		fclose(fp);
 		goto cleanup;

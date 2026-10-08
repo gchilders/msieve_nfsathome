@@ -69,7 +69,7 @@ static v_t *read_generator(msieve_obj *obj, bw_params_t *params,
 
 	/* one VBITS x VBITS block per coefficient, k = 0 .. degree */
 
-	num = (size_t)(hdr.degree + 1) * VBITS;
+	num = (size_t)(hdr.degree + 1) * hdr.n;
 	f = (v_t *)aligned_malloc(num * sizeof(v_t), 64);
 	if (fread(f, sizeof(v_t), num, fp) != num) {
 		logprintf(obj, "error: Wiedemann generator is truncated\n");
@@ -103,12 +103,6 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 	*solution_out = NULL;
 	*num_deps_found = 0;
 
-	if (params->n_mult != 1) {
-		logprintf(obj, "error: mksol handles a single sequence so "
-				"far\n");
-		return -1;
-	}
-
 	f = read_generator(obj, params, max_ncols, &degree);
 	if (f == NULL)
 		return -1;
@@ -124,20 +118,8 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 	host_res = (v_t *)aligned_malloc((size_t)max_ncols * sizeof(v_t), 64);
 	combos = (v_t *)xmalloc(VBITS * sizeof(v_t));
 
-	/* W = sum_k A^k y F_k. y has to be regenerated exactly as the
-	   Krylov stage had it, which is why the seeds are fixed and
-	   travel in the parameters */
-
-	{
-		uint32 seed1 = params->seed1;
-		uint32 seed2 = params->seed2;
-
-		for (i = 0; i < 1 + params->seq; i++) {
-			for (j = 0; j < n; j++)
-				host_w[j] = v_random(&seed1, &seed2);
-		}
-		vv_copyin(z, host_w, n);
-	}
+	/* y is regenerated exactly as the Krylov stage had it, which is
+	   why the seeds are fixed and travel in the parameters */
 
 	/* The generator annihilates y itself, not just the sequence seen
 	   through x, so sum_k A^k y F_k is zero. That is expected: it is
@@ -152,18 +134,19 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 
 	{
 		uint32 *shift = (uint32 *)xmalloc(VBITS * sizeof(uint32));
+		uint32 nrow = params->n_mult * VBITS;
 		v_t *fs;
 		uint32 max_shift = 0, min_shift = degree + 1;
 
 		for (j = 0; j < VBITS; j++) {
 			shift[j] = degree + 1;
 			for (k = 0; k <= degree; k++) {
-				for (i = 0; i < VBITS; i++) {
-					if (v_bitset(f[(size_t)k * VBITS + i],
+				for (i = 0; i < nrow; i++) {
+					if (v_bitset(f[(size_t)k * nrow + i],
 							j))
 						break;
 				}
-				if (i < VBITS) {
+				if (i < nrow) {
 					shift[j] = k;
 					break;
 				}
@@ -175,18 +158,18 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 		}
 
 		fs = (v_t *)aligned_malloc((size_t)(degree + 1) *
-						VBITS * sizeof(v_t), 64);
-		for (i = 0; i < (uint32)(degree + 1) * VBITS; i++)
+						nrow * sizeof(v_t), 64);
+		for (i = 0; i < (uint32)(degree + 1) * nrow; i++)
 			fs[i] = v_zero;
 
 		for (j = 0; j < VBITS; j++) {
 			if (shift[j] > degree)
 				continue;
 			for (k = 0; k + shift[j] <= degree; k++) {
-				v_t *src = f + (size_t)(k + shift[j]) * VBITS;
-				v_t *dst = fs + (size_t)k * VBITS;
+				v_t *src = f + (size_t)(k + shift[j]) * nrow;
+				v_t *dst = fs + (size_t)k * nrow;
 
-				for (i = 0; i < VBITS; i++) {
+				for (i = 0; i < nrow; i++) {
 					if (v_bitset(src[i], j))
 						bw_v_set_bit(dst + i, j);
 				}
@@ -201,17 +184,43 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 		free(shift);
 	}
 
-	vv_clear(w, n);
-	for (k = 0; ; k++) {
+	/* W = sum_k A^k y F_k, with y the whole n-column block. Split by
+	   sequence that is W = sum_jb sum_k A^k y_jb F_k[jb], where
+	   F_k[jb] is the VBITS rows of the generator belonging to
+	   sequence jb -- so each term stays VBITS wide and uses the same
+	   vector operations a single sequence would. The partial
+	   solutions simply XOR together. */
 
-		vv_mul_NxB_BxB_acc(matrix, z, f + (size_t)k * VBITS, w, n);
+	{
+		uint32 nrow = params->n_mult * VBITS;
+		uint32 jb;
 
-		if (k == degree)
-			break;
+		vv_clear(w, n);
 
-		vv_clear(prod, n);
-		mul_MxN_NxB(matrix, z, prod, NULL);
-		swap = z; z = prod; prod = swap;
+		for (jb = 0; jb < params->n_mult; jb++) {
+			uint32 seed1 = params->seed1;
+			uint32 seed2 = params->seed2;
+
+			for (i = 0; i < 1 + jb; i++) {
+				for (j = 0; j < n; j++)
+					host_w[j] = v_random(&seed1, &seed2);
+			}
+			vv_copyin(z, host_w, n);
+
+			for (k = 0; ; k++) {
+
+				vv_mul_NxB_BxB_acc(matrix, z,
+						f + (size_t)k * nrow +
+						(size_t)jb * VBITS, w, n);
+
+				if (k == degree)
+					break;
+
+				vv_clear(prod, n);
+				mul_MxN_NxB(matrix, z, prod, NULL);
+				swap = z; z = prod; prod = swap;
+			}
+		}
 	}
 
 	/* Walk the columns forward until each dies, keeping the last
