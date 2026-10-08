@@ -39,6 +39,70 @@ $Id$
 #define BMP_TASK_CUTOFF 128
 #endif
 
+/*-----------------------------------------------------------------------*/
+#ifdef LINGEN_PROFILE
+
+/* Per-thread slots rather than atomics: the leaf counter is hit once
+   per schoolbook product, which is often, and false sharing on a
+   single accumulator would show up as the very thing being measured. */
+
+#define LP_MAX_THREADS 256
+
+static double lp_time[LP_NUM][LP_MAX_THREADS];
+static uint64 lp_count[LP_NUM][LP_MAX_THREADS];
+
+double lingen_wtime(void) {
+
+#ifdef HAVE_OMP
+	return omp_get_wtime();
+#else
+	return (double)clock() / CLOCKS_PER_SEC;
+#endif
+}
+
+static uint32 lp_thread(void) {
+
+#ifdef HAVE_OMP
+	return (uint32)omp_get_thread_num() % LP_MAX_THREADS;
+#else
+	return 0;
+#endif
+}
+
+void lingen_prof_add(uint32 slot, double secs) {
+
+	uint32 t = lp_thread();
+
+	lp_time[slot][t] += secs;
+	lp_count[slot][t]++;
+}
+
+void lingen_prof_bump(uint32 slot, uint64 amount) {
+
+	lp_count[slot][lp_thread()] += amount;
+}
+
+double lingen_prof_time(uint32 slot) {
+
+	double sum = 0;
+	uint32 i;
+
+	for (i = 0; i < LP_MAX_THREADS; i++)
+		sum += lp_time[slot][i];
+	return sum;
+}
+
+uint64 lingen_prof_count(uint32 slot) {
+
+	uint64 sum = 0;
+	uint32 i;
+
+	for (i = 0; i < LP_MAX_THREADS; i++)
+		sum += lp_count[slot][i];
+	return sum;
+}
+#endif
+
 /* index of the lowest set bit; the argument is never zero */
 
 static INLINE uint32 bw_ctz64(uint64 x) {
@@ -132,6 +196,9 @@ void bmp_mul_school(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 	/* the reference product, and the base of the recursion */
 
 	uint32 i, j;
+#ifdef LINGEN_PROFILE
+	double t0 = lingen_wtime();
+#endif
 
 	for (i = 0; i < a->len; i++) {
 		const uint64 *ai = a->data +
@@ -147,6 +214,19 @@ void bmp_mul_school(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 					a->rwords, c->rwords);
 		}
 	}
+#ifdef LINGEN_PROFILE
+	lingen_prof_add(LP_SCHOOL, lingen_wtime() - t0);
+
+	/* How many word XORs that asked for. Counted from the shape
+	   rather than inside the bit walk, which would perturb the loop
+	   being measured: the operands are dense random over GF(2), so
+	   half the kdim bits are set and the estimate is exact to within
+	   the sampling. Against the wall time it says whether the leaf
+	   is running at memory speed or nowhere near it. */
+
+	lingen_prof_bump(LP_OPS, (uint64)a->len * b->len * a->nrows *
+				(a->ncols / 2) * c->rwords);
+#endif
 }
 
 /*-----------------------------------------------------------------------*/
@@ -205,6 +285,9 @@ static void bmp_mul_kara(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 		uint32 step = shrt->len;
 		uint32 off;
 
+#ifdef LINGEN_PROFILE
+		lingen_prof_bump(LP_SPLIT, 1);
+#endif
 		for (off = 0; off < lng->len; off += step) {
 			uint32 piece = MIN(step, lng->len - off);
 			bmp_t sl, prod;

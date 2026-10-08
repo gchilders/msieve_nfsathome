@@ -33,7 +33,10 @@ ifeq ($(SVN_VERSION),)
 	SVN_VERSION := unknown
 endif
 
-CFLAGS = $(OPT_FLAGS) $(MACHINE_FLAGS) $(WARN_FLAGS) \
+# EXTRA_CFLAGS is a hook for one-off diagnostic builds, e.g.
+# make ... EXTRA_CFLAGS=-DLINGEN_PROFILE
+
+CFLAGS = $(OPT_FLAGS) $(MACHINE_FLAGS) $(WARN_FLAGS) $(EXTRA_CFLAGS) \
 	 	-DMSIEVE_SVN_VERSION="\"$(SVN_VERSION)\"" \
 		-I. -Iaprcl -Iinclude -Ignfs -Ignfs/poly -Ignfs/poly/stage1
 

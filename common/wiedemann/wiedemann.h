@@ -153,6 +153,35 @@ void bmp_init(bmp_t *p, uint32 nrows, uint32 ncols, uint32 len);
 void bmp_free(bmp_t *p);
 uint64 *bmp_coeff(bmp_t *p, uint32 k);
 
+/* Optional accounting for where lingen spends its time, built in with
+   -DLINGEN_PROFILE (see EXTRA_CFLAGS in the Makefile). Off by default
+   because the leaf timer sits in the inner recursion.
+
+   The slots are not all the same kind of measurement. BASE, MUL_E and
+   MUL_PI are wall time, taken in recursive_basis(), which is
+   sequential, so they partition the recursion. SCHOOL is summed over
+   threads, so comparing it against the wall time of the recursion
+   says how many threads were actually busy. SPLIT only counts, since
+   it nests inside SCHOOL and timing it would double count. */
+
+#ifdef LINGEN_PROFILE
+enum {
+	LP_BASE = 0,	/* the quadratic base case */
+	LP_MUL_E,	/* residual product, G * pi1 */
+	LP_MUL_PI,	/* composition, pi1 * pi2 */
+	LP_SCHOOL,	/* leaf products, summed over threads */
+	LP_SPLIT,	/* unbalanced operands: this path spawns no tasks */
+	LP_OPS,		/* word XORs the leaf products ask for */
+	LP_NUM
+};
+
+double lingen_wtime(void);
+void lingen_prof_add(uint32 slot, double secs);
+void lingen_prof_bump(uint32 slot, uint64 amount);
+double lingen_prof_time(uint32 slot);
+uint64 lingen_prof_count(uint32 slot);
+#endif
+
 /* c = a * b; c must already be len a->len + b->len - 1 and zeroed.
    bmp_mul_school is the same product done the obvious way, kept as the
    base of the recursion and as something to test against */

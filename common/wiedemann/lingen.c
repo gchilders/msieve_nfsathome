@@ -505,9 +505,18 @@ void recursive_basis(const bmp_t *G, uint32 T, uint32 *delta,
 
 	uint32 T1, T2;
 	bmp_t Gv, pi1, pi2, E, Gsub;
+#ifdef LINGEN_PROFILE
+	double t0;
+#endif
 
 	if (T <= LINGEN_BASE_CASE) {
+#ifdef LINGEN_PROFILE
+		t0 = lingen_wtime();
+#endif
 		quadratic_basis(G, T, delta, pi_out);
+#ifdef LINGEN_PROFILE
+		lingen_prof_add(LP_BASE, lingen_wtime() - t0);
+#endif
 		return;
 	}
 
@@ -522,14 +531,26 @@ void recursive_basis(const bmp_t *G, uint32 T, uint32 *delta,
 		bmp_t Gfull;
 
 		bmp_view(&Gfull, G, 0, T);
+#ifdef LINGEN_PROFILE
+		t0 = lingen_wtime();
+#endif
 		bmp_mul(&E, &Gfull, &pi1);
+#ifdef LINGEN_PROFILE
+		lingen_prof_add(LP_MUL_E, lingen_wtime() - t0);
+#endif
 	}
 
 	bmp_view(&Gsub, &E, T1, MIN(T2, E.len - T1));
 	recursive_basis(&Gsub, T2, delta, &pi2);
 
 	bmp_init(pi_out, pi1.nrows, pi2.ncols, pi1.len + pi2.len - 1);
+#ifdef LINGEN_PROFILE
+	t0 = lingen_wtime();
+#endif
 	bmp_mul(pi_out, &pi1, &pi2);
+#ifdef LINGEN_PROFILE
+	lingen_prof_add(LP_MUL_PI, lingen_wtime() - t0);
+#endif
 
 	bmp_free(&E);
 	bmp_free(&pi2);
@@ -547,11 +568,17 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	uint32 *delta = NULL, *order = NULL;
 	uint32 degree = 0;
 	int32 status = -1;
-	time_t start_time;
+	double recursion_secs = 0;
+	time_t start_time, phase_time;
+#ifdef LINGEN_PROFILE
+	double leaf_in_recursion = 0;
+	uint64 ops_in_recursion = 0;
+#endif
 	char buf[BW_PATH_LEN];
 	FILE *fp;
 	bw_gen_header_t hdr;
 
+	phase_time = time(NULL);
 	a = read_sequences(obj, params, max_ncols, &num_terms, &m);
 	if (a == NULL)
 		return -1;
@@ -561,6 +588,8 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 
 	logprintf(obj, "commencing Wiedemann lingen, %u terms, m = %u, "
 			"n = %u\n", num_terms, m, n);
+	logprintf(obj, "lingen: read the sequences in %.1f sec\n",
+			difftime(time(NULL), phase_time));
 	start_time = time(NULL);
 
 	/* G = [E | I] with E the reversed sequence, so that the relations
@@ -592,11 +621,23 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	}
 
 	delta = (uint32 *)xcalloc(b, sizeof(uint32));
+
+	phase_time = time(NULL);
 	recursive_basis(&G, T, delta, &pi);
+	recursion_secs = difftime(time(NULL), phase_time);
+#ifdef LINGEN_PROFILE
+	/* snapshot before the residual check, which is itself a large
+	   product and would otherwise be counted as recursion work */
+	leaf_in_recursion = lingen_prof_time(LP_SCHOOL);
+	ops_in_recursion = lingen_prof_count(LP_OPS);
+#endif
+	logprintf(obj, "lingen: recursion %.1f sec, pi has %u coefficients\n",
+			recursion_secs, pi.len);
 
 	/* G pi must be zero below X^T; that is the whole invariant, and
 	   the recursion has enough moving parts to be worth checking */
 
+	phase_time = time(NULL);
 	{
 		bmp_t chk;
 		uint32 bad = 0;
@@ -621,6 +662,8 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 			goto cleanup;
 		}
 	}
+	logprintf(obj, "lingen: residual check %.1f sec\n",
+			difftime(time(NULL), phase_time));
 
 	/* read the generator out of the top n rows of the columns of
 	   least degree */
@@ -675,11 +718,72 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	logprintf(obj, "generator has degree %u, %.1f sec\n", degree,
 			difftime(time(NULL), start_time));
 
+#ifdef LINGEN_PROFILE
+	{
+		/* BASE, MUL_E and MUL_PI are wall time from the sequential
+		   spine of the recursion, so they add up to it. SCHOOL is
+		   summed over threads, so SCHOOL divided by the recursion
+		   wall time is the number of threads that were really
+		   working -- compare it against the number available. */
+
+		double rec = lingen_prof_time(LP_BASE) +
+				lingen_prof_time(LP_MUL_E) +
+				lingen_prof_time(LP_MUL_PI);
+		double leaf = leaf_in_recursion;
+		int nthreads = 1;
+
+#ifdef HAVE_OMP
+		nthreads = omp_get_max_threads();
+#endif
+		logprintf(obj, "lingen profile: base case %.1f sec (%" PRIu64
+				" calls)\n", lingen_prof_time(LP_BASE),
+				lingen_prof_count(LP_BASE));
+		logprintf(obj, "lingen profile: residual products %.1f sec, "
+				"composition products %.1f sec\n",
+				lingen_prof_time(LP_MUL_E),
+				lingen_prof_time(LP_MUL_PI));
+		logprintf(obj, "lingen profile: leaf products in the "
+				"recursion %.1f sec over all threads, %.1f "
+				"sec more in the residual check, %" PRIu64
+				" unbalanced splits\n", leaf,
+				lingen_prof_time(LP_SCHOOL) - leaf,
+				lingen_prof_count(LP_SPLIT));
+		if (leaf > 0) {
+			/* each word XOR reads two 8-byte words and writes
+			   one, so the rate below is a lower bound on the
+			   traffic the leaf asks the memory system for */
+
+			double ops = (double)ops_in_recursion;
+
+			logprintf(obj, "lingen profile: %.3e word XORs, "
+					"%.2f G/sec, about %.1f GB/sec\n",
+					ops, ops / leaf / 1e9,
+					ops * 24 / leaf / 1e9);
+		}
+		/* whatever the recursion spent outside those three is
+		   allocation: every level xcallocs its operands, and at
+		   the top those are hundreds of megabytes to zero */
+
+		logprintf(obj, "lingen profile: %.1f sec of the recursion "
+				"was neither, i.e. allocation\n",
+				recursion_secs - rec);
+		if (rec > 0) {
+			logprintf(obj, "lingen profile: %.2f threads busy on "
+					"average of %d available (%.0f%% of "
+					"the recursion is leaf work)\n",
+					leaf / rec, nthreads,
+					100.0 * leaf / (rec * nthreads));
+		}
+	}
+#endif
+
+	phase_time = time(NULL);
 	if (check_generator(obj, a, num_terms, m, params->n_mult, degree,
 			f, 64) != 0)
 		goto cleanup;
 
-	logprintf(obj, "generator verified against the sequence\n");
+	logprintf(obj, "generator verified against the sequence, %.1f sec\n",
+			difftime(time(NULL), phase_time));
 
 	snprintf(buf, sizeof(buf), "%s.bw.f", obj->savefile.name);
 	fp = fopen(buf, "wb");
