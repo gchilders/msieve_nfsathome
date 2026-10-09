@@ -252,23 +252,38 @@ static uint32 check_generator(msieve_obj *obj, v_t *a, uint32 num_terms,
 	   a_{i+k} is m rows of n bits, held as nblk v_t per row; F_k is
 	   n rows of VBITS bits, one v_t each. */
 
-	uint32 bad = 0;
-	uint32 c, k, r, jb;
+	int32 bad = 0;
+	int32 c;
 	uint32 limit;
 	uint32 n = nblk * VBITS;
-	v_t *acc;
 
 	if (num_terms <= degree + 1)
 		return 1;
 	limit = num_terms - degree - 1;
-	acc = (v_t *)xmalloc(m * sizeof(v_t));
 
-	for (c = 0; c < num_checks; c++) {
-		uint32 i = (limit <= num_checks) ? c :
+	/* The points are independent and there is one scan of the whole
+	   sequence in each, so this is the one place in lingen where the
+	   work per unit of scheduling is seconds rather than
+	   microseconds. It was 190 of the 448 sec the stage took on a
+	   4.8M matrix, all of it on one core of 46. */
+
+#ifdef _OPENMP
+	#pragma omp parallel for schedule(dynamic, 1) reduction(+:bad)
+#endif
+	for (c = 0; c < (int32)num_checks; c++) {
+
+		uint32 k, r, jb;
+		uint32 i = (limit <= num_checks) ? (uint32)c :
 				(uint32)((uint64)c * limit / num_checks);
+		v_t *acc;
+
+		/* a point past the end of the sequence is not a failure,
+		   there is simply nothing there to test */
 
 		if (i >= limit)
-			break;
+			continue;
+
+		acc = (v_t *)xmalloc(m * sizeof(v_t));
 		for (r = 0; r < m; r++)
 			acc[r] = v_zero;
 
@@ -296,12 +311,12 @@ static uint32 check_generator(msieve_obj *obj, v_t *a, uint32 num_terms,
 				break;
 			}
 		}
+		free(acc);
 	}
-	free(acc);
 	if (bad)
 		logprintf(obj, "generator check failed at %u of %u sampled "
-				"points\n", bad, num_checks);
-	return bad;
+				"points\n", (uint32)bad, num_checks);
+	return (uint32)bad;
 }
 
 /*-----------------------------------------------------------------------*/
