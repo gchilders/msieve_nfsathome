@@ -322,6 +322,22 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 			}
 		}
 
+		/* A column with no nonzero coefficient at all contributes
+		   nothing to W. That is not the only way to lose a
+		   column -- a column can be nonzero here and still
+		   evaluate to zero, see the warning after the sum -- but
+		   the two have different causes, so they are counted
+		   apart. */
+
+		for (j = 0, i = 0; j < VBITS; j++) {
+			if (shift[j] > degree)
+				i++;
+		}
+		if (i > 0) {
+			logprintf(obj, "warning: %u of %u generator columns "
+					"are empty and yield no solution\n",
+					i, (uint32)VBITS);
+		}
 		logprintf(obj, "mksol: generator valuations run %u to %u\n",
 				min_shift, max_shift);
 
@@ -425,6 +441,25 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 		}
 		logprintf(obj, "mksol: solution block has %u nonzero "
 				"columns\n", bw_v_popcount(wacc));
+
+		/* Fewer than VBITS means some columns evaluated to zero
+		   even after their own valuation was stripped: the
+		   generator is a higher power of X against y than its
+		   coefficients show, and one shift was not enough. Those
+		   columns are lost, and with them most of the rank of the
+		   answer -- at m = n = 256 on a 550K matrix, 31 of 64
+		   columns went this way and the 33 dependencies that came
+		   out spanned only 2. Stripping repeatedly, re-evaluating
+		   each time, is what this wants; until then a run that
+		   trips this is not worth continuing. */
+
+		if (bw_v_popcount(wacc) < VBITS) {
+			logprintf(obj, "warning: %u of %u solution columns "
+					"evaluated to zero; the dependencies "
+					"will be short of rank\n",
+					(uint32)VBITS - bw_v_popcount(wacc),
+					(uint32)VBITS);
+		}
 	}
 
 	for (i = 0; i < max_ncols; i++)
