@@ -355,9 +355,27 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 	uint32 *order, *is_pivot;
 	uint64 *dcol;
 	uint32 t, i, j, r, c, maxdelta;
+#ifdef LINGEN_PROFILE
+	double qt;
+#endif
+
+	/* pi needs T + 1 bits and no more. A column is shifted at most
+	   once per step, so after T steps no column has been shifted more
+	   than T times, and a XOR of columns is bounded by the largest of
+	   them -- so every entry has degree at most T. That is a global
+	   bound and holds whatever the pivot order does, which is what
+	   makes it safe where the per-column shift count below is not.
+
+	   It is worth being exact about: at the leaf sizes the recursion
+	   actually produces, T + 64 bits rounds up to two words and
+	   T + 1 to one, which halves every column XOR and shift pi takes
+	   in the elimination. Locally that was 3.9 -> 3.1 sec of base
+	   case, 2.1 -> 1.5 of it in the elimination. R keeps its slack:
+	   it starts with T coefficients and is shifted too, so it needs
+	   nearly 2T and the rounding lands on two words either way. */
 
 	pm_init(&R, m, b, T + 64);
-	pm_init(&pi, b, b, T + 64);
+	pm_init(&pi, b, b, T + 1);
 
 	for (t = 0; t < T; t++) {
 		const uint64 *gc = G->data +
@@ -381,6 +399,9 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 
 	for (t = 0; t < T; t++) {
 
+#ifdef LINGEN_PROFILE
+		qt = lingen_wtime();
+#endif
 		for (j = 0; j < b; j++) {
 			uint64 *d = dcol + (size_t)j * mwords;
 
@@ -393,6 +414,10 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 			is_pivot[j] = 0;
 		}
 
+#ifdef LINGEN_PROFILE
+		lingen_prof_add(LP_QB_BUILD, lingen_wtime() - qt);
+		qt = lingen_wtime();
+#endif
 		for (j = 0; j < b; j++)
 			order[j] = j;
 		for (i = 1; i < b; i++) {
@@ -406,6 +431,10 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 			order[j] = key;
 		}
 
+#ifdef LINGEN_PROFILE
+		lingen_prof_add(LP_QB_SORT, lingen_wtime() - qt);
+		qt = lingen_wtime();
+#endif
 		for (r = 0; r < m; r++) {
 			uint32 piv = (uint32)-1;
 			uint64 *dp;
@@ -441,6 +470,10 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 			}
 		}
 
+#ifdef LINGEN_PROFILE
+		lingen_prof_add(LP_QB_ELIM, lingen_wtime() - qt);
+		qt = lingen_wtime();
+#endif
 		for (j = 0; j < b; j++) {
 			if (is_pivot[j]) {
 				pm_col_shift(&pi, j);
@@ -448,6 +481,9 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 				delta[j]++;
 			}
 		}
+#ifdef LINGEN_PROFILE
+		lingen_prof_add(LP_QB_SHIFT, lingen_wtime() - qt);
+#endif
 	}
 
 	/* How long the result actually is, measured rather than inferred.
@@ -809,6 +845,12 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 		logprintf(obj, "lingen profile: base case %.1f sec (%" PRIu64
 				" calls)\n", lingen_prof_time(LP_BASE),
 				lingen_prof_count(LP_BASE));
+		logprintf(obj, "lingen profile: base case build %.1f, sort "
+				"%.1f, eliminate %.1f, shift %.1f sec\n",
+				lingen_prof_time(LP_QB_BUILD),
+				lingen_prof_time(LP_QB_SORT),
+				lingen_prof_time(LP_QB_ELIM),
+				lingen_prof_time(LP_QB_SHIFT));
 		logprintf(obj, "lingen profile: residual products %.1f sec, "
 				"composition products %.1f sec\n",
 				lingen_prof_time(LP_MUL_E),

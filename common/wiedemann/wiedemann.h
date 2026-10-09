@@ -200,6 +200,10 @@ enum {
 	LP_SCHOOL,	/* leaf products, summed over threads */
 	LP_SPLIT,	/* unbalanced operands: this path spawns no tasks */
 	LP_OPS,		/* word XORs the leaf products ask for */
+	LP_QB_BUILD,	/* base case: lift coefficient t out of R */
+	LP_QB_SORT,	/* base case: order the columns by degree */
+	LP_QB_ELIM,	/* base case: the column eliminations */
+	LP_QB_SHIFT,	/* base case: multiply the pivot columns by X */
 	LP_NUM
 };
 
