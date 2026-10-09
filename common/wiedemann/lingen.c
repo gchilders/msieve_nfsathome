@@ -683,10 +683,64 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	}
 
 	/* The solution block is VBITS wide, because that is what a v_t
-	   holds and what the dependency file records, so only the VBITS
-	   columns of least degree are kept. Each coefficient of the
+	   holds and what the dependency file records, so only VBITS
+	   columns are kept, of least degree. Each coefficient of the
 	   generator is then n rows of VBITS bits -- one v_t per row of
-	   y, across all the sequences. */
+	   y, across all the sequences.
+
+	   Least degree is not the only condition. A column whose top
+	   block is already nonzero at X^0 evaluates in mksol to
+	   sum_k A^k y F_k, and that is exactly what the generator
+	   annihilates, so the column yields the zero vector and one
+	   fewer dependency. Nor can it be rescued by shifting: with
+	   V(s) = sum_k A^k y F_{k+s} the recurrence is
+	   V(s) = y F_s + A V(s+1), so a column with valuation v gives
+	   A V(1) = 0 and every shift up to v lands in the nullspace
+	   together, while shifting past v gives A V(v+1) = y F_v, which
+	   is not in the nullspace at all. The only remedy is to pick a
+	   different column, and there are b of them to choose from.
+
+	   This is not a rare case. At m = n = 256 on a 4.8M matrix, 31
+	   of the 64 columns of least degree started at X^0; the run
+	   reported 33 dependencies and wrote a .dep in which two bits
+	   were set. At m = n = 64 only one column did. */
+
+	{
+		uint32 nsel = 0;
+
+		for (i = 0; i < b && nsel < VBITS; i++) {
+			uint32 col = order[i];
+
+			/* valuation of this column of the top n rows */
+
+			for (t = 0; t < pi.len; t++) {
+				uint64 *pc = bmp_coeff(&pi, t);
+
+				for (r = 0; r < n; r++) {
+					uint64 *row = pc +
+							(size_t)r * pi.rwords;
+
+					if ((row[col >> 6] >> (col & 63)) & 1)
+						break;
+				}
+				if (r < n)
+					break;
+			}
+
+			/* t == 0 is annihilated, t == pi.len is an empty
+			   column; both give nothing */
+
+			if (t > 0 && t < pi.len)
+				order[nsel++] = col;
+		}
+
+		if (nsel < VBITS) {
+			logprintf(obj, "error: only %u of %u generator "
+					"columns are usable\n", nsel,
+					(uint32)VBITS);
+			goto cleanup;
+		}
+	}
 
 	degree = 0;
 	for (i = 0; i < VBITS; i++)
