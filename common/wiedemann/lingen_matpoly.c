@@ -389,6 +389,16 @@ void bmp_mul(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 	if (a->len == 0 || b->len == 0)
 		return;
 
+	/* The transform wins once the operands are long enough to pay
+	   for it, which is most of the time at the sizes that matter;
+	   Karatsuba stays for the short products the recursion ends in,
+	   and for anything whose transforms would not fit in memory. */
+
+	if (bmp_mul_fft_ok(c, a, b)) {
+		bmp_mul_fft(c, a, b);
+		return;
+	}
+
 #ifdef HAVE_OMP
 #pragma omp parallel
 #pragma omp single

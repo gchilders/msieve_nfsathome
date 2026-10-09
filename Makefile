@@ -215,6 +215,7 @@ COMMON_SRCS = \
 	common/wiedemann/krylov.c \
 	common/wiedemann/lingen.c \
 	common/wiedemann/lingen_matpoly.c \
+	common/wiedemann/lingen_cantor.c \
 	common/wiedemann/mksol.c \
 	common/smallfact/gmp_ecm.c \
 	common/smallfact/smallfact.c \

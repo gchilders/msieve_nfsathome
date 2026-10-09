@@ -217,6 +217,16 @@ uint64 lingen_prof_count(uint32 slot);
 void bmp_mul(bmp_t *c, const bmp_t *a, const bmp_t *b);
 void bmp_mul_school(bmp_t *c, const bmp_t *a, const bmp_t *b);
 
+/* Cantor's additive FFT, in lingen_cantor.c. One transform per matrix
+   entry and one dense GF(2^64) matrix product per evaluation point, so
+   the transform is b^2 and only the pointwise stage is b^3 -- where
+   Karatsuba pays b^3 for every one of its d^1.585 products. The _ok
+   test says whether it is worth it and whether the transforms fit:
+   they are held in full, unlike Karatsuba which streams. */
+
+uint32 bmp_mul_fft_ok(const bmp_t *c, const bmp_t *a, const bmp_t *b);
+void bmp_mul_fft(bmp_t *c, const bmp_t *a, const bmp_t *b);
+
 /* The two halves of lingen, exposed so the recursion can be checked
    against the base case on small random inputs rather than only on a
    real sequence. Both take G (m x b, known to T coefficients) and the
