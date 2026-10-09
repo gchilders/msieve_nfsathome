@@ -263,6 +263,7 @@ int32 bw_krylov(msieve_obj *obj, packed_matrix_t *matrix,
 	v_t *host_tmp;
 	v_t *a;
 	FILE *seq_fp;
+	uint32 cleared = 0;
 	int32 status = 0;
 	time_t start_time;
 
@@ -351,13 +352,23 @@ int32 bw_krylov(msieve_obj *obj, packed_matrix_t *matrix,
 		}
 
 		/* z <- A z. mul_core only writes rows [0, nrows), so the
-		   zero rows that pad A out to a square operator have to
-		   be cleared here; one extra pass over the vector is
-		   about 1% of the product and keeps the invariant
-		   obvious. (It could be hoisted: only the buffer that
-		   held the random y is ever dirty past nrows.) */
+		   rows that pad A out to a square operator have to be
+		   zero in whatever buffer it writes into.
 
-		vv_clear(next, n);
+		   Twice is enough, rather than once a pass: the first
+		   clears the freshly allocated output buffer, the second
+		   clears the one that arrives still holding the random y,
+		   and after that nothing writes past nrows in either, so
+		   the invariant holds for the rest of the run. The guess
+		   that this was "about 1% of the product" was wrong by a
+		   wide margin -- it measured at a fifth of the whole
+		   stage, because vv_clear zeroes the host copy as well as
+		   the device one and the host copy is never read here. */
+
+		if (cleared < 2) {
+			vv_clear(next, n);
+			cleared++;
+		}
 		mul_MxN_NxB(matrix, cur, next, NULL);
 
 		tmp_vec = cur;

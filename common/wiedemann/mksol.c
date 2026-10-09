@@ -216,6 +216,7 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 		for (jb = 0; jb < params->n_mult; jb++) {
 			uint32 seed1 = params->seed1;
 			uint32 seed2 = params->seed2;
+			uint32 cleared = 0;
 
 			for (i = 0; i < 1 + jb; i++) {
 				for (j = 0; j < n; j++)
@@ -232,7 +233,15 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 				if (k == degree)
 					break;
 
-				vv_clear(prod, n);
+				/* the same two clears the Krylov loop
+				   needs, for the same reason, and reset
+				   per sequence because copying y back in
+				   dirties one buffer again */
+
+				if (cleared < 2) {
+					vv_clear(prod, n);
+					cleared++;
+				}
 				mul_MxN_NxB(matrix, z, prod, NULL);
 				swap = z; z = prod; prod = swap;
 			}
