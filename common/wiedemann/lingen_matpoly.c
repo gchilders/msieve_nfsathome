@@ -395,6 +395,32 @@ void bmp_mul(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 	   and for anything whose transforms would not fit in memory. */
 
 	if (bmp_mul_fft_ok(c, a, b)) {
+
+		/* Split the output rows across the machines. The
+		   recursion around this is replicated -- every rank holds
+		   the whole of G and pi -- so a rank already has the band
+		   of a and the whole of b that its band of c needs, and
+		   nothing is sent until the product is finished. That is
+		   what makes this usable on a slow network: one exchange
+		   of the result per product, not a vector per iteration.
+
+		   Short products stay replicated. They are cheap, and
+		   exchanging them would cost more than computing them
+		   everywhere. */
+
+		if (bmp_mpi_size() > 1) {
+			uint32 rank = bmp_mpi_rank();
+			uint32 size = bmp_mpi_size();
+			uint32 r0 = (uint32)((uint64)c->nrows * rank / size);
+			uint32 r1 = (uint32)((uint64)c->nrows *
+						(rank + 1) / size);
+
+			if (r1 > r0)
+				bmp_mul_fft_rows(c, a, b, r0, r1 - r0);
+			bmp_combine(c);
+			return;
+		}
+
 		bmp_mul_fft(c, a, b);
 		return;
 	}
@@ -404,4 +430,57 @@ void bmp_mul(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 #pragma omp single
 #endif
 	bmp_mul_kara(c, a, b);
+}
+
+/*-----------------------------------------------------------------------*/
+/* The machines lingen may spread a product over. Set once by
+   bw_lingen; everything else asks here, so the rest of the file does
+   not need to know whether this is an MPI build. */
+
+#ifdef HAVE_MPI
+static MPI_Comm bmp_comm = MPI_COMM_NULL;
+#endif
+static uint32 bmp_size = 1;
+static uint32 bmp_rank;
+
+void bmp_mul_set_mpi(msieve_obj *obj) {
+
+#ifdef HAVE_MPI
+	bmp_comm = MPI_COMM_WORLD;
+	bmp_size = obj->mpi_size;
+	bmp_rank = obj->mpi_rank;
+	if (bmp_size > 1) {
+		logprintf(obj, "lingen: splitting each product over %u "
+				"machines\n", bmp_size);
+	}
+#endif
+}
+
+uint32 bmp_mpi_size(void) { return bmp_size; }
+uint32 bmp_mpi_rank(void) { return bmp_rank; }
+
+/* Put every rank's band of c into every rank. The bands are disjoint
+   and the rest of each rank's c is zero, so XOR is the whole of it --
+   no offsets to agree on, and a rank that owns nothing contributes
+   nothing. Chunked because an MPI count is an int and these run to
+   billions of words. */
+
+void bmp_combine(bmp_t *c) {
+
+#ifdef HAVE_MPI
+	size_t total = (size_t)c->len * c->nrows * c->rwords;
+	size_t done = 0;
+	const size_t chunk = (size_t)1 << 25;	/* 256 MB of uint64 */
+
+	if (bmp_size <= 1)
+		return;
+
+	while (done < total) {
+		int this_one = (int)MIN(chunk, total - done);
+
+		MPI_TRY(MPI_Allreduce(MPI_IN_PLACE, c->data + done,
+				this_one, MPI_LONG_LONG, MPI_BXOR, bmp_comm))
+		done += this_one;
+	}
+#endif
 }

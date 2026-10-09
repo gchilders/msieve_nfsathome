@@ -1239,7 +1239,29 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 
 	savefile_unstage(obj);
 
-	if (!only_matbuild) {
+	/* lingen reads the sequences and writes the generator; it never
+	   looks at the matrix. Reading one would cost minutes and would
+	   require it to be present, which defeats running that stage on
+	   a machine that has neither a GPU nor the matrix -- and under
+	   MPI it would try to split a matrix none of the ranks want. The
+	   one number it needs is in the sequence header. */
+
+	if (!only_matbuild && obj->nfs_args != NULL &&
+	    strstr(obj->nfs_args, "solver=wiedemann") != NULL &&
+	    strstr(obj->nfs_args, "bw_stage=lingen") != NULL) {
+
+		uint32 seq_ncols = bw_sequence_ncols(obj);
+
+		if (seq_ncols == 0) {
+			logprintf(obj, "error: cannot read Wiedemann "
+					"sequence header for the matrix "
+					"size\n");
+			exit(-1);
+		}
+		block_wiedemann(obj, 0, 0, 0, 0, 0, seq_ncols, 0,
+				NULL, &deps_found);
+	}
+	else if (!only_matbuild) {
 		/* read the matrix in; if configured for MPI, this reads
 		in only the submatrix used by the current MPI process.
 		Without MPI, this reads the whole matrix, ncols = max_ncols,

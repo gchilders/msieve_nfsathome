@@ -118,17 +118,30 @@ uint64 * block_wiedemann(msieve_obj *obj,
 	if (parse_params(obj, &params) != 0)
 		exit(-1);
 
+	/* lingen touches no matrix at all -- it reads the sequences and
+	   writes the generator -- so it skips the build entirely. That
+	   saves loading a multi-gigabyte matrix for nothing, and it is
+	   what lets the stage run on machines with no GPU, and under MPI
+	   when the stages that do touch the matrix cannot. */
+
+	if (params.stage == BW_STAGE_LINGEN) {
+		bmp_mul_set_mpi(obj);
+		bw_lingen(obj, &params, max_ncols);
+		return NULL;
+	}
+
 #ifdef HAVE_MPI
 	if (obj->mpi_size > 1) {
-		/* Sequence parallelism is the intended way to use several
-		   devices and needs no MPI at all: run one process per
+		/* Sequence parallelism is how several devices are used
+		   here, and it needs no MPI at all: run one process per
 		   sequence with bw_seq= and -g. Splitting a single matrix
-		   across ranks additionally needs the row and column
-		   decompositions to line up, which they do only for the
-		   default 1 x P grid; that is not wired up yet. */
+		   across ranks would need a vector exchanged every
+		   iteration, which is the thing this solver exists to
+		   avoid; lingen is the stage that does spread over MPI,
+		   and it is handled above. */
 
-		logprintf(obj, "error: block Wiedemann does not support an "
-				"MPI grid yet; run one process per sequence\n");
+		logprintf(obj, "error: only bw_stage=lingen runs under MPI; "
+				"run one process per sequence for the rest\n");
 		MPI_Abort(MPI_COMM_WORLD, MPI_ERR_ASSERT);
 	}
 #endif
@@ -169,8 +182,7 @@ uint64 * block_wiedemann(msieve_obj *obj,
 			goto done;
 	}
 
-	if (params.stage == BW_STAGE_LINGEN ||
-	    params.stage == BW_STAGE_ALL) {
+	if (params.stage == BW_STAGE_ALL) {
 
 		if (bw_lingen(obj, &params, max_ncols) != 0)
 			goto done;
@@ -211,4 +223,28 @@ done:
 	packed_matrix_free(&packed_matrix);
 	free(post_lanczos_matrix);
 	return deps;
+}
+
+/*-----------------------------------------------------------------------*/
+uint32 bw_sequence_ncols(msieve_obj *obj) {
+
+	/* The matrix dimension, taken from a sequence file rather than
+	   from the matrix. lingen needs the number and nothing else of
+	   the matrix, so reading it here means that stage can run on a
+	   machine that has only the sequences -- no .mat, no GPU. */
+
+	char buf[256];
+	FILE *fp;
+	bw_seq_header_t hdr;
+	uint32 ncols = 0;
+
+	snprintf(buf, sizeof(buf), "%s.bw.a.0", obj->savefile.name);
+	fp = fopen(buf, "rb");
+	if (fp == NULL)
+		return 0;
+	if (fread(&hdr, sizeof(hdr), 1, fp) == 1 &&
+	    hdr.magic == BW_SEQ_MAGIC && hdr.vbits == VBITS)
+		ncols = hdr.ncols;
+	fclose(fp);
+	return ncols;
 }

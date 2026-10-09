@@ -225,6 +225,22 @@ void bmp_mul_school(bmp_t *c, const bmp_t *a, const bmp_t *b);
    they are held in full, unlike Karatsuba which streams. */
 
 void bmp_mul_fft_set_budget(msieve_obj *obj);
+/* lingen may spread one product over several machines by splitting
+   the output rows: a band of c needs that band of a and the whole of
+   b, both of which every rank already has, so nothing is sent until
+   the product is done. One exchange per product, not per iteration,
+   which is what makes it survive a slow network. */
+
+/* the matrix dimension as recorded in a sequence file, or 0 */
+uint32 bw_sequence_ncols(msieve_obj *obj);
+
+void bmp_mul_set_mpi(msieve_obj *obj);
+uint32 bmp_mpi_size(void);
+uint32 bmp_mpi_rank(void);
+void bmp_combine(bmp_t *c);
+void bmp_mul_fft_rows(bmp_t *c, const bmp_t *a, const bmp_t *b,
+			uint32 r0, uint32 nr);
+
 uint32 bmp_mul_fft_ok(const bmp_t *c, const bmp_t *a, const bmp_t *b);
 void bmp_mul_fft(bmp_t *c, const bmp_t *a, const bmp_t *b);
 
