@@ -70,12 +70,17 @@ $Id$
 #define LINGEN_FFT_MIN_LEN 128
 #endif
 
-/* The transforms are held in full, three of them, at 8 bytes per
-   evaluation point per matrix entry. Past this the fallback is
-   Karatsuba, which streams instead. */
-#ifndef LINGEN_FFT_MAX_MB
-#define LINGEN_FFT_MAX_MB 24576
+/* How much the transforms may hold. Taken from the machine rather than
+   guessed: msieve already measures memory for the filtering strategy,
+   so the same get_ram_size() answers this, halved because lingen is
+   carrying G, pi and the recursion's own operands alongside. bw_mem_mb=
+   overrides it, the way filter_mem_mb= does for filtering. */
+
+#ifndef LINGEN_FFT_MEM_FRACTION
+#define LINGEN_FFT_MEM_FRACTION 2
 #endif
+
+static double fft_budget_mb;
 
 /*-----------------------------------------------------------------------*/
 #if !defined(__PCLMUL__)
@@ -362,23 +367,29 @@ static void fft_inv(uint64 *a, uint32 k, uint64 *scratch) {
 /*-----------------------------------------------------------------------*/
 static void transpose64(uint64 *a) {
 
-	/* b[j] bit i = a[i] bit j. The word-at-a-time version of this is
-	   a known shuffle and about ten times quicker, but it is easy to
-	   get subtly wrong; this is not where the time goes. */
+	/* a[j] bit i becomes a[i] bit j, by recursive block swap: at each
+	   step exchange the off-diagonal halves of every 2j x 2j block,
+	   which is six passes instead of the 4096 bit tests the obvious
+	   loop needs. This runs once per 64 coefficients of 64 entries
+	   on the way in and on the way out, and again for every panel
+	   the product is cut into, so it is worth the care.
 
-	uint64 b[64];
-	uint32 i, j;
+	   Which way round the shift goes is the whole of it, and getting
+	   it backwards transposes something else entirely; the version
+	   below was checked against the obvious loop rather than
+	   remembered. */
 
-	for (j = 0; j < 64; j++) {
-		uint64 v = 0;
+	uint64 m = 0x00000000ffffffffULL;
+	uint32 j, k;
 
-		for (i = 0; i < 64; i++) {
-			if ((a[i] >> j) & 1)
-				v |= (uint64)1 << i;
+	for (j = 32; j != 0; j >>= 1, m ^= m << j) {
+		for (k = 0; k < 64; k = ((k | j) + 1) & ~j) {
+			uint64 t = ((a[k] >> j) ^ a[k | j]) & m;
+
+			a[k | j] ^= t;
+			a[k] ^= t << j;
 		}
-		b[j] = v;
 	}
-	memcpy(a, b, sizeof(b));
 }
 
 /* bmp_t is coefficient-major, so one matrix entry's polynomial is a
@@ -466,12 +477,17 @@ static void unpack_poly(uint64 *dst, uint32 nwords, const uint64 *src,
 }
 
 /*-----------------------------------------------------------------------*/
-static void transform_all(const bmp_t *p, uint64 *ft, uint32 k, uint32 n) {
+/* Transform the entries of p in rows [r0, r0+nr) and columns
+   [c0, c0+nc), into ft[point][r - r0][s - c0]. c0 is a multiple of 64
+   because the gather lifts whole 64-column groups.
 
-	/* One transform per matrix entry, and they are independent, so
-	   this threads over rows. It has to: Karatsuba spreads itself
-	   over the cores through its task tree, and a serial transform
-	   stage hands that advantage straight back. */
+   One transform per matrix entry, and they are independent, so this
+   threads over rows. It has to: Karatsuba spreads itself over the
+   cores through its task tree, and a serial transform stage hands
+   that advantage straight back. */
+
+static void transform_panel(const bmp_t *p, uint64 *ft, uint32 k, uint32 n,
+				uint32 r0, uint32 nr, uint32 c0, uint32 nc) {
 
 	uint32 nch = (p->len + CHUNK_BITS - 1) / CHUNK_BITS;
 	uint32 pw = (p->len + 63) / 64;
@@ -494,19 +510,19 @@ static void transform_all(const bmp_t *p, uint64 *ft, uint32 k, uint32 n) {
 #ifdef HAVE_OMP
 #pragma omp for schedule(static)
 #endif
-		for (r = 0; r < (int32)p->nrows; r++) {
-			for (sb = 0; sb < p->ncols; sb += 64) {
+		for (r = (int32)r0; r < (int32)(r0 + nr); r++) {
+			for (sb = c0; sb < c0 + nc; sb += 64) {
 				gather_entries(p, (uint32)r, sb, ent, pw);
-				for (t = 0; t < 64 && sb + t < p->ncols; t++) {
+				for (t = 0; t < 64 && sb + t < c0 + nc; t++) {
 					memset(buf, 0,
 						(size_t)n * sizeof(uint64));
 					pack_poly(buf, nch, ent[t], p->len);
 					fft_fwd(buf, k, sc);
 					for (i = 0; i < n; i++) {
-						ft[(size_t)i * p->nrows *
-							p->ncols +
-							(size_t)r * p->ncols +
-							(sb + t)] = buf[i];
+						ft[(size_t)i * nr * nc +
+							(size_t)((uint32)r -
+								r0) * nc +
+							(sb + t - c0)] = buf[i];
 					}
 				}
 			}
@@ -518,6 +534,134 @@ static void transform_all(const bmp_t *p, uint64 *ft, uint32 k, uint32 n) {
 		free(sc);
 		free(buf);
 	}
+}
+
+/* The reverse, for one panel of c: inverse transform each entry and
+   XOR it in. Panels are disjoint in (row, column) and rows inside a
+   panel are disjoint, so nothing needs serialising. */
+
+static void inverse_panel(bmp_t *c, const uint64 *fc, uint32 k, uint32 n,
+				uint32 r0, uint32 nr, uint32 c0, uint32 nc,
+				uint32 ncc) {
+
+	uint32 cw = (c->len + 63) / 64;
+	int32 r;
+
+#ifdef HAVE_OMP
+#pragma omp parallel
+#endif
+	{
+		uint32 sb, t, i;
+		uint64 *buf = (uint64 *)xmalloc((size_t)n * sizeof(uint64));
+		uint64 *sc = (uint64 *)xmalloc((size_t)n * sizeof(uint64));
+		uint64 **ent = (uint64 **)xmalloc(64 * sizeof(uint64 *));
+
+		for (t = 0; t < 64; t++) {
+			ent[t] = (uint64 *)xcalloc((size_t)cw + 2,
+						sizeof(uint64));
+		}
+
+#ifdef HAVE_OMP
+#pragma omp for schedule(static)
+#endif
+		for (r = (int32)r0; r < (int32)(r0 + nr); r++) {
+			for (sb = c0; sb < c0 + nc; sb += 64) {
+				for (t = 0; t < 64; t++) {
+					if (sb + t >= c0 + nc) {
+						memset(ent[t], 0,
+							((size_t)cw + 2) *
+							sizeof(uint64));
+						continue;
+					}
+					for (i = 0; i < n; i++) {
+						buf[i] = fc[(size_t)i * nr *
+							nc + (size_t)
+							((uint32)r - r0) * nc +
+							(sb + t - c0)];
+					}
+					fft_inv(buf, k, sc);
+					unpack_poly(ent[t], cw, buf, ncc);
+				}
+				scatter_entries(c, (uint32)r, sb, ent, cw);
+			}
+		}
+
+		for (t = 0; t < 64; t++)
+			free(ent[t]);
+		free(ent);
+		free(sc);
+		free(buf);
+	}
+}
+
+/*-----------------------------------------------------------------------*/
+/* Peak words held for a panel of g output rows and g output columns
+   against a contraction dimension of kdim: one panel of a, one of b,
+   and the piece of c they produce. */
+
+static size_t panel_words(uint32 g, uint32 kdim, uint32 n) {
+
+	return (size_t)n * ((size_t)2 * g * kdim + (size_t)g * g);
+}
+
+/* Set once by bw_lingen, which has the arguments to read. Anything
+   calling the transform without doing so -- a test harness, say --
+   falls back to the same measurement on first use. */
+
+void bmp_mul_fft_set_budget(msieve_obj *obj) {
+
+	uint64 ram = 0;
+	const char *tmp;
+
+	if (obj != NULL && obj->nfs_args != NULL &&
+	    (tmp = strstr(obj->nfs_args, "bw_mem_mb=")) != NULL) {
+		fft_budget_mb = (double)strtoul(tmp + 10, NULL, 10);
+		if (obj != NULL) {
+			logprintf(obj, "lingen: transforms limited to "
+					"%.0f MB\n", fft_budget_mb);
+		}
+		return;
+	}
+
+	ram = get_ram_size();
+	fft_budget_mb = (double)ram / 1048576.0 / LINGEN_FFT_MEM_FRACTION;
+	if (obj != NULL) {
+		logprintf(obj, "lingen: %.0f MB RAM, transforms may use "
+				"%.0f MB\n", (double)ram / 1048576.0,
+				fft_budget_mb);
+	}
+}
+
+static double fft_budget(void) {
+
+	if (fft_budget_mb == 0)
+		bmp_mul_fft_set_budget(NULL);
+	return fft_budget_mb;
+}
+
+/* The largest panel that fits the budget. Blocking only ever adds
+   transform work -- the pointwise total is untouched -- and the
+   pointwise outweighs one block of transforms by about b / log2(n), so
+   on a wide matrix the extra is small. On a narrow one it is not,
+   which is also where the memory fits whole and no blocking happens. */
+
+static uint32 choose_panel(uint32 rows, uint32 cols, uint32 kdim, uint32 n) {
+
+	uint32 g = MAX(rows, cols);
+
+	g = (g + 63) & ~(uint32)63;	/* whole 64-column groups */
+
+	while (g > 64) {
+		double mb = (double)panel_words(g, kdim, n) *
+				sizeof(uint64) / 1048576.0;
+
+		if (mb <= fft_budget())
+			break;
+		g >>= 1;
+		if (g < 64)
+			g = 64;
+	}
+	return g;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -539,22 +683,27 @@ uint32 bmp_mul_fft_ok(const bmp_t *c, const bmp_t *a, const bmp_t *b) {
 	if (k >= cantor_count)
 		return 0;
 
-	mb = (double)((uint32)1 << k) * sizeof(uint64) / 1048576.0 *
-		((double)a->nrows * a->ncols + (double)b->nrows * b->ncols +
-		 (double)c->nrows * c->ncols);
-	if (mb > (double)LINGEN_FFT_MAX_MB)
+	/* The product is cut into panels to fit the budget, so what has
+	   to fit is the smallest panel, not the whole thing. Only if
+	   even that is too big does Karatsuba take over, and it streams
+	   where this holds transforms. */
+
+	mb = (double)panel_words(64, a->ncols, (uint32)1 << k) *
+			sizeof(uint64) / 1048576.0;
+	if (mb > fft_budget())
 		return 0;
 
 	return 1;
 }
+
 
 void bmp_mul_fft(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 
 	uint32 nca = (a->len + CHUNK_BITS - 1) / CHUNK_BITS;
 	uint32 ncb = (b->len + CHUNK_BITS - 1) / CHUNK_BITS;
 	uint32 ncc = nca + ncb - 1;
-	uint32 cw = (c->len + 63) / 64;
-	uint32 k = 0, n, i, r, s, t;
+	uint32 kdim = a->ncols;		/* the contraction dimension */
+	uint32 k = 0, n, g, pi, pj;
 	uint64 *fa, *fb, *fc;
 
 	while (((uint32)1 << k) < ncc)
@@ -562,95 +711,67 @@ void bmp_mul_fft(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 	n = (uint32)1 << k;
 
 	cantor_init(k);
+	g = choose_panel(c->nrows, c->ncols, kdim, n);
 
-	fa = (uint64 *)xmalloc((size_t)n * a->nrows * a->ncols *
-				sizeof(uint64));
-	fb = (uint64 *)xmalloc((size_t)n * b->nrows * b->ncols *
-				sizeof(uint64));
-	fc = (uint64 *)xcalloc((size_t)n * c->nrows * c->ncols,
-				sizeof(uint64));
+	/* One panel of a's rows, one of b's columns, and the piece of c
+	   they make. With a single panel this is the whole product and
+	   nothing is transformed twice.
 
-	transform_all(a, fa, k, n);
-	transform_all(b, fb, k, n);
+	   Columns of c are the outer loop so that b's panel is
+	   transformed once each; a's panel is then redone for every
+	   column panel, which is the entire cost of blocking. Only the
+	   transform repeats -- the pointwise work is the same however
+	   the output is cut up. */
 
-	/* One dense GF(2^64) matrix product per evaluation point. This is
-	   the b^3 term, and the only part that grows with the width. */
+	fa = (uint64 *)xmalloc(panel_words(g, kdim, n) * sizeof(uint64));
+	fb = fa + (size_t)n * g * kdim;
+	fc = fb + (size_t)n * kdim * g;
+
+	for (pj = 0; pj < c->ncols; pj += g) {
+		uint32 nj = MIN(g, c->ncols - pj);
+
+		transform_panel(b, fb, k, n, 0, kdim, pj, nj);
+
+		for (pi = 0; pi < c->nrows; pi += g) {
+			uint32 ni = MIN(g, c->nrows - pi);
+			int32 i;
+
+			transform_panel(a, fa, k, n, pi, ni, 0, kdim);
+			memset(fc, 0, (size_t)n * ni * nj * sizeof(uint64));
+
+			/* a dense GF(2^64) matrix product at each
+			   evaluation point: the b^3 term, and the only
+			   part that grows with the width */
 
 #ifdef HAVE_OMP
-#pragma omp parallel for schedule(static) private(r, s, t)
+#pragma omp parallel for schedule(static)
 #endif
-	for (i = 0; i < n; i++) {
-		const uint64 *A = fa + (size_t)i * a->nrows * a->ncols;
-		const uint64 *B = fb + (size_t)i * b->nrows * b->ncols;
-		uint64 *C = fc + (size_t)i * c->nrows * c->ncols;
+			for (i = 0; i < (int32)n; i++) {
+				const uint64 *A = fa + (size_t)i * ni * kdim;
+				const uint64 *B = fb + (size_t)i * kdim * nj;
+				uint64 *C = fc + (size_t)i * ni * nj;
+				uint32 r, s, t;
 
-		for (r = 0; r < a->nrows; r++) {
-			for (t = 0; t < a->ncols; t++) {
-				uint64 av = A[(size_t)r * a->ncols + t];
+				for (r = 0; r < ni; r++) {
+					for (t = 0; t < kdim; t++) {
+						uint64 av = A[(size_t)r *
+								kdim + t];
 
-				if (av == 0)
-					continue;
-				for (s = 0; s < b->ncols; s++) {
-					C[(size_t)r * c->ncols + s] ^=
-						gf64_mul(av, B[(size_t)t *
-							b->ncols + s]);
+						if (av == 0)
+							continue;
+						for (s = 0; s < nj; s++) {
+							C[(size_t)r * nj + s]
+								^= gf64_mul(av,
+								B[(size_t)t *
+									nj + s]);
+						}
+					}
 				}
 			}
+
+			inverse_panel(c, fc, k, n, pi, ni, pj, nj, ncc);
 		}
 	}
 
-	/* and back, threaded the same way; rows of c are disjoint so the
-	   scatter needs no serialising */
-
-#ifdef HAVE_OMP
-#pragma omp parallel
-#endif
-	{
-		uint32 rr, ss, tt, ii;
-		uint64 *buf = (uint64 *)xmalloc((size_t)n * sizeof(uint64));
-		uint64 *sc2 = (uint64 *)xmalloc((size_t)n * sizeof(uint64));
-		uint64 **ent2 = (uint64 **)xmalloc(64 * sizeof(uint64 *));
-		int32 ri;
-
-		for (tt = 0; tt < 64; tt++) {
-			ent2[tt] = (uint64 *)xcalloc((size_t)cw + 2,
-						sizeof(uint64));
-		}
-
-#ifdef HAVE_OMP
-#pragma omp for schedule(static)
-#endif
-		for (ri = 0; ri < (int32)c->nrows; ri++) {
-			rr = (uint32)ri;
-			for (ss = 0; ss < c->ncols; ss += 64) {
-				for (tt = 0; tt < 64; tt++) {
-					if (ss + tt >= c->ncols) {
-						memset(ent2[tt], 0,
-							((size_t)cw + 2) *
-							sizeof(uint64));
-						continue;
-					}
-					for (ii = 0; ii < n; ii++) {
-						buf[ii] = fc[(size_t)ii *
-							c->nrows * c->ncols +
-							(size_t)rr * c->ncols +
-							ss + tt];
-					}
-					fft_inv(buf, k, sc2);
-					unpack_poly(ent2[tt], cw, buf, ncc);
-				}
-				scatter_entries(c, rr, ss, ent2, cw);
-			}
-		}
-
-		for (tt = 0; tt < 64; tt++)
-			free(ent2[tt]);
-		free(ent2);
-		free(sc2);
-		free(buf);
-	}
-
-	free(fc);
-	free(fb);
 	free(fa);
 }

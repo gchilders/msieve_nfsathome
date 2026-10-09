@@ -224,6 +224,7 @@ void bmp_mul_school(bmp_t *c, const bmp_t *a, const bmp_t *b);
    test says whether it is worth it and whether the transforms fit:
    they are held in full, unlike Karatsuba which streams. */
 
+void bmp_mul_fft_set_budget(msieve_obj *obj);
 uint32 bmp_mul_fft_ok(const bmp_t *c, const bmp_t *a, const bmp_t *b);
 void bmp_mul_fft(bmp_t *c, const bmp_t *a, const bmp_t *b);
 

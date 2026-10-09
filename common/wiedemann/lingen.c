@@ -578,6 +578,8 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	FILE *fp;
 	bw_gen_header_t hdr;
 
+	bmp_mul_fft_set_budget(obj);
+
 	phase_time = time(NULL);
 	a = read_sequences(obj, params, max_ncols, &num_terms, &m);
 	if (a == NULL)
