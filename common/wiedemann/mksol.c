@@ -100,6 +100,118 @@ static v_t *read_generator(msieve_obj *obj, bw_params_t *params,
 }
 
 /*-----------------------------------------------------------------------*/
+static void bw_sol_path(msieve_obj *obj, uint32 seq, char *buf) {
+
+	snprintf(buf, BW_PATH_LEN, "%s.bw.w.%u", obj->savefile.name, seq);
+}
+
+static int32 write_partial(msieve_obj *obj, bw_params_t *params,
+				v_t *w, uint32 ncols) {
+
+	char buf[BW_PATH_LEN];
+	FILE *fp;
+	bw_sol_header_t hdr;
+	int32 status = 0;
+
+	bw_sol_path(obj, params->seq, buf);
+	fp = fopen(buf, "wb");
+	if (fp == NULL) {
+		logprintf(obj, "error: cannot write Wiedemann partial "
+				"solution %s\n", buf);
+		return -1;
+	}
+
+	hdr.magic = BW_SOL_MAGIC;
+	hdr.vbits = VBITS;
+	hdr.m = params->m_mult * VBITS;
+	hdr.n = params->n_mult * VBITS;
+	hdr.ncols = ncols;
+	hdr.seq = params->seq;
+	hdr.seed1 = params->seed1;
+	hdr.seed2 = params->seed2;
+
+	if (fwrite(&hdr, sizeof(hdr), 1, fp) != 1 ||
+	    fwrite(w, sizeof(v_t), ncols, fp) != ncols) {
+		logprintf(obj, "error: cannot write Wiedemann partial "
+				"solution\n");
+		status = -1;
+	}
+	if (fclose(fp) != 0)
+		status = -1;
+	return status;
+}
+
+static int32 read_partials(msieve_obj *obj, bw_params_t *params,
+				v_t *w, uint32 ncols, v_t *tmp) {
+
+	/* XOR every sequence's partial together. They must agree about
+	   the matrix and about the seeds, or they are answers to
+	   different questions and summing them is meaningless. */
+
+	char buf[BW_PATH_LEN];
+	uint32 jb, i;
+	uint32 seed1 = 0, seed2 = 0;
+
+	for (i = 0; i < ncols; i++)
+		w[i] = v_zero;
+
+	for (jb = 0; jb < params->n_mult; jb++) {
+		FILE *fp;
+		bw_sol_header_t hdr;
+
+		bw_sol_path(obj, jb, buf);
+		fp = fopen(buf, "rb");
+		if (fp == NULL) {
+			logprintf(obj, "error: cannot open Wiedemann partial "
+					"solution %s\n", buf);
+			return -1;
+		}
+		if (fread(&hdr, sizeof(hdr), 1, fp) != 1 ||
+		    hdr.magic != BW_SOL_MAGIC) {
+			logprintf(obj, "error: Wiedemann partial solution %u "
+					"is corrupt\n", jb);
+			fclose(fp);
+			return -1;
+		}
+		if (hdr.vbits != VBITS || hdr.ncols != ncols ||
+		    hdr.m != params->m_mult * VBITS ||
+		    hdr.n != params->n_mult * VBITS || hdr.seq != jb) {
+			logprintf(obj, "error: Wiedemann partial solution %u "
+					"does not match this matrix\n", jb);
+			fclose(fp);
+			return -1;
+		}
+		if (jb == 0) {
+			seed1 = hdr.seed1;
+			seed2 = hdr.seed2;
+		}
+		else if (hdr.seed1 != seed1 || hdr.seed2 != seed2) {
+			logprintf(obj, "error: Wiedemann partial solution %u "
+					"used seed %u, partial 0 used %u\n",
+					jb, hdr.seed1, seed1);
+			fclose(fp);
+			return -1;
+		}
+		if (fread(tmp, sizeof(v_t), ncols, fp) != ncols) {
+			logprintf(obj, "error: Wiedemann partial solution %u "
+					"is truncated\n", jb);
+			fclose(fp);
+			return -1;
+		}
+		fclose(fp);
+
+		for (i = 0; i < ncols; i++)
+			w[i] = v_xor(w[i], tmp[i]);
+	}
+
+	params->seed1 = seed1;
+	params->seed2 = seed2;
+	logprintf(obj, "combined %u Wiedemann partial solutions\n",
+			params->n_mult);
+	return 0;
+}
+
+/*-----------------------------------------------------------------------*/
 int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 			bw_params_t *params, uint32 max_ncols,
 			v_t *post_lanczos_matrix,
@@ -116,15 +228,30 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 	uint32 num_combos = 0;
 	int32 status = -1;
 
+	/* One sequence does the whole of stage 3 in one process, as
+	   before. Several split it: each process sums only its own
+	   sequence and writes the partial, and a combine run XORs them
+	   and carries on. The sum is the only part that is per-sequence;
+	   everything after it is shared, so both paths meet below. */
+
+	uint32 combining = (params->stage == BW_STAGE_COMBINE);
+	uint32 partial = (params->n_mult > 1 && !combining);
+
 	*solution_out = NULL;
 	*num_deps_found = 0;
 
-	f = read_generator(obj, params, max_ncols, &degree);
-	if (f == NULL)
-		return -1;
+	if (!combining) {
+		f = read_generator(obj, params, max_ncols, &degree);
+		if (f == NULL)
+			return -1;
 
-	logprintf(obj, "commencing Wiedemann mksol, generator degree %u\n",
-			degree);
+		logprintf(obj, "commencing Wiedemann mksol, generator "
+				"degree %u\n", degree);
+		if (partial) {
+			logprintf(obj, "summing sequence %u of %u only\n",
+					params->seq, params->n_mult);
+		}
+	}
 
 	w = vv_alloc(n, matrix->extra);
 	z = vv_alloc(n, matrix->extra);
@@ -133,6 +260,9 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 	host_next = (v_t *)aligned_malloc((size_t)max_ncols * sizeof(v_t), 64);
 	host_res = (v_t *)aligned_malloc((size_t)max_ncols * sizeof(v_t), 64);
 	combos = (v_t *)xmalloc(VBITS * sizeof(v_t));
+
+	for (i = 0; i < max_ncols; i++)
+		host_w[i] = v_zero;
 
 	/* y is regenerated exactly as the Krylov stage had it, which is
 	   why the seeds are fixed and travel in the parameters */
@@ -148,7 +278,7 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 	   generically, by anything smaller, and the walk below finds
 	   exactly where each column dies. */
 
-	{
+	if (!combining) {
 		uint32 *shift = (uint32 *)xmalloc(VBITS * sizeof(uint32));
 		uint32 nrow = params->n_mult * VBITS;
 		v_t *fs;
@@ -207,13 +337,15 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 	   vector operations a single sequence would. The partial
 	   solutions simply XOR together. */
 
-	{
+	if (!combining) {
 		uint32 nrow = params->n_mult * VBITS;
+		uint32 first = partial ? params->seq : 0;
+		uint32 last = partial ? params->seq + 1 : params->n_mult;
 		uint32 jb;
 
 		vv_clear(w, n);
 
-		for (jb = 0; jb < params->n_mult; jb++) {
+		for (jb = first; jb < last; jb++) {
 			uint32 seed1 = params->seed1;
 			uint32 seed2 = params->seed2;
 			uint32 cleared = 0;
@@ -248,12 +380,34 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 		}
 	}
 
+	/* The two paths meet here, both with W in host_w and on the
+	   card. A partial run stops instead: its sum is only one term of
+	   W, so the walk below would be walking the wrong vector. */
+
+	if (combining) {
+		if (read_partials(obj, params, host_w, max_ncols,
+					host_next) != 0)
+			goto cleanup;
+		vv_copyin(w, host_w, n);
+	}
+	else {
+		vv_copyout(host_w, w, n);
+
+		if (partial) {
+			status = write_partial(obj, params, host_w, max_ncols);
+			if (status == 0) {
+				logprintf(obj, "Wiedemann partial solution %u "
+						"of %u written\n", params->seq,
+						params->n_mult);
+			}
+			goto cleanup;
+		}
+	}
+
 	/* Walk the columns forward until each dies, keeping the last
 	   nonzero value. A column already in the nullspace dies on the
 	   first step, so applying A to the whole block uniformly would
 	   throw it away; that is what the liveness mask prevents. */
-
-	vv_copyout(host_w, w, n);
 
 	{
 		/* If this is ever zero the valuations above were wrong and

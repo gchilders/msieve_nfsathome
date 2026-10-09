@@ -60,6 +60,8 @@ static int32 parse_params(msieve_obj *obj, bw_params_t *params) {
 			params->stage = BW_STAGE_LINGEN;
 		else if (!strncmp(tmp, "mksol", 5))
 			params->stage = BW_STAGE_MKSOL;
+		else if (!strncmp(tmp, "combine", 7))
+			params->stage = BW_STAGE_COMBINE;
 		else if (!strncmp(tmp, "all", 3))
 			params->stage = BW_STAGE_ALL;
 		else {
@@ -74,6 +76,19 @@ static int32 parse_params(msieve_obj *obj, bw_params_t *params) {
 	}
 	if (params->seq >= params->n_mult) {
 		logprintf(obj, "error: bw_seq must be less than bw_n\n");
+		return -1;
+	}
+
+	/* Several sequences cannot be driven from one process: each
+	   stage owns one of them, so running them end to end would
+	   compute sequence bw_seq and then ask lingen for all of them.
+	   Say so here rather than failing later on a missing file. */
+
+	if (params->stage == BW_STAGE_ALL && params->n_mult > 1) {
+		logprintf(obj, "error: bw_stage=all needs bw_n=1; with more "
+				"sequences run bw_stage=krylov once per "
+				"bw_seq, then lingen, then bw_stage=mksol "
+				"once per bw_seq, then bw_stage=combine\n");
 		return -1;
 	}
 	return 0;
@@ -162,11 +177,16 @@ uint64 * block_wiedemann(msieve_obj *obj,
 	}
 
 	if (params.stage == BW_STAGE_MKSOL ||
+	    params.stage == BW_STAGE_COMBINE ||
 	    params.stage == BW_STAGE_ALL) {
 
 		v_t *solution = NULL;
 		uint32 num_found = 0;
 		uint32 i;
+
+		/* with several sequences this returns nothing on the mksol
+		   pass, having written a partial solution for the combine
+		   stage to pick up */
 
 		if (bw_mksol(obj, &packed_matrix, &params, max_ncols,
 				post_lanczos_matrix, &solution,

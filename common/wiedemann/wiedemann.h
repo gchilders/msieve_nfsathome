@@ -49,7 +49,8 @@ enum {
 	BW_STAGE_ALL = 0,
 	BW_STAGE_KRYLOV,
 	BW_STAGE_LINGEN,
-	BW_STAGE_MKSOL
+	BW_STAGE_MKSOL,
+	BW_STAGE_COMBINE
 };
 
 /* m and n are the two block widths of the method. Both are counted in
@@ -113,6 +114,25 @@ typedef struct {
 				   or not it was told bw_seed */
 } bw_gen_header_t;
 
+/* A partial solution, W_jb = sum_k A^k y_jb F_k[jb], written by one
+   mksol process and XORed together by the combine stage. The sum is
+   over sequences and they share nothing until that point, which is
+   what lets mksol run one process per GPU like the Krylov stage. Only
+   written when there is more than one sequence; a single-sequence run
+   keeps W in memory and never touches the disk. */
+
+#define BW_SOL_MAGIC 0x314c5742		/* "BWL1" */
+
+typedef struct {
+	uint32 magic;
+	uint32 vbits;
+	uint32 m;
+	uint32 n;
+	uint32 ncols;
+	uint32 seq;
+	uint32 seed1, seed2;
+} bw_sol_header_t;
+
 /* stage entry points. Each returns 0 on success and -1 if it stopped
    early (interrupt, or a missing input from an earlier stage) */
 
@@ -125,9 +145,17 @@ int32 bw_krylov(msieve_obj *obj, packed_matrix_t *matrix,
 
 int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols);
 
-/* On success *solution_out is an aligned_malloc'd array of max_ncols
-   v_t, one per matrix column, with dependency d in bit d. The caller
-   owns it. post_lanczos_matrix may be NULL */
+/* Builds W and turns it into dependencies. With one sequence that is
+   the whole of stage 3. With several, a process given BW_STAGE_MKSOL
+   computes only its own bw_seq and writes the partial, leaving
+   *solution_out NULL; a later BW_STAGE_COMBINE reads every partial and
+   finishes the job. Both cases come through here, because everything
+   after the sum -- the walk, the gate, the stripped rows -- is shared.
+
+   On success and when the dependencies were produced, *solution_out is
+   an aligned_malloc'd array of max_ncols v_t, one per matrix column,
+   with dependency d in bit d. The caller owns it. post_lanczos_matrix
+   may be NULL */
 
 int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 			bw_params_t *params, uint32 max_ncols,
