@@ -63,11 +63,22 @@ $Id$
 #define CHUNK_BITS 32
 #define CANTOR_MAX 32
 
-/* Below this many coefficients the transform cannot win: it rounds the
-   length up to a power of two and pays b^2 transforms to save on a
-   product that Karatsuba already does cheaply. */
+/* Below this many coefficients schoolbook takes the product instead.
+   The cutoff is deliberately low: an operand of at most CHUNK_BITS
+   coefficients is a single chunk, so k comes out 0 and there is no
+   transform left to pay for -- the whole product becomes one
+   carry-less multiply per matrix entry, against len^2 word XORs for
+   schoolbook. The first guess of 128 was wrong for exactly that
+   reason, and it hurt twice over, because Karatsuba in [16,128) is
+   where the recursion spent its time and none of it ran in parallel.
+
+   Measured on the 4.8M matrix at b=128: the recursion went 20.0 ->
+   13.0 sec for a byte-identical generator, with 32, 16, 8 and 4 all
+   the same within the timer. It sits at BMP_KARATSUBA_CUTOFF so the
+   division of labour is simply schoolbook below, transform above, and
+   Karatsuba only where the panel budget turns the transform down. */
 #ifndef LINGEN_FFT_MIN_LEN
-#define LINGEN_FFT_MIN_LEN 128
+#define LINGEN_FFT_MIN_LEN 16
 #endif
 
 /* How much the transforms may hold. Taken from the machine rather than
