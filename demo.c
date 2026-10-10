@@ -424,10 +424,36 @@ int main(int argc, char **argv) {
 #ifdef HAVE_MPI
 	{
 		int32 level;
+
+		/* SERIALIZED, not FUNNELED. lingen's base case exchanges
+		   dcol from inside an OpenMP region: one thread at a
+		   time, never two at once, which is exactly what
+		   SERIALIZED describes and more than FUNNELED allows.
+		   FUNNELED was a promise that only the initialising
+		   thread would ever call, and when that promise was
+		   broken the failure was a UCX assertion deep in a
+		   collective, thousands of products into a run. Ask for
+		   what the code actually does, and say so at startup if
+		   the library cannot provide it, rather than finding out
+		   in the middle. */
+
 		if ((i = MPI_Init_thread(&argc, &argv,
-				MPI_THREAD_FUNNELED, &level)) != MPI_SUCCESS) {
+				MPI_THREAD_SERIALIZED, &level)) != MPI_SUCCESS) {
 			printf("error %d initializing MPI, aborting\n", i);
 			MPI_Abort(MPI_COMM_WORLD, i);
+		}
+		if (level < MPI_THREAD_SERIALIZED) {
+			int rank = 0;
+
+			MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+			if (rank == 0) {
+				printf("warning: this MPI provides thread "
+					"level %d, below MPI_THREAD_SERIALIZED "
+					"(%d); the linear algebra calls MPI "
+					"from the master thread of an OpenMP "
+					"region\n", level,
+					MPI_THREAD_SERIALIZED);
+			}
 		}
 #ifdef HAVE_CUDAAWARE_MPI
 		printf("Using CUDA-Aware MPI\n");
