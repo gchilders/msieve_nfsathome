@@ -423,8 +423,15 @@ all: demo.o $(COMMON_OBJS) $(QS_OBJS) $(NFS_OBJS) $(GPU_OBJS)
 	ranlib libmsieve.a
 	$(LINKER) $(CFLAGS) -o msieve $(LDFLAGS) demo.o libmsieve.a $(LIBS)
 
+# $(MAKE), not 'make': on a machine where GNU make is installed as
+# gmake there is no 'make' to find, and the recipe died here before
+# reaching the rm below -- so clean silently removed nothing and left
+# objects from the previous flags to be linked into the next build.
+# The leading '-' is for the same reason: whatever the cub directory
+# does, the objects in this one still have to go.
+
 clean:
-	cd cub && make clean WIN=$(WIN) WIN64=$(WIN64) && cd ..
+	-cd cub && $(MAKE) clean WIN=$(WIN) WIN64=$(WIN64)
 	rm -f msieve msieve.exe demo.o libmsieve.a $(COMMON_OBJS) $(QS_OBJS) \
 		$(COMMON_GPU_OBJS) $(NFS_OBJS) $(NFS_GPU_OBJS) $(NFS_NOGPU_OBJS) \
 		$(CUDA_ENGINE_OBJS) $(CUDA_EMBED_OBJS) *.ptx *.fatbin *_embed.c \
@@ -524,7 +531,7 @@ else
 # cub/Makefile takes bare SM numbers, comma-separated (sm=86,120)
 cub/built: cub/Makefile cub/spmv_engine.cu cub/spmv_engine.h \
 		cub/sort_engine.cu cub/sort_engine.h cub/.build_config
-	cd cub && make WIN=$(WIN) WIN64=$(WIN64) VBITS=$(VBITS) \
-		sm=$(subst $(space),$(comma),$(CUDA_ARCH_LIST)) && cd ..
+	cd cub && $(MAKE) WIN=$(WIN) WIN64=$(WIN64) VBITS=$(VBITS) \
+		sm=$(subst $(space),$(comma),$(CUDA_ARCH_LIST))
 endif
 endif
