@@ -822,6 +822,7 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 	int32 grid_dims[2];
 	int32 mpi_nrows = 0;
 	int32 mpi_ncols = 0;
+	uint32 use_wiedemann = 0;
 #endif
 
 	logprintf(obj, "\n");
@@ -834,6 +835,9 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 	if (obj->nfs_args != NULL) {
 #ifdef HAVE_MPI
 		const char *tmp0, *tmp1;
+
+		use_wiedemann = (strstr(obj->nfs_args,
+					"solver=wiedemann") != NULL);
 
 		tmp1 = strstr(obj->nfs_args, "mpi_nrows=");
 		if (tmp1 != NULL)
@@ -914,6 +918,36 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 		exit(-1);
 	}
 
+	/* Wiedemann never splits the matrix. Its ranks each hold the
+	   whole of it and run one Krylov sequence, which is the entire
+	   point of the solver: a split matrix would exchange a vector
+	   every iteration. So the grid options do not apply, and every
+	   rank gets a 1 x 1 grid of its own rather than a share of one
+	   big one. The row and column communicators are MPI_COMM_SELF,
+	   so the allgather and the XOR inside the product reduce to
+	   nothing and the matrix code below needs no special case. */
+
+	if (use_wiedemann) {
+		if (mpi_nrows || mpi_ncols) {
+			printf("error: mpi_nrows, mpi_ncols and X,Y split "
+				"the matrix, which block Wiedemann does "
+				"not do; with solver=wiedemann the number "
+				"of ranks is the number of sequences\n");
+			MPI_Abort(MPI_COMM_WORLD, MPI_ERR_TOPOLOGY);
+		}
+		obj->mpi_nrows = 1;
+		obj->mpi_ncols = 1;
+		obj->mpi_la_row_rank = 0;
+		obj->mpi_la_col_rank = 0;
+		MPI_TRY(MPI_Comm_dup(MPI_COMM_SELF, &obj->mpi_la_grid))
+		MPI_TRY(MPI_Comm_dup(MPI_COMM_SELF, &obj->mpi_la_row_grid))
+		MPI_TRY(MPI_Comm_dup(MPI_COMM_SELF, &obj->mpi_la_col_grid))
+		logprintf(obj, "initialized rank %u of %u, one Wiedemann "
+				"sequence each\n", obj->mpi_rank,
+				obj->mpi_size);
+	}
+	else {
+
 	/* create the grid */
 
 	obj->mpi_nrows = grid_dims[0] = 1;
@@ -963,6 +997,7 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 	logprintf(obj, "initialized process (%u,%u) of %u x %u grid\n",
 			obj->mpi_la_row_rank, obj->mpi_la_col_rank,
 			obj->mpi_nrows, obj->mpi_ncols);
+	}
 #endif
 
 	if (!skip_matbuild && !(obj->flags & MSIEVE_FLAG_NFS_LA_RESTART)) {
@@ -979,7 +1014,11 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 		   involved) */
 
 #ifdef HAVE_MPI
-		if (obj->mpi_la_row_rank + obj->mpi_la_col_rank == 0) {
+		/* every Wiedemann rank is (0,0) of its own grid, so the
+		   build has to be picked out by world rank instead */
+
+		if (use_wiedemann ? (obj->mpi_rank == 0) :
+			(obj->mpi_la_row_rank + obj->mpi_la_col_rank == 0)) {
 #endif
 		uint64 sparse_weight;
 		char work_matrix[256];
@@ -1226,7 +1265,12 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 
 #ifdef HAVE_MPI
 		}
-		MPI_TRY(MPI_Barrier(obj->mpi_la_grid))
+
+		/* and their grids hold one rank each, so waiting for the
+		   build means waiting on the world */
+
+		MPI_TRY(MPI_Barrier(use_wiedemann ? MPI_COMM_WORLD :
+					obj->mpi_la_grid))
 #endif
 	}
 
@@ -1308,5 +1352,5 @@ void nfs_solve_linear_system(msieve_obj *obj, mpz_t n) {
 	MPI_TRY(MPI_Comm_free(&obj->mpi_la_col_grid))
 #endif
 	cpu_time = time(NULL) - cpu_time;
-	logprintf(obj, "BLanczosTime: %u\n", (uint32)cpu_time);
+	logprintf(obj, "LinearAlgebraTime: %u\n", (uint32)cpu_time);
 }

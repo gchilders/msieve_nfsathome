@@ -258,6 +258,7 @@ int32 bw_krylov(msieve_obj *obj, packed_matrix_t *matrix,
 	uint32 report_interval;
 	uint32 dump_interval;
 	uint32 next_report, next_dump;
+	uint32 first_iter, log_eta_at;
 	void *cur, *next, *tmp_vec;
 	void **xblk;
 	v_t *host_tmp;
@@ -333,6 +334,13 @@ int32 bw_krylov(msieve_obj *obj, packed_matrix_t *matrix,
 	next_report = iter + report_interval;
 	next_dump = iter + dump_interval;
 	start_time = time(NULL);
+	first_iter = iter;
+
+	/* the ETA goes in the log once, early enough to be worth
+	   reading but far enough in to mean something -- the first
+	   products pay for the matrix reaching the card */
+
+	log_eta_at = iter + MAX(1, num_terms / 50);
 
 	for (; iter < num_terms; iter++) {
 
@@ -377,9 +385,25 @@ int32 bw_krylov(msieve_obj *obj, packed_matrix_t *matrix,
 
 		if (iter + 1 >= next_report) {
 			double pct = 100.0 * (iter + 1) / num_terms;
-			fprintf(stderr, "Krylov %u of %u, %.1f%%\r",
-					iter + 1, num_terms, pct);
-			fflush(stderr);
+			double elapsed = difftime(time(NULL), start_time);
+			uint32 eta = (uint32)(elapsed *
+					(num_terms - (iter + 1)) /
+					MAX(1, iter + 1 - first_iter));
+
+			if (BW_IS_NODE_0(obj)) {
+				fprintf(stderr, "Krylov %u of %u, %.1f%%, "
+					"ETA %dh%2dm    \r",
+					iter + 1, num_terms, pct,
+					eta / 3600, (eta % 3600) / 60);
+				fflush(stderr);
+			}
+			if (log_eta_at && iter + 1 >= log_eta_at) {
+				logprintf(obj, "Krylov at %.1f%%, "
+						"ETA %dh%2dm\n", pct,
+						eta / 3600,
+						(eta % 3600) / 60);
+				log_eta_at = 0;
+			}
 			next_report = iter + 1 + report_interval;
 		}
 

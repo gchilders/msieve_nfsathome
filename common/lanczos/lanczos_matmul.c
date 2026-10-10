@@ -108,7 +108,14 @@ void packed_matrix_init(msieve_obj *obj,
 	p->num_dense_rows = num_dense_rows;
 	p->num_threads = 1;
 #ifdef HAVE_MPI
-	p->mpi_size = obj->mpi_size;
+	/* how many ranks share this product, which is the grid and not
+	   the world. Block Lanczos spreads its grid over every rank, so
+	   the two are the same there; block Wiedemann gives each rank a
+	   1 x 1 grid and divides the Krylov sequences instead, and its
+	   product is then purely local -- which it has to be, because
+	   the local path is the one that takes no scratch2. */
+
+	p->mpi_size = obj->mpi_nrows * obj->mpi_ncols;
 	p->mpi_nrows = obj->mpi_nrows;
 	p->mpi_ncols = obj->mpi_ncols;
 	p->mpi_la_row_rank = obj->mpi_la_row_rank;

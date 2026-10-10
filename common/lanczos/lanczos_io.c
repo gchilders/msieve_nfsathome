@@ -695,7 +695,13 @@ void read_matrix_from(msieve_obj *obj, const char *path,
 	mpi_nrows = 1;
 
 #ifdef HAVE_MPI
-	if (read_submatrix) {
+	/* A 1 x 1 grid is the whole matrix, so there is no subset to
+	   look up and no index file to need -- the defaults just set
+	   above are already the right answer. Block Wiedemann gives
+	   every rank such a grid on purpose: the ranks divide the
+	   Krylov sequences, never the matrix. */
+
+	if (read_submatrix && (obj->mpi_nrows > 1 || obj->mpi_ncols > 1)) {
 		/* read in only a subset of the matrix */
 
 		uint64 mat_file_offset;

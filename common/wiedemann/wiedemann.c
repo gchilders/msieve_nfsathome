@@ -26,6 +26,17 @@ $Id$
 #define BW_DEFAULT_SEED1 0x4f1bbcddu
 #define BW_DEFAULT_SEED2 0x9c2a5f73u
 
+/* The stages hand work to each other through files, so a stage cannot
+   start until every rank has finished writing the one before it. */
+
+#ifdef HAVE_MPI
+	#define BW_SYNC		MPI_TRY(MPI_Barrier(MPI_COMM_WORLD))
+	#define BW_RANK(obj)	((obj)->mpi_rank)
+#else
+	#define BW_SYNC
+	#define BW_RANK(obj)	0
+#endif
+
 /*-----------------------------------------------------------------------*/
 static uint32 parse_uint(const char *args, const char *key, uint32 def) {
 
@@ -45,9 +56,33 @@ static int32 parse_params(msieve_obj *obj, bw_params_t *params) {
 	const char *args = obj->nfs_args;
 	const char *tmp;
 
-	params->m_mult = parse_uint(args, "bw_m=", 1);
-	params->n_mult = parse_uint(args, "bw_n=", 1);
+	uint32 dflt = 1;
+	uint32 rank_is_seq = 0;
+
+#ifdef HAVE_MPI
+	/* One rank per sequence is the whole MPI story for this solver,
+	   so the rank count is the natural m and n: that is the shape
+	   the Krylov length wants, since L = N/m + N/n only shrinks when
+	   both grow. The rank then says which sequence to compute, so
+	   bw_seq is not something to pass. */
+
+	if (obj->mpi_size > 1) {
+		dflt = obj->mpi_size;
+		rank_is_seq = 1;
+	}
+#endif
+	params->m_mult = parse_uint(args, "bw_m=", dflt);
+	params->n_mult = parse_uint(args, "bw_n=", dflt);
 	params->seq = parse_uint(args, "bw_seq=", 0);
+
+	if (rank_is_seq) {
+		if (args != NULL && strstr(args, "bw_seq=") != NULL) {
+			logprintf(obj, "error: bw_seq is the MPI rank when "
+					"running under MPI; drop it\n");
+			return -1;
+		}
+		params->seq = BW_RANK(obj);
+	}
 	params->seed1 = parse_uint(args, "bw_seed=", BW_DEFAULT_SEED1);
 	params->seed2 = BW_DEFAULT_SEED2;
 	params->stage = BW_STAGE_ALL;
@@ -79,16 +114,37 @@ static int32 parse_params(msieve_obj *obj, bw_params_t *params) {
 		return -1;
 	}
 
+	/* The stages that touch the matrix own one sequence each, so
+	   under MPI there has to be exactly one rank per sequence.
+	   lingen is the exception: it spreads a product over whatever
+	   ranks it is given and does not care how many sequences there
+	   are, so a lingen-only run on a different rank count is fine
+	   and just has to say bw_n= for itself. */
+
+#ifdef HAVE_MPI
+	if (rank_is_seq && params->stage != BW_STAGE_LINGEN &&
+			params->n_mult != obj->mpi_size) {
+		logprintf(obj, "error: bw_n is %u but there are %u MPI "
+				"ranks; this stage runs one sequence per "
+				"rank\n", params->n_mult, obj->mpi_size);
+		return -1;
+	}
+#endif
+
 	/* Several sequences cannot be driven from one process: each
 	   stage owns one of them, so running them end to end would
 	   compute sequence bw_seq and then ask lingen for all of them.
-	   Say so here rather than failing later on a missing file. */
+	   Under MPI they are driven from one process each, which is
+	   exactly what makes the whole solve a single command. */
 
-	if (params->stage == BW_STAGE_ALL && params->n_mult > 1) {
-		logprintf(obj, "error: bw_stage=all needs bw_n=1; with more "
-				"sequences run bw_stage=krylov once per "
-				"bw_seq, then lingen, then bw_stage=mksol "
-				"once per bw_seq, then bw_stage=combine\n");
+	if (params->stage == BW_STAGE_ALL && params->n_mult > 1 &&
+			!rank_is_seq) {
+		logprintf(obj, "error: bw_stage=all needs bw_n=1 without "
+				"MPI; with more sequences either run under "
+				"MPI with one rank per sequence, or run "
+				"bw_stage=krylov once per bw_seq, then "
+				"lingen, then bw_stage=mksol once per "
+				"bw_seq, then bw_stage=combine\n");
 		return -1;
 	}
 	return 0;
@@ -130,22 +186,6 @@ uint64 * block_wiedemann(msieve_obj *obj,
 		return NULL;
 	}
 
-#ifdef HAVE_MPI
-	if (obj->mpi_size > 1) {
-		/* Sequence parallelism is how several devices are used
-		   here, and it needs no MPI at all: run one process per
-		   sequence with bw_seq= and -g. Splitting a single matrix
-		   across ranks would need a vector exchanged every
-		   iteration, which is the thing this solver exists to
-		   avoid; lingen is the stage that does spread over MPI,
-		   and it is handled above. */
-
-		logprintf(obj, "error: only bw_stage=lingen runs under MPI; "
-				"run one process per sequence for the rest\n");
-		MPI_Abort(MPI_COMM_WORLD, MPI_ERR_ASSERT);
-	}
-#endif
-
 	/* The matmuls require the packed dense rows to be a multiple of
 	   VBITS: the dense part of the product is done in whole VBITS
 	   batches, and a partial last batch would write over the sparse
@@ -184,8 +224,15 @@ uint64 * block_wiedemann(msieve_obj *obj,
 
 	if (params.stage == BW_STAGE_ALL) {
 
+		/* every sequence has to be on disk before lingen reads
+		   them, and the generator has to be on disk before mksol
+		   reads it back */
+
+		BW_SYNC;
+		bmp_mul_set_mpi(obj);
 		if (bw_lingen(obj, &params, max_ncols) != 0)
 			goto done;
+		BW_SYNC;
 	}
 
 	if (params.stage == BW_STAGE_MKSOL ||
@@ -204,6 +251,25 @@ uint64 * block_wiedemann(msieve_obj *obj,
 				post_lanczos_matrix, &solution,
 				&num_found) != 0)
 			goto done;
+
+		/* with one rank per sequence that pass wrote a partial
+		   each; rank 0 XORs them once they are all there. The
+		   combining path does none of the vector work, so this
+		   second call is only the read and the XOR. */
+
+		if (params.stage == BW_STAGE_ALL && params.n_mult > 1) {
+			BW_SYNC;
+			aligned_free(solution);
+			solution = NULL;
+			num_found = 0;
+			if (BW_RANK(obj) != 0)
+				goto done;
+			params.stage = BW_STAGE_COMBINE;
+			if (bw_mksol(obj, &packed_matrix, &params, max_ncols,
+					post_lanczos_matrix, &solution,
+					&num_found) != 0)
+				goto done;
+		}
 
 		if (num_found > 0) {
 			if (num_found > 64) {

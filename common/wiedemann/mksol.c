@@ -359,6 +359,20 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 		uint32 last = partial ? params->seq + 1 : params->n_mult;
 		uint32 jb;
 
+		/* one product per generator coefficient per sequence this
+		   process owns, and they all cost the same, so counting
+		   them is the whole of the estimate */
+
+		uint32 total = (last - first) * MAX(1, degree);
+		uint32 done = 0;
+		uint32 report_interval = MAX(1, total / 100);
+		uint32 next_report = report_interval;
+		uint32 log_eta_at = MAX(1, total / 50);
+		time_t start_time = time(NULL);
+
+		logprintf(obj, "mksol: %u products of %u x %u\n",
+				total, max_ncols, VBITS);
+
 		vv_clear(w, n);
 
 		for (jb = first; jb < last; jb++) {
@@ -392,6 +406,33 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 				}
 				mul_MxN_NxB(matrix, z, prod, NULL);
 				swap = z; z = prod; prod = swap;
+
+				if (++done >= next_report) {
+					double pct = 100.0 * done / total;
+					double elapsed = difftime(
+						time(NULL), start_time);
+					uint32 eta = (uint32)(elapsed *
+						(total - done) / done);
+
+					if (BW_IS_NODE_0(obj)) {
+						fprintf(stderr, "mksol %u of "
+							"%u, %.1f%%, ETA "
+							"%dh%2dm    \r",
+							done, total, pct,
+							eta / 3600,
+							(eta % 3600) / 60);
+						fflush(stderr);
+					}
+					if (log_eta_at && done >= log_eta_at) {
+						logprintf(obj, "mksol at "
+							"%.1f%%, ETA "
+							"%dh%2dm\n", pct,
+							eta / 3600,
+							(eta % 3600) / 60);
+						log_eta_at = 0;
+					}
+					next_report = done + report_interval;
+				}
 			}
 		}
 	}

@@ -81,6 +81,16 @@ typedef struct {
    m_mult * VBITS v_t each: a_i is m rows of seq_width bits, and a row
    of VBITS bits is exactly one v_t */
 
+/* Under MPI every rank runs its own sequence and writes its own log,
+   so progress belongs in all of them but only one may have the
+   terminal. */
+
+#ifdef HAVE_MPI
+	#define BW_IS_NODE_0(obj)	((obj)->mpi_rank == 0)
+#else
+	#define BW_IS_NODE_0(obj)	1
+#endif
+
 #define BW_SEQ_MAGIC 0x32535742		/* "BWS2" */
 
 typedef struct {
