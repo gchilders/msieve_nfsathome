@@ -437,7 +437,8 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 	uint32 mwords = (m + 63) / 64;
 	polmat_t R, pi;
 	uint64 *dcol_shared;
-	uint32 nteam;
+	uint32 nteam, nrank, myrank;
+	uint32 pb0, pb1, rb0, rb1;
 	uint32 t, i, j, r, c, maxdelta;
 	int32 tp;
 
@@ -459,11 +460,24 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 	pm_init(&R, m, b, T + 64);
 	pm_init(&pi, b, b, T + 1);
 
+	/* The ranks take a band of rows each, exactly as the threads do
+	   inside one. This was the last part of lingen still done in
+	   full by every rank, and the only part that got slower as
+	   ranks were added -- each redid all of it while competing for
+	   the same cache: 13.5, 18.1, 22.2 sec at 1, 2 and 4 ranks. */
+
+	nrank = bmp_mpi_size();
+	myrank = bmp_mpi_rank();
+	pb0 = (uint32)((uint64)b * myrank / nrank);
+	pb1 = (uint32)((uint64)b * (myrank + 1) / nrank);
+	rb0 = (uint32)((uint64)m * myrank / nrank);
+	rb1 = (uint32)((uint64)m * (myrank + 1) / nrank);
+
 	for (t = 0; t < T; t++) {
 		const uint64 *gc = G->data +
 				(size_t)t * G->nrows * G->rwords;
 
-		for (r = 0; r < m; r++) {
+		for (r = rb0; r < rb1; r++) {
 			const uint64 *row = gc + (size_t)r * G->rwords;
 
 			for (c = 0; c < b; c++) {
@@ -477,11 +491,14 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 
 	dcol_shared = (uint64 *)xmalloc((size_t)b * mwords * sizeof(uint64));
 
+	/* and the thread bands then divide this rank's band, not the
+	   whole matrix */
+
 	nteam = 1;
 #ifdef _OPENMP
 	nteam = (uint32)omp_get_max_threads();
-	if (nteam > b / QB_MIN_BAND)
-		nteam = b / QB_MIN_BAND;
+	if (nteam > (pb1 - pb0) / QB_MIN_BAND)
+		nteam = (pb1 - pb0) / QB_MIN_BAND;
 	if (nteam < 1)
 		nteam = 1;
 #endif
@@ -527,10 +544,10 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 	nth = (uint32)omp_get_num_threads();
 	mytid = (uint32)omp_get_thread_num();
 #endif
-	plo = (uint32)((uint64)b * mytid / nth);
-	phi = (uint32)((uint64)b * (mytid + 1) / nth);
-	rlo = (uint32)((uint64)m * mytid / nth);
-	rhi = (uint32)((uint64)m * (mytid + 1) / nth);
+	plo = pb0 + (uint32)((uint64)(pb1 - pb0) * mytid / nth);
+	phi = pb0 + (uint32)((uint64)(pb1 - pb0) * (mytid + 1) / nth);
+	rlo = rb0 + (uint32)((uint64)(rb1 - rb0) * mytid / nth);
+	rhi = rb0 + (uint32)((uint64)(rb1 - rb0) * (mytid + 1) / nth);
 	pioff = (size_t)plo * pi.words;
 	Roff = (size_t)rlo * R.words;
 	piw = (size_t)(phi - plo) * pi.words;
@@ -589,10 +606,23 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 
 			for (iw = 0; iw < mwords; iw++)
 				d[iw] = 0;
-			for (rw = 0; rw < m; rw++) {
+			for (rw = rb0; rw < rb1; rw++) {
 				if (pm_coeff(&R, (uint32)jp, rw, t))
 					d[rw >> 6] |= (uint64)1 << (rw & 63);
 			}
+		}
+
+		/* only this rank's rows of R were there to read, and the
+		   bands are disjoint, so the XOR is the whole of it. This
+		   is the one exchange per step -- everything after it is
+		   local again. */
+
+		if (nrank > 1) {
+#ifdef _OPENMP
+			#pragma omp single
+#endif
+			bmp_combine_words(dcol_shared,
+					(size_t)b * mwords);
 		}
 
 		/* from here to the end of the step every thread works on
@@ -849,7 +879,7 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 
 	maxdelta = 0;
 	for (c = 0; c < b; c++) {
-		for (r = 0; r < b; r++) {
+		for (r = pb0; r < pb1; r++) {
 			uint64 *e = pm_entry(&pi, c, r);
 			uint32 w = pi.words;
 
@@ -867,6 +897,17 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 		}
 	}
 
+	/* every rank saw only its own rows, so the length of the answer
+	   is the longest any of them found -- and they all have to
+	   allocate the same pi_out for the combine below to line up */
+
+	if (nrank > 1) {
+		uint64 md = maxdelta;
+
+		bmp_combine_max(&md);
+		maxdelta = (uint32)md;
+	}
+
 	/* back to the coefficient-major layout the multiply wants. Each
 	   coefficient is a separate destination block, so this shares
 	   out with nothing to coordinate. */
@@ -879,7 +920,7 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 		uint64 *pc = bmp_coeff(pi_out, (uint32)tp);
 		uint32 rw, cw;
 
-		for (rw = 0; rw < b; rw++) {
+		for (rw = pb0; rw < pb1; rw++) {
 			uint64 *row = pc + (size_t)rw * pi_out->rwords;
 
 			for (cw = 0; cw < b; cw++) {
@@ -888,6 +929,12 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 			}
 		}
 	}
+
+	/* each rank filled its own rows and left the rest zero, so the
+	   XOR puts the whole basis back on every one of them */
+
+	if (nrank > 1)
+		bmp_combine(pi_out);
 
 	free(dcol_shared);
 	pm_free(&pi);
@@ -1223,6 +1270,13 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 						fft_prof_point_by_k[kk],
 						fft_prof_calls_by_k[kk]);
 			}
+		}
+		if (bmp_words_calls) {
+			logprintf(obj, "lingen profile: base case sent %.1f "
+					"MB over %" PRIu64 " exchanges, one "
+					"per step\n",
+					(double)bmp_words_sent * 8 / 1048576.0,
+					bmp_words_calls);
 		}
 		logprintf(obj, "lingen profile: base case symbolic %.1f, masks "
 				"%.1f, tables %.1f, apply %.1f sec\n",

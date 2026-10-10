@@ -263,6 +263,9 @@ void bmp_mul_set_mpi(msieve_obj *obj);
 uint32 bmp_mpi_size(void);
 uint32 bmp_mpi_rank(void);
 void bmp_combine(bmp_t *c);
+void bmp_combine_words(uint64 *buf, size_t n);
+void bmp_combine_max(uint64 *v);
+extern uint64 bmp_words_sent, bmp_words_calls;
 void bmp_mul_fft_rows(bmp_t *c, const bmp_t *a, const bmp_t *b,
 			uint32 r0, uint32 nr);
 

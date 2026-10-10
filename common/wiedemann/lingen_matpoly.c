@@ -465,6 +465,42 @@ uint32 bmp_mpi_rank(void) { return bmp_rank; }
    nothing. Chunked because an MPI count is an int and these run to
    billions of words. */
 
+/* The same XOR over a plain buffer, for the base case's dcol: the
+   rows of R are split the same way, so each rank knows the bits for
+   its own rows and nobody knows the rest. Counted because this one
+   runs once per step rather than once per product, and on a slow
+   network that is the number that decides whether splitting the
+   base case was worth it. */
+
+uint64 bmp_words_sent;
+uint64 bmp_words_calls;
+
+void bmp_combine_words(uint64 *buf, size_t n) {
+
+#ifdef HAVE_MPI
+	if (bmp_size <= 1)
+		return;
+
+	bmp_words_sent += n;
+	bmp_words_calls++;
+	MPI_TRY(MPI_Allreduce(MPI_IN_PLACE, buf, (int)n,
+			MPI_LONG_LONG, MPI_BXOR, bmp_comm))
+#endif
+}
+
+/* the longest result any rank found */
+
+void bmp_combine_max(uint64 *v) {
+
+#ifdef HAVE_MPI
+	if (bmp_size <= 1)
+		return;
+
+	MPI_TRY(MPI_Allreduce(MPI_IN_PLACE, v, 1, MPI_LONG_LONG,
+			MPI_MAX, bmp_comm))
+#endif
+}
+
 void bmp_combine(bmp_t *c) {
 
 #ifdef HAVE_MPI
