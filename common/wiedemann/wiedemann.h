@@ -133,6 +133,21 @@ typedef struct {
 
 #define BW_SOL_MAGIC 0x314c5742		/* "BWL1" */
 
+/* How often krylov and mksol say where they are, and how far in the
+   one ETA that reaches the logfile goes. Both are a fraction of the
+   run, capped: a fraction alone means the bigger the matrix the
+   longer the wait for the same information, and 2% of a 60M matrix
+   is a quarter of an hour before the log says anything about how
+   long the stage will take. Block Lanczos reports on absolute
+   dimension counts for the same reason.
+
+   The cap cannot go much below this. The SpMV autotuner spends its
+   first few dozen products timing candidates it will not keep, so an
+   ETA taken before then is measuring the tuning and not the solve. */
+
+#define BW_REPORT_MAX_ITER 200
+#define BW_LOG_ETA_MAX_ITER 500
+
 typedef struct {
 	uint32 magic;
 	uint32 vbits;

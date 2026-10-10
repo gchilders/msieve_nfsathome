@@ -329,18 +329,22 @@ int32 bw_krylov(msieve_obj *obj, packed_matrix_t *matrix,
 		goto cleanup;
 	}
 
-	report_interval = MAX(1, num_terms / 100);
+	report_interval = MAX(1, MIN(num_terms / 100,
+				BW_REPORT_MAX_ITER));
 	dump_interval = MAX(1000, num_terms / 50);
 	next_report = iter + report_interval;
 	next_dump = iter + dump_interval;
 	start_time = time(NULL);
 	first_iter = iter;
 
-	/* the ETA goes in the log once, early enough to be worth
-	   reading but far enough in to mean something -- the first
-	   products pay for the matrix reaching the card */
+	/* the ETA goes in the log once, far enough in to mean something
+	   -- the first products pay for the matrix reaching the card --
+	   but on a cap rather than a fraction alone, or the runs that
+	   most want an early estimate are the ones that wait longest
+	   for it */
 
-	log_eta_at = iter + MAX(1, num_terms / 50);
+	log_eta_at = iter + MAX(1, MIN(num_terms / 50,
+				BW_LOG_ETA_MAX_ITER));
 
 	for (; iter < num_terms; iter++) {
 

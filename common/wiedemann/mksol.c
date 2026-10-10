@@ -365,9 +365,11 @@ int32 bw_mksol(msieve_obj *obj, packed_matrix_t *matrix,
 
 		uint32 total = (last - first) * MAX(1, degree);
 		uint32 done = 0;
-		uint32 report_interval = MAX(1, total / 100);
+		uint32 report_interval = MAX(1, MIN(total / 100,
+					BW_REPORT_MAX_ITER));
 		uint32 next_report = report_interval;
-		uint32 log_eta_at = MAX(1, total / 50);
+		uint32 log_eta_at = MAX(1, MIN(total / 50,
+					BW_LOG_ETA_MAX_ITER));
 		time_t start_time = time(NULL);
 
 		logprintf(obj, "mksol: %u products of %u x %u\n",
