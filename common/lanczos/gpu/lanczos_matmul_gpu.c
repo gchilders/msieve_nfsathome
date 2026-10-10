@@ -512,8 +512,21 @@ static void upload_block(gpudata_t *d, block_row_t *b) {
 /*-------------------------------------------------------------------*/
 static size_t vector_mem_bytes(packed_matrix_t *p) {
 
-	/* the vectors used in the lanczos iteration, and the vv kernel
-	   scratch array */
+	/* the vectors used in the iteration, and the vv kernel scratch
+	   array */
+
+	if (p->num_vectors > 0) {
+
+		/* a solver that counted its own. Block Wiedemann does:
+		   its vectors are all ncols long and it has no scratch
+		   at all, because its grid is 1 x 1 and the product is
+		   local -- which also means nsubcols below is never set
+		   for it, and the Lanczos layout would silently reserve
+		   only the two scratch vectors it does not use */
+
+		return (size_t)p->num_vectors * (size_t)p->ncols *
+				sizeof(v_t) + VBITS * sizeof(v_t);
+	}
 
 #ifdef HAVE_MPI
 	return (6 * (size_t)p->nsubcols +
@@ -872,7 +885,7 @@ static void plan_matrix(msieve_obj *obj, packed_matrix_t *p,
 	   transpose; gpu_matrix_init builds exactly these */
 
 	plan_forward_blocks(p, plan);
-	if (!d->single_copy)
+	if (!d->single_copy && !d->forward_only)
 		plan_trans_blocks(p, plan);
 
 	if (d->use_cudamanaged) {
@@ -1041,8 +1054,10 @@ static void gpu_matrix_init(packed_matrix_t *p, block_plan_t *plan) {
 			upload_block(d, b);
 	}
 
-	/* the transpose of the matrix; in single-copy mode the
-	   transpose multiply reuses the blocks above instead */
+	/* the transpose of the matrix. In single-copy mode the
+	   transpose multiply reuses the blocks above instead, and
+	   when the solver never applies the transpose none were
+	   planned; num_trans is zero in both cases */
 
 	d->num_trans_block_rows = num_trans;
 	d->trans_block_rows = (block_row_t *)xcalloc(MAX(1, num_trans),
@@ -1478,17 +1493,36 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 	/* should we store only one copy of the matrix on the card */
 
 	d->single_copy = 0;
+	d->forward_only = p->forward_only;
+
 	if (obj->nfs_args != NULL &&
 	    strstr(obj->nfs_args, "single_copy=1") != NULL) {
-		if (d->spmv_engine_run_trans == NULL) {
+		if (d->forward_only) {
+
+			/* single_copy buys back the transpose copy by
+			   scattering instead, and pays for it with
+			   smaller blocks and a row pointer floor. With
+			   no transpose product in the first place there
+			   is nothing to buy back and nothing to pay */
+
+			logprintf(obj, "note: single_copy=1 is ignored "
+					"when the solver never applies the "
+					"transpose\n");
+		}
+		else if (d->spmv_engine_run_trans == NULL) {
 			printf("error: SpMV library does not support "
 				"single_copy=1\n");
 			exit(-1);
 		}
-		d->single_copy = 1;
-		logprintf(obj, "storing a single copy of the matrix "
-				"(no transpose) on the GPU\n");
+		else {
+			d->single_copy = 1;
+			logprintf(obj, "storing a single copy of the matrix "
+					"(no transpose) on the GPU\n");
+		}
 	}
+	if (d->forward_only)
+		logprintf(obj, "storing only A on the GPU; this solver "
+				"never applies the transpose\n");
 
 	/* Set preferred nonzeros per matrix block. The default sizes the
 	   active input-vector window of each column-slice SpMV block to
@@ -1773,6 +1807,20 @@ static void mul_packed_trans_gpu(packed_matrix_t *p,
 
 	uint32 i;
 	gpudata_t *d = (gpudata_t *)p->extra;
+
+	if (d->forward_only) {
+
+		/* no transpose copy was ever built, so the loop below
+		   would sweep no blocks and hand back a vector of
+		   zeros. Nothing in block Wiedemann asks for this
+		   product; anything that starts to is a bug, and a
+		   silent zero would surface as a wrong dependency
+		   hours later */
+
+		printf("error: transpose product requested but only A "
+			"is stored\n");
+		exit(-1);
+	}
 
 	LANCZOS_NVTX_PUSH("mul_packed_trans.memset", LANCZOS_NVTX_COLOR_MUL_TRANS);
 	CUDA_TRY(cuMemsetD8(b->gpu_vec, 0,

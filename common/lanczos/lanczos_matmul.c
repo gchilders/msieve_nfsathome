@@ -107,6 +107,12 @@ void packed_matrix_init(msieve_obj *obj,
 	p->start_col = start_col;
 	p->num_dense_rows = num_dense_rows;
 	p->num_threads = 1;
+
+	/* block Wiedemann only ever multiplies by A, so whatever stores
+	   the matrix can skip the transpose entirely */
+
+	p->forward_only = (obj->nfs_args != NULL &&
+			strstr(obj->nfs_args, "solver=wiedemann") != NULL);
 #ifdef HAVE_MPI
 	/* how many ranks share this product, which is the grid and not
 	   the world. Block Lanczos spreads its grid over every rank, so

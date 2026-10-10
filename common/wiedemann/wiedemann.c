@@ -241,6 +241,20 @@ uint64 * block_wiedemann(msieve_obj *obj,
 
 	memset(&packed_matrix, 0, sizeof(packed_matrix_t));
 
+	/* Tell the matmul layer how many vectors to expect before it
+	   plans the matrix, because on a GPU whatever it does not
+	   reserve is handed to the sparse blocks instead. Krylov holds
+	   the m_mult projection blocks and the two its recurrence
+	   alternates between; mksol holds three, and so does combining,
+	   which allocates them before it discovers it has no vector
+	   work to do. At eight ranks krylov's are ten full-length
+	   vectors, several GB, and reserving two was enough to push a
+	   matrix that fits into streaming. */
+
+	packed_matrix.num_vectors =
+		(params.stage == BW_STAGE_MKSOL ||
+		 params.stage == BW_STAGE_COMBINE) ? 3 : params.m_mult + 2;
+
 	if (have_post_lanczos)
 		max_nrows -= POST_LANCZOS_ROWS;
 

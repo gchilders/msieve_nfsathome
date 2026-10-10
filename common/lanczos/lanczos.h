@@ -144,6 +144,25 @@ typedef struct packed_matrix_t {
 
 	uint32 block_nnz; /* used by the CUDA code */
 
+	/* set when the solver applies only A and never A^T. Block
+	   Wiedemann does: krylov and mksol both call mul_MxN_NxB, and
+	   nothing in it reaches mul_sym_NxN_NxB. A transpose copy is
+	   then dead weight, and counting one doubles what the matrix
+	   appears to need -- enough to stream a matrix that would have
+	   fit. Set by packed_matrix_init */
+
+	uint32 forward_only;
+
+	/* how many full-length vectors the solver is about to allocate,
+	   so the GPU can reserve them before it plans the matrix. Only
+	   the solver knows: block Wiedemann's count depends on m_mult
+	   and on which stage is running. Block Lanczos leaves this zero
+	   and keeps the layout in vector_mem_bytes, which has two
+	   vector sizes and so cannot be written as a count. Must be set
+	   before packed_matrix_init, which does the planning */
+
+	uint32 num_vectors;
+
 	la_col_t *unpacked_cols;  /* used if no packing takes place */
 
 	void * extra; /* implementation-specific stuff */

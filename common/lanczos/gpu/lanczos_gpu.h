@@ -98,6 +98,10 @@ typedef struct {
 	/* store only A on the card; A^T * x scatters through A's blocks */
 	uint32 single_copy;
 
+	/* the solver never applies A^T, so there is no transpose product
+	   to serve at all -- no second copy and no scatter either */
+	uint32 forward_only;
+
 	/* matrix blocks that don't fit on the card are streamed from
 	   pinned host memory. sched lists them in the order one Lanczos
 	   iteration uses them, so the copies can run ahead of the SpMV */

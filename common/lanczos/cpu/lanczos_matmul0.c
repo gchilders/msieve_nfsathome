@@ -427,13 +427,21 @@ size_t packed_matrix_sizeof(packed_matrix_t *p) {
 	uint32 i, j;
 	size_t mem_use;
 
-	/* account for the vectors used in the lanczos iteration */
+	/* account for the vectors used in the iteration; a solver that
+	   counted its own says so, as block Wiedemann does (see
+	   vector_mem_bytes) */
 
+	if (p->num_vectors > 0) {
+		mem_use = (size_t)p->num_vectors *
+				(size_t)p->ncols * sizeof(v_t);
+	}
 #ifdef HAVE_MPI
-	mem_use = (6 * p->nsubcols + 2 * 
-			MAX(p->nrows, p->ncols)) * sizeof(v_t);
+	else
+		mem_use = (6 * (size_t)p->nsubcols + 2 *
+				(size_t)MAX(p->nrows, p->ncols)) * sizeof(v_t);
 #else
-	mem_use = 7 * p->max_ncols * sizeof(v_t);
+	else
+		mem_use = 7 * (size_t)p->max_ncols * sizeof(v_t);
 #endif
 
 	/* and for the matrix */
