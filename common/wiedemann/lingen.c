@@ -90,27 +90,15 @@ static void pm_set_coeff(polmat_t *p, uint32 col, uint32 row, uint32 k) {
 	pm_entry(p, col, row)[k >> 6] |= (uint64)1 << (k & 63);
 }
 
-/* column k ^= column j */
-
-static void pm_col_xor(polmat_t *p, uint32 k, uint32 j) {
-
-	uint64 *dst = pm_col(p, k);
-	uint64 *src = pm_col(p, j);
-	size_t i, num = (size_t)p->nrows * p->words;
-
-	for (i = 0; i < num; i++)
-		dst[i] ^= src[i];
-}
-
 /* column j *= X, one polynomial at a time; bits shifted off the top
    are coefficients past the horizon and are not needed again */
 
-static void pm_col_shift(polmat_t *p, uint32 j) {
+static void pm_col_shift(polmat_t *p, uint32 j, uint32 lo, uint32 hi) {
 
 	uint64 *col = pm_col(p, j);
 	uint32 r, w;
 
-	for (r = 0; r < p->nrows; r++) {
+	for (r = lo; r < hi; r++) {
 		uint64 *e = col + (size_t)r * p->words;
 		uint64 carry = 0;
 
@@ -334,6 +322,66 @@ static void bmp_view(bmp_t *out, const bmp_t *in, uint32 first,
 }
 
 /*-----------------------------------------------------------------------*/
+/* The base case eliminates one pivot row at a time, and each pivot
+   touches only a few dozen columns -- a few microseconds of work. That
+   is far too little to synchronise around: an `omp for' per pivot row
+   measured 1.8x on 16 cores and then got worse, because the barrier
+   costs about as much as the work between two of them.
+
+   So the rows are taken a block at a time. Within a block the
+   elimination is replayed on dcol alone, which is mwords per column
+   rather than a whole column of pi and R, and all it records is, for
+   each column, a QB_RBLK-bit mask of which of the block's pivot
+   columns were XORed into it. Nothing in pi or R moves until the end
+   of the block, and then every column moves at once.
+
+   Applying a mask of k bits naively costs k/2 column XORs, which would
+   be ~5x the work the row-at-a-time version does. The method of four
+   Russians brings that back: the pivot columns are taken QB_GBITS at a
+   time and every XOR of that group is tabulated once, so a column
+   spends one XOR per group however many bits it has set. At
+   QB_GBITS = 4 that is 16 XORs for a 64-bit mask instead of 32, and
+   ~1.8x the total work for 22x fewer barriers. */
+
+#define QB_RBLK 64		/* pivot rows per block; cmask is a uint64 */
+#define QB_GBITS 4
+#define QB_GSIZE (1 << QB_GBITS)
+#define QB_NGRP (QB_RBLK / QB_GBITS)
+
+/* Rows per band, below which a thread is not worth adding: the
+   inner XOR is then a handful of words and the loop costs more
+   than the XOR, while the per-thread copies of the pivot search
+   go on growing. Measured on a 48-core EPYC at b = 256, where
+   this caps the team at 16: the base case runs 7.7 sec at 16
+   threads against 11.1 at 48. It is a band size and not a thread
+   count on purpose, so a wider b uses more of the machine --
+   b = 1024 would allow 64. */
+
+#define QB_MIN_BAND 16
+
+static INLINE uint32 qb_ctz(uint64 x) {
+
+#if defined(__GNUC__)
+	return (uint32)__builtin_ctzll(x);
+#else
+	uint32 n = 0;
+
+	while (!(x & 1)) {
+		x >>= 1;
+		n++;
+	}
+	return n;
+#endif
+}
+
+static INLINE void qb_xor(uint64 *dst, const uint64 *src, size_t n) {
+
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		dst[i] ^= src[i];
+}
+
 void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 				bmp_t *pi_out) {
 
@@ -352,12 +400,10 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 	uint32 b = G->ncols;
 	uint32 mwords = (m + 63) / 64;
 	polmat_t R, pi;
-	uint32 *order, *is_pivot;
-	uint64 *dcol;
+	uint64 *dcol_shared;
+	uint32 nteam;
 	uint32 t, i, j, r, c, maxdelta;
-#ifdef LINGEN_PROFILE
-	double qt;
-#endif
+	int32 tp;
 
 	/* pi needs T + 1 bits and no more. A column is shifted at most
 	   once per step, so after T steps no column has been shifted more
@@ -393,98 +439,366 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 	for (j = 0; j < b; j++)
 		pm_set_coeff(&pi, j, j, 0);
 
-	order = (uint32 *)xmalloc(b * sizeof(uint32));
-	is_pivot = (uint32 *)xmalloc(b * sizeof(uint32));
-	dcol = (uint64 *)xmalloc((size_t)b * mwords * sizeof(uint64));
+	dcol_shared = (uint64 *)xmalloc((size_t)b * mwords * sizeof(uint64));
+
+	nteam = 1;
+#ifdef _OPENMP
+	nteam = (uint32)omp_get_max_threads();
+	if (nteam > b / QB_MIN_BAND)
+		nteam = b / QB_MIN_BAND;
+	if (nteam < 1)
+		nteam = 1;
+#endif
+
+	/* One region for the whole elimination, and almost nothing
+	   shared inside it. */
+
+#ifdef _OPENMP
+	#pragma omp parallel num_threads(nteam)
+#endif
+	{
+	uint32 t, i, j, r, r0, k;
+	int32 jp;	/* the shared-out loop, which OpenMP wants signed */
+	uint32 nth = 1, mytid = 0;
+	uint32 plo, phi, rlo, rhi;
+	size_t pioff, Roff, piw, Rw;
+	uint64 *tab_pi, *tab_R;
+	uint32 *order = (uint32 *)xmalloc(b * sizeof(uint32));
+	uint32 *is_pivot = (uint32 *)xmalloc(b * sizeof(uint32));
+	uint32 *pivcols = (uint32 *)xmalloc(QB_RBLK * sizeof(uint32));
+	uint32 *mydelta = (uint32 *)xmalloc(b * sizeof(uint32));
+	uint64 *dcol = (uint64 *)xmalloc((size_t)b * mwords * sizeof(uint64));
+	uint64 *cmask = (uint64 *)xmalloc(b * sizeof(uint64));
+	uint64 *fmask = (uint64 *)xmalloc(b * sizeof(uint64));
+	uint64 *pmask = (uint64 *)xmalloc(QB_RBLK * sizeof(uint64));
+	uint64 *qmask = (uint64 *)xmalloc(QB_RBLK * sizeof(uint64));
+
+	/* Each thread owns a band of rows of pi and of R, and does every
+	   column over its own band. Splitting by column instead looked
+	   natural and did not work: the tables are then built by a few
+	   threads and read by all of them, so on a multi-die part every
+	   lookup crosses the fabric. Measured on a 48-core EPYC at
+	   b = 256, the apply would not move off 5.2 sec however many
+	   threads it was given. By rows nothing is shared -- each thread
+	   builds the slice of the tables it is about to read -- so the
+	   only barrier left is the one for dcol, once per step.
+
+	   It is the same split the distributed lingen uses, for the same
+	   reason: a band of the output needs only that band of the
+	   inputs. */
+
+#ifdef _OPENMP
+	nth = (uint32)omp_get_num_threads();
+	mytid = (uint32)omp_get_thread_num();
+#endif
+	plo = (uint32)((uint64)b * mytid / nth);
+	phi = (uint32)((uint64)b * (mytid + 1) / nth);
+	rlo = (uint32)((uint64)m * mytid / nth);
+	rhi = (uint32)((uint64)m * (mytid + 1) / nth);
+	pioff = (size_t)plo * pi.words;
+	Roff = (size_t)rlo * R.words;
+	piw = (size_t)(phi - plo) * pi.words;
+	Rw = (size_t)(rhi - rlo) * R.words;
+	tab_pi = (uint64 *)xmalloc(QB_NGRP * QB_GSIZE *
+				(piw ? piw : 1) * sizeof(uint64));
+	tab_R = (uint64 *)xmalloc(QB_NGRP * QB_GSIZE *
+				(Rw ? Rw : 1) * sizeof(uint64));
+
+	/* delta is the one thing every thread both reads and advances,
+	   and sharing it is a race that is easy to miss: the pivot order
+	   is sorted on delta at the top of a step, while a thread that
+	   has run ahead is advancing it at the bottom of the same step.
+	   Nothing orders those two, and the threads then disagree about
+	   the pivot order and silently compute different things -- found
+	   by hashing each thread's pivot choice and comparing. Every
+	   thread advances its own copy by the same rule instead, which
+	   costs b words and removes the question. */
+
+	memcpy(mydelta, delta, b * sizeof(uint32));
+
+#ifdef LINGEN_PROFILE
+	double qt = 0;
+	uint32 tid = mytid;
+
+	/* every thread runs the same sequence of steps, so thread 0's
+	   elapsed time between barriers is the wall time of the phase;
+	   letting all of them report would turn these into totals over
+	   threads, which is not what the other base-case lines mean */
+
+#define QB_TICK(slot) if (tid == 0) {					\
+		lingen_prof_add(slot, lingen_wtime() - qt);		\
+		qt = lingen_wtime();					\
+	}
+#else
+#define QB_TICK(slot)
+#endif
 
 	for (t = 0; t < T; t++) {
 
 #ifdef LINGEN_PROFILE
-		qt = lingen_wtime();
+		if (tid == 0)
+			qt = lingen_wtime();
 #endif
-		for (j = 0; j < b; j++) {
-			uint64 *d = dcol + (size_t)j * mwords;
 
-			for (i = 0; i < mwords; i++)
-				d[i] = 0;
-			for (r = 0; r < m; r++) {
-				if (pm_coeff(&R, j, r, t))
-					d[r >> 6] |= (uint64)1 << (r & 63);
+		/* the only barrier in the step: dcol is taken from every
+		   row of R, so every band has to be written first */
+
+#ifdef _OPENMP
+		#pragma omp barrier
+		#pragma omp for
+#endif
+		for (jp = 0; jp < (int32)b; jp++) {
+			uint64 *d = dcol_shared + (size_t)jp * mwords;
+			uint32 iw, rw;
+
+			for (iw = 0; iw < mwords; iw++)
+				d[iw] = 0;
+			for (rw = 0; rw < m; rw++) {
+				if (pm_coeff(&R, (uint32)jp, rw, t))
+					d[rw >> 6] |= (uint64)1 << (rw & 63);
 			}
-			is_pivot[j] = 0;
 		}
 
-#ifdef LINGEN_PROFILE
-		lingen_prof_add(LP_QB_BUILD, lingen_wtime() - qt);
-		qt = lingen_wtime();
-#endif
+		/* from here to the end of the step every thread works on
+		   its own copy, so there is nothing to order */
+
+		memcpy(dcol, dcol_shared,
+				(size_t)b * mwords * sizeof(uint64));
+		for (j = 0; j < b; j++)
+			is_pivot[j] = 0;
+
+		QB_TICK(LP_QB_BUILD)
+
 		for (j = 0; j < b; j++)
 			order[j] = j;
 		for (i = 1; i < b; i++) {
 			uint32 key = order[i];
 
 			j = i;
-			while (j > 0 && delta[order[j - 1]] > delta[key]) {
+			while (j > 0 && mydelta[order[j - 1]] > mydelta[key]) {
 				order[j] = order[j - 1];
 				j--;
 			}
 			order[j] = key;
 		}
 
+		QB_TICK(LP_QB_SORT)
+
+		for (r0 = 0; r0 < m; r0 += QB_RBLK) {
+			uint32 nr = MIN(QB_RBLK, m - r0);
+			uint32 rr, ngrp, g;
 #ifdef LINGEN_PROFILE
-		lingen_prof_add(LP_QB_SORT, lingen_wtime() - qt);
-		qt = lingen_wtime();
+			double bt = lingen_wtime();
+#define QB_BTICK(slot) if (tid == 0) {					\
+		lingen_prof_add(slot, lingen_wtime() - bt);		\
+		bt = lingen_wtime();					\
+	}
+#else
+#define QB_BTICK(slot)
 #endif
-		for (r = 0; r < m; r++) {
-			uint32 piv = (uint32)-1;
-			uint64 *dp;
 
-			for (i = 0; i < b; i++) {
-				uint32 col = order[i];
+			for (j = 0; j < b; j++)
+				cmask[j] = 0;
+			k = 0;
 
-				if (is_pivot[col])
-					continue;
-				if (dcol[(size_t)col * mwords + (r >> 6)] &
+			/* the elimination, on dcol only */
+
+			for (rr = 0; rr < nr; rr++) {
+				uint32 piv = (uint32)-1;
+				uint64 *dp;
+
+				r = r0 + rr;
+				for (i = 0; i < b; i++) {
+					uint32 col = order[i];
+
+					if (is_pivot[col])
+						continue;
+					if (dcol[(size_t)col * mwords +
+							(r >> 6)] &
 						((uint64)1 << (r & 63))) {
-					piv = col;
-					break;
+						piv = col;
+						break;
+					}
 				}
+				if (piv == (uint32)-1)
+					continue;
+
+				is_pivot[piv] = 1;
+				pivcols[k] = piv;
+				pmask[k] = cmask[piv];
+				dp = dcol + (size_t)piv * mwords;
+
+				for (j = 0; j < b; j++) {
+					uint64 *dc = dcol +
+						(size_t)j * mwords;
+					uint32 iw;
+
+					if (j == piv || is_pivot[j])
+						continue;
+					if (!(dc[r >> 6] &
+						((uint64)1 << (r & 63))))
+						continue;
+					for (iw = 0; iw < mwords; iw++)
+						dc[iw] ^= dp[iw];
+					cmask[j] ^= (uint64)1 << k;
+				}
+				k++;
 			}
-			if (piv == (uint32)-1)
+
+			QB_BTICK(LP_QB_SYM)
+			if (k == 0)
 				continue;
 
-			is_pivot[piv] = 1;
-			dp = dcol + (size_t)piv * mwords;
+			/* A pivot column is itself a XOR of columns taken
+			   earlier in this block, so the masks have to be
+			   resolved back to what the columns held when the
+			   block started. qmask[j] is pivot j written that
+			   way; pmask[j] only ever names pivots before j,
+			   so one forward pass does it. */
 
-			for (c = 0; c < b; c++) {
-				uint64 *dc = dcol + (size_t)c * mwords;
+			for (j = 0; j < k; j++) {
+				uint64 mm = pmask[j];
+				uint64 q = (uint64)1 << j;
 
-				if (c == piv || is_pivot[c])
-					continue;
-				if (!(dc[r >> 6] & ((uint64)1 << (r & 63))))
-					continue;
-				for (i = 0; i < mwords; i++)
-					dc[i] ^= dp[i];
-				pm_col_xor(&pi, c, piv);
-				pm_col_xor(&R, c, piv);
+				while (mm) {
+					q ^= qmask[qb_ctz(mm)];
+					mm &= mm - 1;
+				}
+				qmask[j] = q;
 			}
-		}
 
-#ifdef LINGEN_PROFILE
-		lingen_prof_add(LP_QB_ELIM, lingen_wtime() - qt);
-		qt = lingen_wtime();
-#endif
+			/* and then every column, pivots included: a pivot
+			   column's own mask resolves to qmask[j] without
+			   its own bit, which is exactly right for a XOR
+			   applied in place */
+
+			for (j = 0; j < b; j++) {
+				uint64 mm = cmask[j];
+				uint64 f = 0;
+
+				while (mm) {
+					f ^= qmask[qb_ctz(mm)];
+					mm &= mm - 1;
+				}
+				fmask[j] = f;
+			}
+
+			QB_BTICK(LP_QB_MASK)
+
+			ngrp = (k + QB_GBITS - 1) / QB_GBITS;
+
+			/* every XOR of each group of QB_GBITS pivot
+			   columns, tabulated once. Entry v is entry
+			   v-with-its-lowest-bit-cleared plus one more
+			   column, so each costs a single pass. */
+
+			for (g = 0; g < ngrp; g++) {
+				uint64 *tp = tab_pi +
+					(size_t)g * QB_GSIZE * piw;
+				uint64 *tr = tab_R +
+					(size_t)g * QB_GSIZE * Rw;
+				uint32 v;
+				size_t w;
+
+				for (w = 0; w < piw; w++)
+					tp[w] = 0;
+				for (w = 0; w < Rw; w++)
+					tr[w] = 0;
+
+				for (v = 1; v < QB_GSIZE; v++) {
+					uint32 low = v & (v - 1);
+					uint32 s = g * QB_GBITS + qb_ctz(v);
+					const uint64 *sp, *sr;
+
+					if (s >= k) {
+						memcpy(tp + (size_t)v * piw,
+							tp + (size_t)low * piw,
+							piw * sizeof(uint64));
+						memcpy(tr + (size_t)v * Rw,
+							tr + (size_t)low * Rw,
+							Rw * sizeof(uint64));
+						continue;
+					}
+					sp = pm_col(&pi, pivcols[s]) + pioff;
+					sr = pm_col(&R, pivcols[s]) + Roff;
+					for (w = 0; w < piw; w++) {
+						tp[(size_t)v * piw + w] =
+							tp[(size_t)low * piw
+								+ w] ^ sp[w];
+					}
+					for (w = 0; w < Rw; w++) {
+						tr[(size_t)v * Rw + w] =
+							tr[(size_t)low * Rw
+								+ w] ^ sr[w];
+					}
+				}
+			}
+
+			QB_BTICK(LP_QB_TAB)
+
+			/* one pass over the columns, one XOR per group.
+			   In place is safe: the tables are copies, and a
+			   column reads nothing but itself. */
+
+			for (j = 0; j < b; j++) {
+				uint64 f = fmask[j];
+				uint64 *cp, *cr;
+				uint32 g2;
+
+				if (f == 0)
+					continue;
+				cp = pm_col(&pi, j) + pioff;
+				cr = pm_col(&R, j) + Roff;
+
+				for (g2 = 0; g2 < ngrp; g2++) {
+					uint32 v = (uint32)((f >>
+						(g2 * QB_GBITS)) &
+						(QB_GSIZE - 1));
+
+					if (v == 0)
+						continue;
+					qb_xor(cp, tab_pi + ((size_t)g2 *
+						QB_GSIZE + v) * piw, piw);
+					qb_xor(cr, tab_R + ((size_t)g2 *
+						QB_GSIZE + v) * Rw, Rw);
+				}
+			}
+			QB_BTICK(LP_QB_APP)
+		}
+#undef QB_BTICK
+
+		QB_TICK(LP_QB_ELIM)
+
 		for (j = 0; j < b; j++) {
 			if (is_pivot[j]) {
-				pm_col_shift(&pi, j);
-				pm_col_shift(&R, j);
-				delta[j]++;
+				pm_col_shift(&pi, j, plo, phi);
+				pm_col_shift(&R, j, rlo, rhi);
+				mydelta[j]++;
 			}
 		}
-#ifdef LINGEN_PROFILE
-		lingen_prof_add(LP_QB_SHIFT, lingen_wtime() - qt);
-#endif
+
+		QB_TICK(LP_QB_SHIFT)
 	}
+
+	/* every copy advanced by the same rule, so any of them is the
+	   answer; the region's closing barrier publishes it */
+
+	if (mytid == 0)
+		memcpy(delta, mydelta, b * sizeof(uint32));
+
+	free(tab_R);
+	free(tab_pi);
+	free(qmask);
+	free(pmask);
+	free(fmask);
+	free(cmask);
+	free(dcol);
+	free(mydelta);
+	free(pivcols);
+	free(is_pivot);
+	free(order);
+	}
+#undef QB_TICK
 
 	/* How long the result actually is, measured rather than inferred.
 
@@ -517,23 +831,29 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 		}
 	}
 
+	/* back to the coefficient-major layout the multiply wants. Each
+	   coefficient is a separate destination block, so this shares
+	   out with nothing to coordinate. */
+
 	bmp_init(pi_out, b, b, maxdelta + 1);
-	for (t = 0; t <= maxdelta; t++) {
-		uint64 *pc = bmp_coeff(pi_out, t);
+#ifdef _OPENMP
+	#pragma omp parallel for schedule(static)
+#endif
+	for (tp = 0; tp <= (int32)maxdelta; tp++) {
+		uint64 *pc = bmp_coeff(pi_out, (uint32)tp);
+		uint32 rw, cw;
 
-		for (r = 0; r < b; r++) {
-			uint64 *row = pc + (size_t)r * pi_out->rwords;
+		for (rw = 0; rw < b; rw++) {
+			uint64 *row = pc + (size_t)rw * pi_out->rwords;
 
-			for (c = 0; c < b; c++) {
-				if (pm_coeff(&pi, c, r, t))
-					row[c >> 6] |= (uint64)1 << (c & 63);
+			for (cw = 0; cw < b; cw++) {
+				if (pm_coeff(&pi, cw, rw, (uint32)tp))
+					row[cw >> 6] |= (uint64)1 << (cw & 63);
 			}
 		}
 	}
 
-	free(dcol);
-	free(is_pivot);
-	free(order);
+	free(dcol_shared);
 	pm_free(&pi);
 	pm_free(&R);
 }
@@ -845,6 +1165,12 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 		logprintf(obj, "lingen profile: base case %.1f sec (%" PRIu64
 				" calls)\n", lingen_prof_time(LP_BASE),
 				lingen_prof_count(LP_BASE));
+		logprintf(obj, "lingen profile: base case symbolic %.1f, masks "
+				"%.1f, tables %.1f, apply %.1f sec\n",
+				lingen_prof_time(LP_QB_SYM),
+				lingen_prof_time(LP_QB_MASK),
+				lingen_prof_time(LP_QB_TAB),
+				lingen_prof_time(LP_QB_APP));
 		logprintf(obj, "lingen profile: base case build %.1f, sort "
 				"%.1f, eliminate %.1f, shift %.1f sec\n",
 				lingen_prof_time(LP_QB_BUILD),

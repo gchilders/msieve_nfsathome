@@ -204,6 +204,10 @@ enum {
 	LP_QB_SORT,	/* base case: order the columns by degree */
 	LP_QB_ELIM,	/* base case: the column eliminations */
 	LP_QB_SHIFT,	/* base case: multiply the pivot columns by X */
+	LP_QB_SYM,	/* base case: the elimination replayed on dcol */
+	LP_QB_MASK,	/* base case: resolving the masks */
+	LP_QB_TAB,	/* base case: the four Russians tables */
+	LP_QB_APP,	/* base case: applying the masks to pi and R */
 	LP_NUM
 };
 
