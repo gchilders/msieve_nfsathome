@@ -266,6 +266,8 @@ void bmp_combine(bmp_t *c);
 void bmp_combine_words(uint64 *buf, size_t n);
 void bmp_combine_max(uint64 *v);
 extern uint64 bmp_words_sent, bmp_words_calls;
+void bmp_mul_fft_block(bmp_t *c, const bmp_t *a, const bmp_t *b,
+			uint32 r0, uint32 nr, uint32 c0, uint32 nc);
 void bmp_mul_fft_rows(bmp_t *c, const bmp_t *a, const bmp_t *b,
 			uint32 r0, uint32 nr);
 

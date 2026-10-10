@@ -411,12 +411,70 @@ void bmp_mul(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 		if (bmp_mpi_size() > 1) {
 			uint32 rank = bmp_mpi_rank();
 			uint32 size = bmp_mpi_size();
-			uint32 r0 = (uint32)((uint64)c->nrows * rank / size);
-			uint32 r1 = (uint32)((uint64)c->nrows *
-						(rank + 1) / size);
+			uint32 pr, pc, ri, ci;
+			uint32 r0, r1, c0, c1;
 
-			if (r1 > r0)
-				bmp_mul_fft_rows(c, a, b, r0, r1 - r0);
+			/* A grid, not a row of machines. Splitting rows
+			   alone divides the pointwise work and the
+			   transform of a, but leaves every rank
+			   transforming the whole of b -- so the transform
+			   cost per rank is b^2 (1 + 1/P) and stops
+			   falling, which is what caps the product at
+			   about 2x however many ranks are added. Measured
+			   at b = 512 the transforms are 12% of a product
+			   on one rank and 30% on four, heading for half
+			   by eight: exactly the shape of a term that does
+			   not divide.
+
+			   On a Pr x Pc grid a rank transforms a band of
+			   a's rows and a band of b's columns, so it pays
+			   kdim * (nrows/Pr + ncols/Pc), which does fall.
+
+			   Which grid is best depends on the shape, not
+			   just on P. The residual product is G * pi1 with
+			   G m x b and pi1 b x b, so its output is wider
+			   than it is tall and the columns want splitting
+			   harder than the rows; the composition product
+			   is square and wants an even grid. So every
+			   factorisation is tried and the one that
+			   actually minimises the transform is taken. A
+			   prime rank count has only 1 x P, which is the
+			   column-only split, and that is simply what it
+			   gets. */
+
+			pr = 1;
+			pc = size;
+			{
+				double best = (double)c->nrows +
+						(double)c->ncols / size;
+				uint32 d;
+
+				for (d = 2; d <= size; d++) {
+					double cost;
+
+					if (size % d != 0)
+						continue;
+					cost = (double)c->nrows / d +
+						(double)c->ncols / (size / d);
+					if (cost < best) {
+						best = cost;
+						pr = d;
+						pc = size / d;
+					}
+				}
+			}
+			ri = rank / pc;
+			ci = rank % pc;
+
+			r0 = (uint32)((uint64)c->nrows * ri / pr);
+			r1 = (uint32)((uint64)c->nrows * (ri + 1) / pr);
+			c0 = (uint32)((uint64)c->ncols * ci / pc);
+			c1 = (uint32)((uint64)c->ncols * (ci + 1) / pc);
+
+			if (r1 > r0 && c1 > c0) {
+				bmp_mul_fft_block(c, a, b, r0, r1 - r0,
+						c0, c1 - c0);
+			}
 			bmp_combine(c);
 			return;
 		}

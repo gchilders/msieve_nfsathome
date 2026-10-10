@@ -728,8 +728,8 @@ uint32 bmp_mul_fft_ok(const bmp_t *c, const bmp_t *a, const bmp_t *b) {
    wants that band of a and the whole of b, and every rank already
    holds both, because the recursion around this is replicated. */
 
-void bmp_mul_fft_rows(bmp_t *c, const bmp_t *a, const bmp_t *b,
-			uint32 r0, uint32 nr) {
+void bmp_mul_fft_block(bmp_t *c, const bmp_t *a, const bmp_t *b,
+			uint32 r0, uint32 nr, uint32 c0, uint32 nc) {
 
 	uint32 nca = (a->len + CHUNK_BITS - 1) / CHUNK_BITS;
 	uint32 ncb = (b->len + CHUNK_BITS - 1) / CHUNK_BITS;
@@ -743,7 +743,7 @@ void bmp_mul_fft_rows(bmp_t *c, const bmp_t *a, const bmp_t *b,
 	n = (uint32)1 << k;
 
 	cantor_init(k);
-	g = choose_panel(nr, c->ncols, kdim, n);
+	g = choose_panel(nr, nc, kdim, n);
 
 	/* One panel of a's rows, one of b's columns, and the piece of c
 	   they make. With a single panel this is the whole product and
@@ -759,8 +759,8 @@ void bmp_mul_fft_rows(bmp_t *c, const bmp_t *a, const bmp_t *b,
 	fb = fa + (size_t)n * g * kdim;
 	fc = fb + (size_t)n * kdim * g;
 
-	for (pj = 0; pj < c->ncols; pj += g) {
-		uint32 nj = MIN(g, c->ncols - pj);
+	for (pj = c0; pj < c0 + nc; pj += g) {
+		uint32 nj = MIN(g, c0 + nc - pj);
 #ifdef LINGEN_PROFILE
 		double ft0 = lingen_wtime();
 #endif
@@ -845,7 +845,13 @@ void bmp_mul_fft_rows(bmp_t *c, const bmp_t *a, const bmp_t *b,
 	free(fa);
 }
 
+void bmp_mul_fft_rows(bmp_t *c, const bmp_t *a, const bmp_t *b,
+			uint32 r0, uint32 nr) {
+
+	bmp_mul_fft_block(c, a, b, r0, nr, 0, c->ncols);
+}
+
 void bmp_mul_fft(bmp_t *c, const bmp_t *a, const bmp_t *b) {
 
-	bmp_mul_fft_rows(c, a, b, 0, c->nrows);
+	bmp_mul_fft_block(c, a, b, 0, c->nrows, 0, c->ncols);
 }
