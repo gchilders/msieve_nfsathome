@@ -54,10 +54,11 @@ typedef struct {
    while a block is being assembled -- that, not the kernels, was what
    limited this to 1750000000 before (11 * (nnz/10) overflowed a uint32).
 
-   Note that a block this large is expensive to build on the host: the CSR
-   column array costs 4 bytes per nonzero and radix_sort() another 16, so
-   a full 4e9-nonzero block needs ~80GB of host memory in transit, even
-   though only 16GB of it lands on the card. */
+   Note that a block this large is expensive to build on the host: the COO
+   entries cost 8 bytes per nonzero and radix_sort() another 16, so a full
+   4e9-nonzero block needs ~96GB of host memory in transit, even though
+   only 16GB of it lands on the card. The CSR buffer the block is packed
+   into is allocated after the sort, so it does not add to that peak. */
 
 #define MAX_BLOCK_NNZ 4000000000u
 
@@ -388,14 +389,38 @@ static void pack_matrix_block(block_row_t *b,
 
 	/* convert a block of matrix rows from COO to CSR format, in one
 	   host buffer: column indices, then the row pointers starting on
-	   a 256-byte boundary. A block that will be streamed goes
-	   straight into pinned memory. If the system won't pin any more
-	   (WSL limits pinned memory), it stays in ordinary memory: its
-	   copies then run several times slower, but the solve goes on */
+	   a 256-byte boundary. Where that buffer comes from is settled
+	   further down, once the entries have been put in order */
 
 	b->row_offset = ((size_t)num_entries + 63) & ~(size_t)63;
 	b->bytes = block_bytes(num_entries, num_rows);
 	b->streamed = streamed;
+
+	if (is_trans) {
+		for (i = 0; i < num_entries; i++) {
+			entry_idx_t *e = entries + i;
+			j = e->row_off;
+			e->row_off = e->col_off;
+			e->col_off = j;
+		}
+	}
+	else {
+		/* qsort(entries, num_entries, sizeof(entry_idx_t),
+				compare_row_off); */
+		radix_sort(entries, num_entries);
+	}
+
+	/* Now the buffer, and not before the sort: radix_sort() holds 16
+	   bytes a nonzero of its own while it runs and this is another
+	   4, and nothing here is wanted until the entries are in order,
+	   so asking for it now keeps the two peaks from landing on top
+	   of each other -- 16 GB of host memory on a 4e9-nonzero block.
+
+	   A block that will be streamed goes straight into pinned
+	   memory. If the system won't pin any more (WSL limits pinned
+	   memory), it stays in ordinary memory: its copies then run
+	   several times slower, but the solve goes on. */
+
 	if (streamed &&
 	    cuMemHostAlloc((void **)&b->host_data, b->bytes, 0) ==
 	    						CUDA_SUCCESS) {
@@ -415,20 +440,6 @@ static void pack_matrix_block(block_row_t *b,
 	col_entries = b->host_data;
 	row_entries = b->host_data + b->row_offset;
 	memset(row_entries, 0, (num_rows + 1) * sizeof(uint32));
-
-	if (is_trans) {
-		for (i = 0; i < num_entries; i++) {
-			entry_idx_t *e = entries + i;
-			j = e->row_off;
-			e->row_off = e->col_off;
-			e->col_off = j;
-		}
-	}
-	else {
-		/* qsort(entries, num_entries, sizeof(entry_idx_t),
-				compare_row_off); */
-		radix_sort(entries, num_entries);
-	}
 
 	for (i = j = 0; i < num_entries; i++, j++) {
 
@@ -1007,8 +1018,23 @@ static void gpu_matrix_init(packed_matrix_t *p, block_plan_t *plan) {
 	uint32 streaming = (plan->mode == PLACE_STREAM);
 	uint32 num_trans = plan->num_blocks - plan->num_forward;
 	uint64 num_entries_alloc = 10000;
-	entry_idx_t *entries = (entry_idx_t *)xmalloc(
-					num_entries_alloc *
+	entry_idx_t *entries;
+
+	/* The COO scratch the blocks are built through holds eight
+	   bytes a nonzero, and the plan already knows exactly how many
+	   the largest block has, so ask for that once. Growing into it
+	   instead costs twice: doubling overshoots by up to a factor of
+	   two -- 5.2 billion entries for a 4 billion entry block -- and
+	   every step holds the old array alongside the new one while it
+	   copies. On a 61M matrix at block_nnz=4e9 the last doubling
+	   alone wanted 63 GB of host memory where 32 is enough. The
+	   growth in extract_block and extract_rows stays as a safety
+	   net; sized from the plan it should never fire. */
+
+	for (i = 0; i < plan->num_blocks; i++)
+		num_entries_alloc = MAX(num_entries_alloc, plan->nnz[i]);
+
+	entries = (entry_idx_t *)xmalloc(num_entries_alloc *
 					sizeof(entry_idx_t));
 
 	if (streaming)
