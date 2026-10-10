@@ -98,6 +98,12 @@ enum msieve_flags {
 	
 /* structure encapsulating the savefile used in a factorization */
 
+/* -g was never given: every consumer of which_gpu decides what to
+   do about that, because whether a run needs a GPU at all depends on
+   which stage it reaches -- lingen, for one, needs none. */
+
+#define GPU_UNSPECIFIED ((uint32)(-1))
+
 typedef struct {
 
 #if defined(NO_ZLIB) && (defined(WIN32) || defined(_WIN64))
@@ -138,7 +144,8 @@ typedef struct {
 	                              stage will try to find. The default (0)
 				      is to keep sieving until all necessary 
 				      relations are found. */
-	uint32 which_gpu;         /* ordinal ID of GPU to use */
+	uint32 which_gpu;         /* ordinal ID of GPU to use, or
+	                             GPU_UNSPECIFIED if -g was not given */
 
 
 	uint32 cache_size1;       /* bytes in level 1 cache */

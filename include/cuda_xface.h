@@ -56,6 +56,9 @@ void cuGetErrorMessage(CUresult result, int line);
 
 void gpu_init(gpu_config_t *config);
 
+/* the card this process should use, resolved at the point of use */
+uint32 gpu_pick(msieve_obj *obj);
+
 CUresult cuda_load_embedded_module(CUmodule *module,
 		const void *fatbin, const char *ptx, const char *module_name);
 

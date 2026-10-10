@@ -17,6 +17,41 @@ $Id$
 #ifdef  HAVE_CUDA
 
 /*------------------------------------------------------------------------*/
+uint32 gpu_pick(msieve_obj *obj) {
+
+	/* Which card this process should use, when it has got as far as
+	   needing one. Deciding it here and not while parsing arguments
+	   matters: whether a run touches a GPU at all depends on the
+	   stage it reaches, and some do not. Wiedemann lingen is the
+	   case in point -- it reads the sequences, splits a product over
+	   the ranks and never looks at the matrix, so a CUDA build runs
+	   it perfectly well on hosts that have no GPU, and refusing to
+	   start without -g would break that.
+
+	   Without -g a single process takes the first card, which is
+	   what it has always done. Several processes cannot: they would
+	   all silently take that same card and run four solves on one
+	   GPU while the rest idled. -g is the count per node, and with
+	   more than one rank there is no sensible default for it. */
+
+	if (obj->which_gpu != GPU_UNSPECIFIED)
+		return obj->which_gpu;
+
+#ifdef HAVE_MPI
+	if (obj->mpi_size > 1) {
+		printf("error: -g is needed with more than one MPI rank: "
+			"it is the number of GPUs per node, and rank r "
+			"takes GPU r mod that. Without it every rank would "
+			"take GPU 0. Stages that need no GPU, such as "
+			"bw_stage=lingen, do not require it\n");
+		exit(-1);
+	}
+#endif
+	obj->which_gpu = 0;
+	return 0;
+}
+
+/*------------------------------------------------------------------------*/
 void
 cuGetErrorMessage(CUresult result, int line) 
 {

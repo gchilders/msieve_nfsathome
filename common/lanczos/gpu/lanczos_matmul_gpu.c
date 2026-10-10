@@ -1387,6 +1387,11 @@ void matrix_extra_init(msieve_obj *obj, packed_matrix_t *p,
 		printf("error: no CUDA-enabled GPUs found\n");
 		exit(-1);
 	}
+	/* -g may not have been given; a lone process takes the first
+	   card, several cannot all take it */
+
+	gpu_pick(obj);
+
 	if (obj->which_gpu >= (uint32)gpu_config.num_gpu) {
 		printf("error: GPU %u does not exist "
 			"or is not CUDA-enabled\n", obj->which_gpu);

@@ -403,7 +403,10 @@ int main(int argc, char **argv) {
 	uint32 cache_size1; 
 	uint32 cache_size2; 
 	uint32 num_threads = 0;
-	uint32 which_gpu = 0;
+	/* resolved where a GPU is actually needed, not here: some
+	   stages need none */
+
+	uint32 which_gpu = GPU_UNSPECIFIED;
 	const char *nfs_args = NULL;
 	char *scratch_dir = NULL;
 		
@@ -603,6 +606,13 @@ int main(int argc, char **argv) {
 					{
 						/* With MPI, -g records the number of GPUs per node */
 						int rank = 0;
+
+						if (which_gpu == 0) {
+							printf("error: -g is the number of GPUs "
+								"per node under MPI, and must be "
+								"at least 1\n");
+							return -1;
+						}
 						MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 						which_gpu = rank % which_gpu;
 					}
