@@ -1364,9 +1364,21 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	}
 #endif
 
+	/* Four points, not sixty-four. This is the only thing that checks
+	   the extraction above -- the residual check validates pi, but
+	   not the choice of columns, the slice of the top n rows or the
+	   order the coefficients come out in -- and that is worth
+	   keeping, since picking the wrong columns is a mistake this
+	   code has made before and it ends in a .dep with two bits set.
+	   But every way the extraction can be wrong is wrong at every
+	   point: an orientation, an off-by-one, a row slice. One point
+	   finds those, and the cost is linear in the count. Sixty-four
+	   was 134 of the 1579 sec a four-GPU run spent in the linear
+	   algebra, to repeat the same verdict sixty-four times. */
+
 	phase_time = time(NULL);
 	if (check_generator(obj, a, num_terms, m, params->n_mult, degree,
-			f, 64) != 0)
+			f, 4) != 0)
 		goto cleanup;
 
 	logprintf(obj, "generator verified against the sequence, %.1f sec\n",
