@@ -26,16 +26,42 @@ $Id$
 #define BW_DEFAULT_SEED1 0x4f1bbcddu
 #define BW_DEFAULT_SEED2 0x9c2a5f73u
 
-/* The stages hand work to each other through files, so a stage cannot
-   start until every rank has finished writing the one before it. */
-
 #ifdef HAVE_MPI
-	#define BW_SYNC		MPI_TRY(MPI_Barrier(MPI_COMM_WORLD))
 	#define BW_RANK(obj)	((obj)->mpi_rank)
 #else
-	#define BW_SYNC
 	#define BW_RANK(obj)	0
 #endif
+
+/*-----------------------------------------------------------------------*/
+static int32 bw_stage_sync(msieve_obj *obj, int32 status) {
+
+	/* The stages hand work to each other through files, so a stage
+	   cannot start until every rank has finished writing the one
+	   before it. The wait has to carry the status rather than being
+	   a bare barrier: a rank that failed and left early would
+	   strand the rest here for the life of the job, which on a
+	   scheduler costs the whole allocation and looks like a hang
+	   rather than the error it is. Every rank reaches this whether
+	   it succeeded or not, learns whether any of them failed, and
+	   they stop together. */
+
+#ifdef HAVE_MPI
+	int32 worst = status;
+
+	if (obj->mpi_size > 1) {
+		MPI_TRY(MPI_Allreduce(&status, &worst, 1, MPI_INT,
+					MPI_MIN, MPI_COMM_WORLD))
+		if (worst != 0 && status == 0) {
+			logprintf(obj, "another rank failed; stopping "
+					"this one too\n");
+		}
+	}
+	return worst;
+#else
+	(void)obj;
+	return status;
+#endif
+}
 
 /*-----------------------------------------------------------------------*/
 static uint32 parse_uint(const char *args, const char *key, uint32 def) {
@@ -74,15 +100,6 @@ static int32 parse_params(msieve_obj *obj, bw_params_t *params) {
 	params->m_mult = parse_uint(args, "bw_m=", dflt);
 	params->n_mult = parse_uint(args, "bw_n=", dflt);
 	params->seq = parse_uint(args, "bw_seq=", 0);
-
-	if (rank_is_seq) {
-		if (args != NULL && strstr(args, "bw_seq=") != NULL) {
-			logprintf(obj, "error: bw_seq is the MPI rank when "
-					"running under MPI; drop it\n");
-			return -1;
-		}
-		params->seq = BW_RANK(obj);
-	}
 	params->seed1 = parse_uint(args, "bw_seed=", BW_DEFAULT_SEED1);
 	params->seed2 = BW_DEFAULT_SEED2;
 	params->stage = BW_STAGE_ALL;
@@ -109,7 +126,26 @@ static int32 parse_params(msieve_obj *obj, bw_params_t *params) {
 		logprintf(obj, "error: bw_m and bw_n must be nonzero\n");
 		return -1;
 	}
-	if (params->seq >= params->n_mult) {
+
+	/* The rank is the sequence, but only for the stages that own
+	   one. lingen owns none of them -- it reads every sequence and
+	   splits a product over the ranks instead -- so it neither
+	   takes a sequence index nor has to be run on as many ranks as
+	   there are sequences, and handing it one would reject every
+	   rank past bw_n for a number it never looks at. */
+
+	if (rank_is_seq) {
+		if (args != NULL && strstr(args, "bw_seq=") != NULL) {
+			logprintf(obj, "error: bw_seq is the MPI rank when "
+					"running under MPI; drop it\n");
+			return -1;
+		}
+		if (params->stage != BW_STAGE_LINGEN)
+			params->seq = BW_RANK(obj);
+	}
+
+	if (params->stage != BW_STAGE_LINGEN &&
+			params->seq >= params->n_mult) {
 		logprintf(obj, "error: bw_seq must be less than bw_n\n");
 		return -1;
 	}
@@ -162,6 +198,7 @@ uint64 * block_wiedemann(msieve_obj *obj,
 	bw_params_t params;
 	uint32 have_post_lanczos;
 	uint64 *deps = NULL;
+	int32 status = 0;
 
 	*num_deps_found = 0;
 
@@ -218,7 +255,8 @@ uint64 * block_wiedemann(msieve_obj *obj,
 	if (params.stage == BW_STAGE_ALL ||
 	    params.stage == BW_STAGE_KRYLOV) {
 
-		if (bw_krylov(obj, &packed_matrix, &params, max_ncols) != 0)
+		status = bw_krylov(obj, &packed_matrix, &params, max_ncols);
+		if (params.stage != BW_STAGE_ALL && status != 0)
 			goto done;
 	}
 
@@ -226,13 +264,19 @@ uint64 * block_wiedemann(msieve_obj *obj,
 
 		/* every sequence has to be on disk before lingen reads
 		   them, and the generator has to be on disk before mksol
-		   reads it back */
+		   reads it back. Note that a rank whose Krylov failed
+		   comes through here too, so that the ranks that did not
+		   fail are told rather than left waiting. */
 
-		BW_SYNC;
-		bmp_mul_set_mpi(obj);
-		if (bw_lingen(obj, &params, max_ncols) != 0)
+		status = bw_stage_sync(obj, status);
+		if (status != 0)
 			goto done;
-		BW_SYNC;
+
+		bmp_mul_set_mpi(obj);
+		status = bw_lingen(obj, &params, max_ncols);
+		status = bw_stage_sync(obj, status);
+		if (status != 0)
+			goto done;
 	}
 
 	if (params.stage == BW_STAGE_MKSOL ||
@@ -243,14 +287,23 @@ uint64 * block_wiedemann(msieve_obj *obj,
 		uint32 num_found = 0;
 		uint32 i;
 
+		/* Combining is one process's job: it reads every partial
+		   and writes the dependencies. Letting each rank do it
+		   would have all of them write the same .dep at once, so
+		   the others stop here and leave it to rank 0. */
+
+		if (params.stage == BW_STAGE_COMBINE && BW_RANK(obj) != 0) {
+			logprintf(obj, "combining runs on rank 0 only\n");
+			goto done;
+		}
+
 		/* with several sequences this returns nothing on the mksol
 		   pass, having written a partial solution for the combine
 		   stage to pick up */
 
-		if (bw_mksol(obj, &packed_matrix, &params, max_ncols,
+		status = bw_mksol(obj, &packed_matrix, &params, max_ncols,
 				post_lanczos_matrix, &solution,
-				&num_found) != 0)
-			goto done;
+				&num_found);
 
 		/* with one rank per sequence that pass wrote a partial
 		   each; rank 0 XORs them once they are all there. The
@@ -258,17 +311,21 @@ uint64 * block_wiedemann(msieve_obj *obj,
 		   second call is only the read and the XOR. */
 
 		if (params.stage == BW_STAGE_ALL && params.n_mult > 1) {
-			BW_SYNC;
+			status = bw_stage_sync(obj, status);
 			aligned_free(solution);
 			solution = NULL;
 			num_found = 0;
-			if (BW_RANK(obj) != 0)
+			if (status != 0 || BW_RANK(obj) != 0)
 				goto done;
 			params.stage = BW_STAGE_COMBINE;
 			if (bw_mksol(obj, &packed_matrix, &params, max_ncols,
 					post_lanczos_matrix, &solution,
 					&num_found) != 0)
 				goto done;
+		}
+		else if (status != 0) {
+			aligned_free(solution);
+			goto done;
 		}
 
 		if (num_found > 0) {

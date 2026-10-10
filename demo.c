@@ -225,8 +225,9 @@ void print_usage(char *progname) {
 		 "                    apply and are refused. lingen is the one\n"
 		 "                    stage that does spread a product over the\n"
 		 "                    ranks, and is the only one that may run\n"
-		 "                    on a different number of them -- give it\n"
-		 "                    bw_n= explicitly if you do that\n"
+		 "                    on a different number of them; it takes m\n"
+		 "                    and n from the sequence files, so it\n"
+		 "                    needs no bw_m or bw_n of its own\n"
 #endif
 		 "   bw_seq=X         compute sequence X, 0 <= X < bw_n. The\n"
 		 "                    sequences share nothing, so run one\n"

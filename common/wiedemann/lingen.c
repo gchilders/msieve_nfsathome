@@ -124,10 +124,46 @@ static v_t *read_sequences(msieve_obj *obj, bw_params_t *params,
 	char buf[BW_PATH_LEN];
 	FILE *fp;
 	bw_seq_header_t hdr;
-	uint32 k = params->n_mult;
+	uint32 k;
 	uint32 jb, t, r;
 	uint32 m = 0, num_terms = 0;
 	v_t *a = NULL, *one = NULL;
+
+	/* m and n come from the sequences themselves, the way the seeds
+	   below already do. Krylov wrote them there, and this stage owns
+	   no sequence of its own, so it has nothing better to go on --
+	   under MPI bw_m and bw_n default to the rank count, which is
+	   the right answer only when lingen happens to be run on as many
+	   ranks as there are sequences. It is free to run on more or
+	   fewer, since it splits a product rather than owning a
+	   sequence, and then the defaults would be wrong and the shape
+	   check below would reject the files for a number nobody
+	   chose. */
+
+	snprintf(buf, sizeof(buf), "%s.bw.a.0", obj->savefile.name);
+	fp = fopen(buf, "rb");
+	if (fp == NULL) {
+		logprintf(obj, "error: cannot open Wiedemann sequence %s\n",
+				buf);
+		return NULL;
+	}
+	if (fread(&hdr, sizeof(hdr), 1, fp) != 1 ||
+	    hdr.magic != BW_SEQ_MAGIC || hdr.vbits != VBITS ||
+	    hdr.m == 0 || hdr.n == 0) {
+		logprintf(obj, "error: Wiedemann sequence 0 is corrupt\n");
+		fclose(fp);
+		return NULL;
+	}
+	fclose(fp);
+
+	if (hdr.m != params->m_mult * VBITS ||
+	    hdr.n != params->n_mult * VBITS) {
+		logprintf(obj, "lingen: taking m = %u, n = %u from the "
+				"sequences\n", hdr.m, hdr.n);
+	}
+	params->m_mult = hdr.m / VBITS;
+	params->n_mult = hdr.n / VBITS;
+	k = params->n_mult;
 
 	for (jb = 0; jb < k; jb++) {
 		size_t num;
@@ -931,7 +967,7 @@ void recursive_basis(const bmp_t *G, uint32 T, uint32 *delta,
 /*-----------------------------------------------------------------------*/
 int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 
-	uint32 m = 0, n = params->n_mult * VBITS;
+	uint32 m = 0, n = 0;
 	uint32 b, num_terms, T;
 	uint32 t, i, j, r, c;
 	v_t *a = NULL, *f = NULL;
@@ -956,6 +992,11 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 	if (a == NULL)
 		return -1;
 
+	/* after the read, not before: read_sequences takes m and n from
+	   the sequence headers, which is the only place that knows them
+	   for certain */
+
+	n = params->n_mult * VBITS;
 	b = m + n;
 	T = num_terms;
 
