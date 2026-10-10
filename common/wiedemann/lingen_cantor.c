@@ -93,6 +93,19 @@ $Id$
 
 static double fft_budget_mb;
 
+#ifdef LINGEN_PROFILE
+
+/* Where an FFT product's time goes, and -- the question this was added
+   for -- how much of the pointwise work happens at an FFT size too
+   small to spread over the threads. The pointwise loop runs over the n
+   evaluation points, so a product with n = 1 has no parallelism in it
+   at all however many cores are free. */
+
+double fft_prof_trans, fft_prof_point, fft_prof_inv;
+double fft_prof_point_by_k[CANTOR_MAX + 1];
+uint64 fft_prof_calls_by_k[CANTOR_MAX + 1];
+#endif
+
 /*-----------------------------------------------------------------------*/
 #if !defined(__PCLMUL__)
 
@@ -748,47 +761,84 @@ void bmp_mul_fft_rows(bmp_t *c, const bmp_t *a, const bmp_t *b,
 
 	for (pj = 0; pj < c->ncols; pj += g) {
 		uint32 nj = MIN(g, c->ncols - pj);
+#ifdef LINGEN_PROFILE
+		double ft0 = lingen_wtime();
+#endif
 
 		transform_panel(b, fb, k, n, 0, kdim, pj, nj);
+#ifdef LINGEN_PROFILE
+		fft_prof_trans += lingen_wtime() - ft0;
+#endif
 
 		for (pi = r0; pi < r0 + nr; pi += g) {
 			uint32 ni = MIN(g, r0 + nr - pi);
 			int32 i;
+#ifdef LINGEN_PROFILE
+			double fp0 = lingen_wtime();
+#endif
 
 			transform_panel(a, fa, k, n, pi, ni, 0, kdim);
 			memset(fc, 0, (size_t)n * ni * nj * sizeof(uint64));
+#ifdef LINGEN_PROFILE
+			fft_prof_trans += lingen_wtime() - fp0;
+			fp0 = lingen_wtime();
+#endif
 
 			/* a dense GF(2^64) matrix product at each
 			   evaluation point: the b^3 term, and the only
 			   part that grows with the width */
 
+			/* over evaluation point AND panel row, not just
+			   point. The deep end of the recursion is full
+			   of products whose transform is a single point
+			   -- at CHUNK_BITS = 32 coefficients a chunk,
+			   anything up to 32 long has n = 1 -- and a loop
+			   of one iteration leaves every thread but one
+			   idle. Rows are independent: (i, r) writes row
+			   r of point i's output and nothing else. The
+			   pair is flattened by hand rather than with
+			   collapse(2) so this does not need OpenMP 3. */
+
 #ifdef HAVE_OMP
 #pragma omp parallel for schedule(static)
 #endif
-			for (i = 0; i < (int32)n; i++) {
-				const uint64 *A = fa + (size_t)i * ni * kdim;
-				const uint64 *B = fb + (size_t)i * kdim * nj;
-				uint64 *C = fc + (size_t)i * ni * nj;
-				uint32 r, s, t;
+			for (i = 0; i < (int32)(n * ni); i++) {
+				uint32 pt = (uint32)i / ni;
+				uint32 r = (uint32)i % ni;
+				const uint64 *A = fa + (size_t)pt * ni * kdim +
+							(size_t)r * kdim;
+				const uint64 *B = fb + (size_t)pt * kdim * nj;
+				uint64 *C = fc + (size_t)pt * ni * nj +
+							(size_t)r * nj;
+				uint32 s, t;
 
-				for (r = 0; r < ni; r++) {
-					for (t = 0; t < kdim; t++) {
-						uint64 av = A[(size_t)r *
-								kdim + t];
+				for (t = 0; t < kdim; t++) {
+					uint64 av = A[t];
 
-						if (av == 0)
-							continue;
-						for (s = 0; s < nj; s++) {
-							C[(size_t)r * nj + s]
-								^= gf64_mul(av,
-								B[(size_t)t *
-									nj + s]);
-						}
+					if (av == 0)
+						continue;
+					for (s = 0; s < nj; s++) {
+						C[s] ^= gf64_mul(av,
+							B[(size_t)t *
+								nj + s]);
 					}
 				}
 			}
 
+#ifdef LINGEN_PROFILE
+			{
+				double el = lingen_wtime() - fp0;
+
+				fft_prof_point += el;
+				fft_prof_point_by_k[k] += el;
+				fft_prof_calls_by_k[k]++;
+				fp0 = lingen_wtime();
+			}
+#endif
 			inverse_panel(c, fc, k, n, pi, ni, pj, nj, ncc);
+#ifdef LINGEN_PROFILE
+			fft_prof_inv += lingen_wtime() - fp0;
+#endif
 		}
 	}
 

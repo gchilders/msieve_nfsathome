@@ -222,6 +222,13 @@ enum {
 };
 
 double lingen_wtime(void);
+
+/* where an FFT product's time goes, and how much of the pointwise
+   work lands at an FFT size too small to spread over the threads */
+
+extern double fft_prof_trans, fft_prof_point, fft_prof_inv;
+extern double fft_prof_point_by_k[];
+extern uint64 fft_prof_calls_by_k[];
 void lingen_prof_add(uint32 slot, double secs);
 void lingen_prof_bump(uint32 slot, uint64 amount);
 double lingen_prof_time(uint32 slot);

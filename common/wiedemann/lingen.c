@@ -1206,6 +1206,24 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 		logprintf(obj, "lingen profile: base case %.1f sec (%" PRIu64
 				" calls)\n", lingen_prof_time(LP_BASE),
 				lingen_prof_count(LP_BASE));
+		{
+			uint32 kk;
+
+			logprintf(obj, "lingen profile: fft transforms %.1f, "
+					"pointwise %.1f, inverse %.1f sec\n",
+					fft_prof_trans, fft_prof_point,
+					fft_prof_inv);
+			for (kk = 0; kk <= 32; kk++) {
+				if (fft_prof_calls_by_k[kk] == 0)
+					continue;
+				logprintf(obj, "lingen profile:   n=%-7u "
+						"%8.1f sec over %" PRIu64
+						" products\n",
+						(uint32)1 << kk,
+						fft_prof_point_by_k[kk],
+						fft_prof_calls_by_k[kk]);
+			}
+		}
 		logprintf(obj, "lingen profile: base case symbolic %.1f, masks "
 				"%.1f, tables %.1f, apply %.1f sec\n",
 				lingen_prof_time(LP_QB_SYM),
