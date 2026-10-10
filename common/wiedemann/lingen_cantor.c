@@ -649,10 +649,27 @@ void bmp_mul_fft_set_budget(msieve_obj *obj) {
 
 	ram = get_ram_size();
 	fft_budget_mb = (double)ram / 1048576.0 / LINGEN_FFT_MEM_FRACTION;
+
+	/* Taken from this machine, so on hosts that are not identical
+	   the ranks would disagree -- and the budget decides whether a
+	   product goes to the transform, which exchanges a result, or to
+	   Karatsuba, which does not. A rank that chose differently from
+	   the others waits in bmp_combine for a partner that never
+	   arrives. So the smallest budget wins, agreed here, before any
+	   product is formed. Only the explicit call does this: the lazy
+	   one from fft_budget() is not made by every rank. */
+
 	if (obj != NULL) {
+		double before = fft_budget_mb;
+
+		bmp_combine_min_double(&fft_budget_mb);
 		logprintf(obj, "lingen: %.0f MB RAM, transforms may use "
 				"%.0f MB\n", (double)ram / 1048576.0,
 				fft_budget_mb);
+		if (fft_budget_mb < before) {
+			logprintf(obj, "lingen: capped to the smallest "
+					"budget among the ranks\n");
+		}
 	}
 }
 

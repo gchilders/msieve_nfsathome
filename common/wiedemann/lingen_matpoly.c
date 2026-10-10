@@ -536,13 +536,47 @@ uint64 bmp_words_calls;
 void bmp_combine_words(uint64 *buf, size_t n) {
 
 #ifdef HAVE_MPI
+	size_t done = 0;
+	const size_t chunk = (size_t)1 << 25;
+
+
 	if (bmp_size <= 1)
 		return;
 
 	bmp_words_sent += n;
 	bmp_words_calls++;
-	MPI_TRY(MPI_Allreduce(MPI_IN_PLACE, buf, (int)n,
-			MPI_LONG_LONG, MPI_BXOR, bmp_comm))
+
+	/* chunked for the same reason bmp_combine is: an MPI count
+	   is an int */
+
+	while (done < n) {
+		int this_one = (int)MIN(chunk, n - done);
+
+		MPI_TRY(MPI_Allreduce(MPI_IN_PLACE, buf + done, this_one,
+				MPI_LONG_LONG, MPI_BXOR, bmp_comm))
+		done += this_one;
+	}
+#endif
+}
+
+/* Every rank has to make the same choice between the transform and
+   Karatsuba, because only the transform path exchanges anything: if
+   one rank takes it and another does not, the first waits in
+   bmp_combine for a partner that never arrives. The choice is made
+   against a budget taken from the machine's own RAM, so on hosts
+   that are not identical it can differ. Agree on the smallest, once,
+   before any product is formed. */
+
+void bmp_combine_min_double(double *v) {
+
+#ifdef HAVE_MPI
+	if (bmp_size <= 1)
+		return;
+
+	MPI_TRY(MPI_Allreduce(MPI_IN_PLACE, v, 1, MPI_DOUBLE,
+			MPI_MIN, bmp_comm))
+#else
+	(void)v;
 #endif
 }
 

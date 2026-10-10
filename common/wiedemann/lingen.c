@@ -617,12 +617,24 @@ void quadratic_basis(const bmp_t *G, uint32 T, uint32 *delta,
 		   is the one exchange per step -- everything after it is
 		   local again. */
 
+		/* `master' and not `single': msieve asks MPI for
+		   MPI_THREAD_FUNNELED, which allows MPI calls only from
+		   the thread that initialised it, and `single' may be run
+		   by whichever thread arrives first. The master of a
+		   region entered from serial code is that thread. The
+		   omp for above has already left a barrier here, so only
+		   the one after it is needed, to keep the others out of
+		   dcol_shared until the exchange has landed. */
+
 		if (nrank > 1) {
 #ifdef _OPENMP
-			#pragma omp single
+			#pragma omp master
 #endif
 			bmp_combine_words(dcol_shared,
 					(size_t)b * mwords);
+#ifdef _OPENMP
+			#pragma omp barrier
+#endif
 		}
 
 		/* from here to the end of the step every thread works on
@@ -1045,6 +1057,29 @@ int32 bw_lingen(msieve_obj *obj, bw_params_t *params, uint32 max_ncols) {
 
 	n = params->n_mult * VBITS;
 	b = m + n;
+
+#ifdef _OPENMP
+	/* The base case gives each rank a band of b rows and each
+	   thread a band of that, and a band below QB_MIN_BAND rows is
+	   not worth a thread -- so rank and thread parallelism share
+	   one budget of b / QB_MIN_BAND and adding ranks takes threads
+	   away. Say so rather than leaving cores quietly idle. */
+
+	{
+		uint32 band = b / bmp_mpi_size();
+		uint32 cap = band / QB_MIN_BAND;
+		uint32 have = (uint32)omp_get_max_threads();
+
+		if (cap < 1)
+			cap = 1;
+		if (cap < have) {
+			logprintf(obj, "lingen: base case uses %u of %u "
+					"threads per rank; %u rows a rank "
+					"is %u bands of %u\n", cap, have,
+					band, cap, QB_MIN_BAND);
+		}
+	}
+#endif
 	T = num_terms;
 
 	logprintf(obj, "commencing Wiedemann lingen, %u terms, m = %u, "
