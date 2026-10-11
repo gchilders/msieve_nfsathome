@@ -49,6 +49,63 @@ $Id$
    (i.e. one) is considered implicit, and is *not* reflected
    in the degree */
 
+/* Where the relation product tree spends its time, by level.
+
+   The tree's parallelism runs opposite to the size of its work. The
+   leaves are millions of tiny multiplies that thread perfectly; the root
+   is one huge multiply that mpz_poly_mul can only spread over its d1+1
+   coefficients, with splitting deliberately off. So "slow because of the
+   thread count" and "slow because of the big multiplies" look alike from
+   the outside and have completely different fixes -- more cores, or an
+   FFT on a card -- and this says which.
+
+   It times the multiply at each node and nothing else. Timing whole
+   subtrees does not work here: driver.c raises max_active_levels to
+   log2(threads)+1, so the top levels really do nest, and a subtree timer
+   spends most of its life blocked in taskwait. Summing those across the
+   thousands that are live at once gives numbers larger than the run.
+
+   Each node's multiply is real work, and at most num_threads of them run
+   at a time, so these sums are thread-seconds. */
+
+#define SQRT_PROF_DEPTH 16
+
+static struct {
+	int on;
+	uint32 count[SQRT_PROF_DEPTH];
+	double time[SQRT_PROF_DEPTH];
+	uint64 bits[SQRT_PROF_DEPTH];
+	double wall;
+} sqrt_prof;
+
+/* NOT read_clock(): on gcc x86 that is a raw rdtsc, so the numbers come
+   out in cycles and read like seconds. Wall seconds, from the clock */
+
+#if !defined(WIN32) && !defined(_WIN64)
+#include <sys/time.h>
+#endif
+
+static double prof_now(void) {
+
+#if defined(WIN32) || defined(_WIN64)
+	static double scale = 0;
+	LARGE_INTEGER t;
+
+	if (scale == 0) {
+		LARGE_INTEGER f;
+		QueryPerformanceFrequency(&f);
+		scale = 1.0 / (double)f.QuadPart;
+	}
+	QueryPerformanceCounter(&t);
+	return (double)t.QuadPart * scale;
+#else
+	struct timeval tv;
+
+	gettimeofday(&tv, NULL);
+	return (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
+#endif
+}
+
 /* bag of quantities needed for computing S(x) */
 
 typedef struct {
@@ -453,9 +510,9 @@ static void relation_to_poly(abpair_t *abpair, mpz_t c,
 }
 
 /*-------------------------------------------------------------------*/
-static void multiply_relations(relation_prod_t *prodinfo, 
+static void multiply_relations(relation_prod_t *prodinfo,
 			uint32 index1, uint32 index2,
-			mpz_poly_t *prod) {
+			mpz_poly_t *prod, uint32 depth) {
 
 	/* multiply together the relations from index1 
 	   to index2, inclusive. We proceed recursively to
@@ -496,9 +553,11 @@ static void multiply_relations(relation_prod_t *prodinfo,
 #pragma omp single
 		{
 #pragma omp task
-		multiply_relations(prodinfo, index1, mid, &prod1);
+		multiply_relations(prodinfo, index1, mid, &prod1,
+					depth + 1);
 #pragma omp task
-		multiply_relations(prodinfo, mid + 1, index2, &prod2);
+		multiply_relations(prodinfo, mid + 1, index2, &prod2,
+					depth + 1);
 #pragma omp taskwait
 		}
 	}
@@ -510,7 +569,29 @@ static void multiply_relations(relation_prod_t *prodinfo,
 	   memory peak of the whole square root. One multiply out of a
 	   tree of millions is not worth several GB there. */
 
-	mpz_poly_mul(&prod1, &prod2, prodinfo->monic_poly, 1, 0);
+	if (!sqrt_prof.on) {
+		mpz_poly_mul(&prod1, &prod2, prodinfo->monic_poly, 1, 0);
+	}
+	else {
+		uint32 L = (depth < SQRT_PROF_DEPTH) ?
+				depth : SQRT_PROF_DEPTH - 1;
+		double el = prof_now();
+		uint64 b;
+
+		mpz_poly_mul(&prod1, &prod2, prodinfo->monic_poly, 1, 0);
+		el = prof_now() - el;
+		b = (uint64)mpz_sizeinbase(prod1.coeff[0], 2);
+
+#pragma omp atomic
+		sqrt_prof.time[L] += el;
+#pragma omp atomic
+		sqrt_prof.count[L]++;
+		if (b > sqrt_prof.bits[L]) {
+#pragma omp critical(sqrtprof)
+			if (b > sqrt_prof.bits[L])
+				sqrt_prof.bits[L] = b;
+		}
+	}
 
 	for (i = 0; i <= prod1.degree; i++)
 		mpz_swap(prod->coeff[i], prod1.coeff[i]);
@@ -841,8 +922,34 @@ void alg_square_root(msieve_obj *obj, mpz_poly_t *alg_poly,
 	prodinfo.rlist = rlist;
 	mpz_init_set(prodinfo.c, c);
 
+	memset(&sqrt_prof, 0, sizeof(sqrt_prof));
+	sqrt_prof.on = (obj->nfs_args != NULL &&
+			strstr(obj->nfs_args, "sqrt_profile") != NULL);
+	sqrt_prof.wall = prof_now();
+
 	logprintf(obj, "multiplying %u relations\n", num_relations);
-	multiply_relations(&prodinfo, 0, num_relations - 1, &prod);
+	multiply_relations(&prodinfo, 0, num_relations - 1, &prod, 0);
+	sqrt_prof.wall = prof_now() - sqrt_prof.wall;
+
+	if (sqrt_prof.on) {
+		uint32 L;
+		double tot = 0;
+
+		for (L = 0; L < SQRT_PROF_DEPTH; L++)
+			tot += sqrt_prof.time[L];
+		logprintf(obj, "relation product tree: %.1lf s wall, %.1lf s in multiplies\n",
+				sqrt_prof.wall, tot);
+		for (L = 0; L < SQRT_PROF_DEPTH; L++) {
+			if (sqrt_prof.count[L] == 0)
+				continue;
+			logprintf(obj, "  level %2u: %8u nodes, %8.2lf s (%5.1lf%%), top coefficient %8.4lf Mbit%s\n",
+					L, sqrt_prof.count[L], sqrt_prof.time[L],
+					100.0 * sqrt_prof.time[L] / (tot + 1e-9),
+					(double)sqrt_prof.bits[L] / 1e6,
+					(L + 1 == SQRT_PROF_DEPTH) ?
+						" (and everything below)" : "");
+		}
+	}
 	logprintf(obj, "multiply complete, coefficients have about "
 			"%3.2lf million bits\n",
 			(double)mpz_sizeinbase(prod.coeff[0], 2) / 1e6);
