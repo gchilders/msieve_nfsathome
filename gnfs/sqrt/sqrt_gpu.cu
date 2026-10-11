@@ -57,6 +57,44 @@ returns nonzero and the caller runs the code that was already there.
 #define CUDA_OKN(f) do { cudaError_t _e = (f); if (_e != cudaSuccess) \
 	return NULL; } while (0)
 
+/* Where a product's time goes, split the only ways that can be acted
+   on: bytes over the bus, the transforms themselves, the carry passes,
+   and the small synchronous round trips that measure a length or
+   compare two. Kernels are asynchronous, so attributing anything means
+   synchronising first, which changes what is being measured -- hence
+   the flag, and hence sqrt_profile rather than always. */
+
+#if defined(WIN32) || defined(_WIN64)
+#include <windows.h>
+#else
+#include <sys/time.h>
+#endif
+
+static double gprof_now(void)
+{
+#if defined(WIN32) || defined(_WIN64)
+	static double scale = 0;
+	LARGE_INTEGER t;
+
+	if (scale == 0) {
+		LARGE_INTEGER f;
+		QueryPerformanceFrequency(&f);
+		scale = 1.0 / (double)f.QuadPart;
+	}
+	QueryPerformanceCounter(&t);
+	return (double)t.QuadPart * scale;
+#else
+	struct timeval tv;
+
+	gettimeofday(&tv, NULL);
+	return (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
+#endif
+}
+
+#define PTIC(c) ((c)->prof ? (cudaDeviceSynchronize(), gprof_now()) : 0.0)
+#define PTOC(c, f, t) do { if ((c)->prof) { cudaDeviceSynchronize(); \
+	(c)->f += gprof_now() - (t); } } while (0)
+
 #define PRIME      0xFFFFFFFF00000001ULL
 #define EPS        0xFFFFFFFFULL
 #define GENERATOR  7ULL
@@ -488,6 +526,9 @@ typedef struct {
 	int trace;			/* column by column, for a disagreement */
 	uint64 fa, fb;		/* and the two numbers behind it */
 	int checked;			/* steps verified against the CPU */
+	int prof;
+	double t_put, t_get, t_xform, t_carry, t_len, t_add;
+	uint64 n_prod;
 } gctx;
 
 #endif /* HAVE_CUDA */
@@ -525,8 +566,14 @@ static int gnum_put(gctx *c, gnum *x, const mpz_t v)
 	}
 	if (nd > c->nc)
 		return -1;
-	CUDA_OK(cudaMemcpy(x->d, (const void *)mpz_limbs_read(v),
-			nd * sizeof(uint16), cudaMemcpyHostToDevice));
+	{
+		double t = PTIC(c);
+
+		CUDA_OK(cudaMemcpy(x->d, (const void *)mpz_limbs_read(v),
+				nd * sizeof(uint16),
+				cudaMemcpyHostToDevice));
+		PTOC(c, t_put, t);
+	}
 	CUDA_OK(cudaMemset(x->d + nd, 0, 8 * sizeof(uint16)));
 	x->ndig = nd;
 	x->neg = (mpz_sgn(v) < 0);
@@ -540,8 +587,14 @@ static int gnum_get(gctx *c, mpz_t v, gnum *x)
 
 	CUDA_OK(cudaMemset((char *)x->d + nd * 2, 0,
 			nolimb * sizeof(mp_limb_t) - nd * 2));
-	CUDA_OK(cudaMemcpy(c->hstage, x->d, nolimb * sizeof(mp_limb_t),
-			cudaMemcpyDeviceToHost));
+	{
+		double t = PTIC(c);
+
+		CUDA_OK(cudaMemcpy(c->hstage, x->d,
+				nolimb * sizeof(mp_limb_t),
+				cudaMemcpyDeviceToHost));
+		PTOC(c, t_get, t);
+	}
 	memcpy((void *)mpz_limbs_write(v, nolimb), c->hstage,
 			nolimb * sizeof(mp_limb_t));
 	mpz_limbs_finish(v, nolimb);
@@ -558,16 +611,19 @@ static int gnum_len(gctx *c, gnum *x, uint64 width, uint64 *out)
 {
 	uint64 blocks = (width + THREADS - 1) / THREADS;
 	unsigned long long hidx = 0;
+	double t;
 
 	*out = 0;
 	if (width == 0)
 		return 0;
+	t = PTIC(c);
 	CUDA_OK(cudaMemcpy(c->dword, &hidx, sizeof(hidx),
 			cudaMemcpyHostToDevice));
 	k_top<<<(unsigned)blocks, THREADS>>>(x->d, width, c->dword);
 	CUDA_OK(cudaMemcpy(&hidx, c->dword, sizeof(hidx),
 			cudaMemcpyDeviceToHost));
 	*out = (uint64)hidx;
+	PTOC(c, t_len, t);
 	return 0;
 }
 
@@ -578,18 +634,22 @@ static int gnum_cmp_mag(gctx *c, gnum *a, gnum *b, uint64 width, int *out)
 	uint64 blocks = (width + THREADS - 1) / THREADS;
 	unsigned long long hidx = 0;
 	uint16 av = 0, bv = 0;
+	double t;
 
 	*out = 0;
 	if (width == 0)
 		return 0;
+	t = PTIC(c);
 	CUDA_OK(cudaMemcpy(c->dword, &hidx, sizeof(hidx),
 			cudaMemcpyHostToDevice));
 	k_diff<<<(unsigned)blocks, THREADS>>>(a->d, b->d, width, c->dword,
 					a->ndig, b->ndig);
 	CUDA_OK(cudaMemcpy(&hidx, c->dword, sizeof(hidx),
 			cudaMemcpyDeviceToHost));
-	if (hidx == 0)
+	if (hidx == 0) {
+		PTOC(c, t_len, t);
 		return 0;
+	}
 	if (hidx - 1 < a->ndig)
 		CUDA_OK(cudaMemcpy(&av, a->d + (hidx - 1), sizeof(uint16),
 				cudaMemcpyDeviceToHost));
@@ -597,6 +657,7 @@ static int gnum_cmp_mag(gctx *c, gnum *a, gnum *b, uint64 width, int *out)
 		CUDA_OK(cudaMemcpy(&bv, b->d + (hidx - 1), sizeof(uint16),
 				cudaMemcpyDeviceToHost));
 	*out = av > bv ? 1 : -1;
+	PTOC(c, t_len, t);
 	return 0;
 }
 
@@ -605,6 +666,7 @@ static int gnum_add_mag(gctx *c, gnum *r, gnum *a, gnum *b, uint64 width)
 	uint64 nchunk = (width + CARRY_CHUNK - 1) / CARRY_CHUNK;
 	uint64 bc = (nchunk + THREADS - 1) / THREADS;
 	int passes = 0, ovf = 0;
+	double t = PTIC(c);
 
 	CUDA_OK(cudaMemcpy(c->dovf, &ovf, sizeof(int),
 			cudaMemcpyHostToDevice));
@@ -634,6 +696,7 @@ static int gnum_add_mag(gctx *c, gnum *r, gnum *a, gnum *b, uint64 width)
 	if (ovf)
 		return -1;
 	r->ndig = width;
+	PTOC(c, t_add, t);
 	return 0;
 }
 
@@ -642,6 +705,7 @@ static int gnum_sub_mag(gctx *c, gnum *r, gnum *a, gnum *b, uint64 width)
 	uint64 nchunk = (width + CARRY_CHUNK - 1) / CARRY_CHUNK;
 	uint64 bc = (nchunk + THREADS - 1) / THREADS;
 	int passes = 0;
+	double t = PTIC(c);
 
 	k_sub<<<(unsigned)bc, THREADS>>>(a->d, b->d, r->d, c->dc0, width,
 					nchunk, a->ndig, b->ndig);
@@ -660,6 +724,7 @@ static int gnum_sub_mag(gctx *c, gnum *r, gnum *a, gnum *b, uint64 width)
 		if (++passes > 16) return -1;
 	}
 	r->ndig = width;
+	PTOC(c, t_add, t);
 	return 0;
 }
 
@@ -768,6 +833,7 @@ static int gmul_raw(gctx *c, gnum *r, const uint16 *ad, uint64 an,
 	uint64 bn_blk = (c->n + THREADS - 1) / THREADS;
 	uint64 nc = an + bn + 1;
 	uint64 width, nch, bc;
+	double tcarry;
 	int passes = 1, ovf = 0;
 
 	if (an == 0 || bn == 0) {
@@ -798,13 +864,23 @@ static int gmul_raw(gctx *c, gnum *r, const uint16 *ad, uint64 an,
 	nch = (width + CARRY_CHUNK - 1) / CARRY_CHUNK;
 	bc = (nch + THREADS - 1) / THREADS;
 
-	k_expand<<<(unsigned)bn_blk, THREADS>>>(ad, an, c->A, c->n);
-	transform(c, c->A, 1);
-	k_expand<<<(unsigned)bn_blk, THREADS>>>(bd, bn, c->B, c->n);
-	transform(c, c->B, 1);
-	k_pointwise<<<(unsigned)bn_blk, THREADS>>>(c->A, c->B, c->n, c->ninv);
-	transform(c, c->A, 0);
+	{
+		double t = PTIC(c);
 
+		k_expand<<<(unsigned)bn_blk, THREADS>>>(ad, an,
+					c->A, c->n);
+		transform(c, c->A, 1);
+		k_expand<<<(unsigned)bn_blk, THREADS>>>(bd, bn,
+					c->B, c->n);
+		transform(c, c->B, 1);
+		k_pointwise<<<(unsigned)bn_blk, THREADS>>>(c->A, c->B,
+					c->n, c->ninv);
+		transform(c, c->A, 0);
+		PTOC(c, t_xform, t);
+		if (c->prof) c->n_prod++;
+	}
+
+	tcarry = PTIC(c);
 	CUDA_OK(cudaMemcpy(c->dovf, &ovf, sizeof(int),
 			cudaMemcpyHostToDevice));
 	k_carry<<<(unsigned)bc, THREADS>>>(c->A, r->d, acc ? r->d : NULL,
@@ -826,6 +902,7 @@ static int gmul_raw(gctx *c, gnum *r, const uint16 *ad, uint64 an,
 	}
 	CUDA_OK(cudaMemcpy(&ovf, c->dovf, sizeof(int),
 			cudaMemcpyDeviceToHost));
+	PTOC(c, t_carry, tcarry);
 	if (ovf)
 		GFAIL(c);
 	r->ndig = width;
@@ -1641,6 +1718,8 @@ void *sqrt_gpu_init(msieve_obj *obj, uint64 max_q_bits, uint32 degree)
 	c->n = 0;
 	c->ok = 1;
 	c->checked = 0;
+	c->prof = (obj->nfs_args != NULL &&
+			strstr(obj->nfs_args, "sqrt_profile") != NULL);
 	c->have_mu = 0;
 	c->have_mod = 0;
 
@@ -1662,6 +1741,20 @@ void sqrt_gpu_free(void *ctx)
 
 	if (c == NULL)
 		return;
+
+	if (c->prof) {
+		double tot = c->t_put + c->t_get + c->t_xform +
+				c->t_carry + c->t_len + c->t_add;
+
+		logprintf(c->obj, (char *)"square root: GPU %" PRIu64 " products, %.1lf s accounted: transforms %.1lf (%.0lf%%), carries %.1lf (%.0lf%%), adds %.1lf (%.0lf%%), lengths %.1lf (%.0lf%%), up %.1lf (%.0lf%%), down %.1lf (%.0lf%%)\n",
+				c->n_prod, tot,
+				c->t_xform, 100.0 * c->t_xform / (tot + 1e-9),
+				c->t_carry, 100.0 * c->t_carry / (tot + 1e-9),
+				c->t_add, 100.0 * c->t_add / (tot + 1e-9),
+				c->t_len, 100.0 * c->t_len / (tot + 1e-9),
+				c->t_put, 100.0 * c->t_put / (tot + 1e-9),
+				c->t_get, 100.0 * c->t_get / (tot + 1e-9));
+	}
 	for (i = 0; i < MAX_POLY_DEGREE + 1; i++) {
 		gnum_free(&c->p1[i]);
 		gnum_free(&c->modc[i]);
@@ -1862,7 +1955,8 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 	gctx *c = (gctx *)ctx;
 	uint32 i;
 	mpz_poly_t ref, save, raw, dbg;
-	int check, bad = 0;
+	int check, deep, bad = 0;
+	double tcheck;
 
 	if (!usable(c, q))
 		return -1;
@@ -1887,18 +1981,34 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 	/* the first couple of times, keep what went in so the answer can
 	   be checked against GMP doing the same loop */
 
-	check = (c->checked < 2 && !half);
+	/* The lift's own check, which is not the product tree's. That one
+	   runs horner with no modulus at all -- no Barrett, no Newton
+	   mu -- so a tree that verifies says nothing about the
+	   reduction machinery, which is where every hard bug in this
+	   file has been. It runs at the first q over the threshold,
+	   which is between one and two megabits whatever the job, so
+	   it costs the same second on a C120 and a C330. no_sqrt_check
+	   turns it off for anyone who would rather not pay it. */
+
+	check = (c->checked < 2 && !half &&
+		(c->obj->nfs_args == NULL ||
+			 strstr(c->obj->nfs_args, "no_sqrt_check") == NULL));
+
 	/* the column by column trace is what found the one bug this
 	   check has caught so far; it stays, behind a flag, because it
 	   costs a readback per accumulator per column when it is on */
 
 	c->trace = (c->checked == 0 && c->obj->nfs_args != NULL &&
 			strstr(c->obj->nfs_args, "gpu_sqrt_trace") != NULL);
+	deep = check && c->trace;
+	tcheck = check ? gprof_now() : 0.0;
 	if (check) {
 		mpz_poly_init(&save);
 		mpz_poly_init(&ref);
-		mpz_poly_init(&raw);
-		mpz_poly_init(&dbg);
+		if (deep) {
+			mpz_poly_init(&raw);
+			mpz_poly_init(&dbg);
+		}
 		for (i = 0; i <= p1->degree; i++)
 			mpz_set(save.coeff[i], p1->coeff[i]);
 		save.degree = p1->degree;
@@ -1912,12 +2022,19 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 				c->failat, c->fa, c->fb);
 		if (check) {
 			mpz_poly_free(&save); mpz_poly_free(&ref);
-			mpz_poly_free(&raw); mpz_poly_free(&dbg);
+			if (deep) {
+				mpz_poly_free(&raw);
+				mpz_poly_free(&dbg);
+			}
 		}
 		return -1;
 	}
 
-	if (check) {
+	if (deep) {
+		/* a readback of every accumulator before it is reduced,
+		   so a wrong answer can be put either side of the
+		   reduction. Two more full width polynomials */
+
 		for (i = 0; i <= p1->degree; i++)
 			gnum_get(c, dbg.coeff[i], &c->tmp[i]);
 		dbg.degree = p1->degree;
@@ -1934,7 +2051,10 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 					"to CPU\n", c->failat, c->fa, c->fb);
 			if (check) {
 				mpz_poly_free(&save); mpz_poly_free(&ref);
-				mpz_poly_free(&raw); mpz_poly_free(&dbg);
+				if (deep) {
+				mpz_poly_free(&raw);
+				mpz_poly_free(&dbg);
+			}
 			}
 			return -1;
 		}
@@ -1945,12 +2065,13 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 	p1->degree = i;
 
 	if (check) {
-		reference_mul_mod(&ref, &save, p2, alg, q, &raw, c);
+		reference_mul_mod(&ref, &save, p2, alg, q,
+					deep ? &raw : NULL, c);
 
 		/* the product and the reduction fail differently, and
 		   the log should not make us guess which one did */
 
-		{
+		if (deep) {
 			uint32 at;
 			int rawbad = (raw.degree != dbg.degree);
 			mpz_t ra, da;
@@ -2028,13 +2149,16 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 			c->checked++;
 			if (c->checked == 2)
 				logprintf(c->obj, (char *)"square root: GPU lift "
-					"verified against CPU, continuing "
-					"on the GPU\n");
+					"verified against CPU in %.2lf s, "
+					"continuing on the GPU\n",
+					gprof_now() - tcheck);
 		}
 		mpz_poly_free(&save);
 		mpz_poly_free(&ref);
-		mpz_poly_free(&raw);
-		mpz_poly_free(&dbg);
+		if (deep) {
+			mpz_poly_free(&raw);
+			mpz_poly_free(&dbg);
+		}
 	}
 	return 0;
 }
