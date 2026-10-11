@@ -1660,12 +1660,14 @@ static uint64 poly_max_digits(mpz_poly_t *p)
 }
 
 int sqrt_gpu_poly_mul(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
-			mpz_poly_t *alg)
+			mpz_poly_t *alg, uint64 *need_bits)
 {
 	gctx *c = (gctx *)ctx;
 	uint64 an, bn, w;
 	uint32 i, pd;
 
+	if (need_bits != NULL)
+		*need_bits = 0;
 	if (c == NULL || !c->ok)
 		return -1;
 
@@ -1680,9 +1682,20 @@ int sqrt_gpu_poly_mul(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 	   a few hundred bits each, so leave a little above the product */
 
 	w = an + bn + 1 + (uint64)(alg->degree + 2) * SMALL_MAX + 16;
-	if (w > c->nc)
-		return -1;	/* sized for a different level; the caller
-				   has a perfectly good multiply of its own */
+	if (w > c->nc) {
+
+		/* say what a context that could do this would have been
+		   told, so the caller can build one rather than give up:
+		   nc is twice max_digits, and max_digits is the bits it
+		   was given over DIGIT_BITS. Extrapolating the root's size
+		   from one node partway up the tree got this wrong by a
+		   third on a C209, and the lift then lost its last and
+		   largest steps to the CPU */
+
+		if (need_bits != NULL)
+			*need_bits = (w + 8) * (DIGIT_BITS / 2);
+		return -1;
+	}
 
 	c->failat = 0;
 	c->fa = c->fb = 0;
@@ -1780,7 +1793,7 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 			mpz_poly_t *alg, mpz_t q)
 {
 	gctx *c = (gctx *)ctx;
-	uint32 i, d = alg->degree;
+	uint32 i;
 	mpz_poly_t ref, save, raw, dbg;
 	int check, bad = 0;
 
@@ -1888,6 +1901,7 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 			}
 			mpz_clear(ra);
 			mpz_clear(da);
+			if (c->trace)
 			logprintf(c->obj, (char *)"square root: before reducing, mod q "
 					"GPU and CPU %s (gpu degree %u, cpu %u)\n",
 					rawbad ? (char *)"differ" : (char *)"agree",

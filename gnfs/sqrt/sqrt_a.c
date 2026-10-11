@@ -75,6 +75,13 @@ $Id$
 
 #define SQRT_GPU_TREE_BITS 2000000
 
+/* one timing of one node read 10.6x and 23.1x on two dependencies of
+   the same run, and at a high thread count those admit different
+   numbers of levels. Take the smallest of a few samples: they cost a
+   CPU multiply each, at the smallest size that qualifies */
+
+#define SQRT_GPU_CALIB 3
+
 static struct {
 	int on;
 	uint32 count[SQRT_PROF_DEPTH];
@@ -137,7 +144,8 @@ typedef struct {
 	msieve_obj *obj;
 	void *gpu;
 	int gpu_tried;
-	int gpu_checked;
+	int gpu_calib;		/* samples taken so far */
+	double gpu_speedup;	/* measured, not guessed */
 } relation_prod_t;
 
 /*-------------------------------------------------------------------*/
@@ -536,6 +544,39 @@ static void relation_to_poly(abpair_t *abpair, mpz_t c,
 }
 
 /*-------------------------------------------------------------------*/
+/* One multiply, growing the context if this node has outrun it. The
+   only size a node can infer is the root's product from its own depth,
+   and on a C209 that extrapolation came out a third short -- the lift
+   then found its final modulus too large for the buffers and dropped
+   its biggest steps back onto the CPU. Rather than guess better, let
+   the context be rebuilt at whatever a node actually asks for, with
+   room for a couple more levels so this happens a few times and not at
+   every one. The caller holds the lock. */
+
+static int gpu_mul_grow(relation_prod_t *prodinfo, mpz_poly_t *prod1,
+			mpz_poly_t *prod2, uint32 depth) {
+
+	uint64 need = 0;
+	int status;
+
+	status = sqrt_gpu_poly_mul(prodinfo->gpu, prod1, prod2,
+					prodinfo->monic_poly, &need);
+	if (status == 0 || need == 0)
+		return status;
+
+	need *= (depth < 2) ? 2 : 4;
+	logprintf(prodinfo->obj, "product tree: growing the GPU context "
+			"to %.2lf Gbit\n", (double)need / 1e9);
+	sqrt_gpu_free(prodinfo->gpu);
+	prodinfo->gpu = sqrt_gpu_init(prodinfo->obj, need,
+				(uint32)prodinfo->monic_poly->degree);
+	if (prodinfo->gpu == NULL)
+		return -1;
+
+	return sqrt_gpu_poly_mul(prodinfo->gpu, prod1, prod2,
+					prodinfo->monic_poly, &need);
+}
+
 /* Hand one node to the card, or say why not. Returns 0 if the card did
    it and prod1 holds the answer.
 
@@ -555,8 +596,11 @@ static void relation_to_poly(abpair_t *abpair, mpz_t c,
 static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 			mpz_poly_t *prod2, uint32 depth) {
 
-	int status = -1;
-	uint64 bits;
+	int status = -1, checking = 0;
+	uint64 bits, nodes;
+	uint32 i;
+	double tg = 0, tc = 0;
+	mpz_poly_t a, b;
 
 	if (prodinfo->obj == NULL)
 		return -1;
@@ -568,97 +612,144 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 	if (bits < SQRT_GPU_TREE_BITS)
 		return -1;
 
+	/* One context means one lock, so a level's nodes cross the card
+	   one after another while the cores wait on it. That is a win
+	   only where there are few enough of them: N nodes cost N GPU
+	   multiplies against ceil(N/threads) rounds of CPU ones, so the
+	   card must be more than min(N, threads) times faster than one
+	   multiply to come out ahead.
+
+	   That ratio is measured, on the node the check below already
+	   runs both ways, rather than guessed. Guessing it from a four
+	   thread run sent every node of a 2048 node level over one card
+	   while forty-six cores idled, and cost a C209 four minutes
+	   against not using the card at all. */
+
+	nodes = (depth < 40) ? ((uint64)1 << depth) : ((uint64)1 << 40);
+	if (prodinfo->obj->num_threads > 1 &&
+			nodes > prodinfo->obj->num_threads)
+		nodes = prodinfo->obj->num_threads;
+	if (prodinfo->gpu_calib >= SQRT_GPU_CALIB &&
+			prodinfo->gpu_speedup > 0 &&
+			(double)nodes >= prodinfo->gpu_speedup)
+		return -1;
+
 #pragma omp critical(sqrt_gpu)
 	{
 		if (!prodinfo->gpu_tried) {
 			uint64 root = bits << depth;
-			void *g;
 
-			/* the flag goes up only once the context exists. Setting
-			   it first leaves a window as long as a cudaMalloc of
-			   several hundred megabytes, and every node that looks
-			   during it reads "tried, and there is none" and goes to
-			   the CPU. That cost nine of sixteen nodes at the first
-			   level that qualified. Threads that arrive meanwhile
-			   simply wait on this lock and then use the context. */
+			/* the flag goes up only once the context exists.
+			   Setting it first leaves a window as long as a
+			   cudaMalloc of several hundred megabytes, and every
+			   node that looks during it reads "tried, and there
+			   is none" and goes to the CPU. That cost nine of
+			   sixteen nodes at the first level that qualified. */
 
-			g = sqrt_gpu_init(prodinfo->obj,
+			prodinfo->gpu = sqrt_gpu_init(prodinfo->obj,
 					root / 2 + root / 40,
 					(uint32)prodinfo->monic_poly->degree);
-			prodinfo->gpu = g;
 			prodinfo->gpu_tried = 1;
 		}
 
-		if (prodinfo->gpu != NULL) {
+		if (prodinfo->gpu == NULL) {
+			status = -1;
+		}
+		else if (prodinfo->gpu_calib < SQRT_GPU_CALIB) {
 
-			/* check the first one against the multiply that
-			   ships, on the real operands, before trusting the
-			   rest of the tree to it */
+			/* keep the operands, so the multiply that ships can
+			   be run on them afterwards and compared */
 
-			if (!prodinfo->gpu_checked) {
-				mpz_poly_t a, b;
-				uint32 i;
+			mpz_poly_init(&a);
+			mpz_poly_init(&b);
+			for (i = 0; i <= prod1->degree; i++)
+				mpz_set(a.coeff[i], prod1->coeff[i]);
+			a.degree = prod1->degree;
+			for (i = 0; i <= prod2->degree; i++)
+				mpz_set(b.coeff[i], prod2->coeff[i]);
+			b.degree = prod2->degree;
 
-				mpz_poly_init(&a);
-				mpz_poly_init(&b);
-				for (i = 0; i <= prod1->degree; i++)
-					mpz_set(a.coeff[i], prod1->coeff[i]);
-				a.degree = prod1->degree;
-				for (i = 0; i <= prod2->degree; i++)
-					mpz_set(b.coeff[i], prod2->coeff[i]);
-				b.degree = prod2->degree;
-
-				status = sqrt_gpu_poly_mul(prodinfo->gpu,
-						prod1, prod2,
-						prodinfo->monic_poly);
-				if (status == 0) {
-					int bad;
-
-					mpz_poly_mul(&a, &b,
-						prodinfo->monic_poly, 1, 0);
-					bad = (a.degree != prod1->degree);
-					for (i = 0; !bad && i <= a.degree; i++)
-						if (mpz_cmp(a.coeff[i],
-							prod1->coeff[i]) != 0)
-							bad = 1;
-					if (bad) {
-						logprintf(prodinfo->obj,
-							"product tree: GPU and "
-							"CPU disagree, using "
-							"CPU for the tree\n");
-						for (i = 0; i <= a.degree; i++)
-							mpz_set(prod1->coeff[i],
-								a.coeff[i]);
-						prod1->degree = a.degree;
-						sqrt_gpu_free(prodinfo->gpu);
-						prodinfo->gpu = NULL;
-					}
-					else {
-						logprintf(prodinfo->obj,
-							"product tree: GPU "
-							"verified against CPU "
-							"at %.2lf Mbit\n",
-							(double)bits / 1e6);
-					}
-				}
-				prodinfo->gpu_checked = 1;
+			prodinfo->gpu_calib++;
+			checking = 1;
+			tg = prof_now();
+			status = gpu_mul_grow(prodinfo, prod1, prod2, depth);
+			tg = prof_now() - tg;
+			if (status != 0) {
 				mpz_poly_free(&a);
 				mpz_poly_free(&b);
-			}
-			else {
-				status = sqrt_gpu_poly_mul(prodinfo->gpu,
-						prod1, prod2,
-						prodinfo->monic_poly);
+				checking = 0;
 			}
 		}
+		else if (prodinfo->gpu_speedup > 0 &&
+				(double)nodes >= prodinfo->gpu_speedup) {
+
+			/* the gate outside the lock was read before the ratio
+			   existed; now it does, so honour it rather than push
+			   a level's worth through for having arrived early */
+
+			status = -1;
+		}
+		else {
+			status = gpu_mul_grow(prodinfo, prod1, prod2, depth);
+		}
+	}
+
+	/* The check, and the other half of the ratio, deliberately outside
+	   the lock. Timed inside it every other thread is parked on that
+	   lock, so the CPU multiply gets a machine it would never have in
+	   the tree proper: on rsa120 that read 3.5x at four threads and
+	   6.9x at one, for the same card, node and operands. The gate was
+	   then twice as cautious as it needed to be at four threads. */
+
+	if (checking) {
+		int bad;
+
+		tc = prof_now();
+		mpz_poly_mul(&a, &b, prodinfo->monic_poly, 1, 0);
+		tc = prof_now() - tc;
+
+		bad = (a.degree != prod1->degree);
+		for (i = 0; !bad && i <= a.degree; i++)
+			if (mpz_cmp(a.coeff[i], prod1->coeff[i]) != 0)
+				bad = 1;
+
+#pragma omp critical(sqrt_gpu)
+		{
+			if (bad) {
+				logprintf(prodinfo->obj, "product tree: GPU "
+					"and CPU disagree, using CPU for the "
+					"tree\n");
+				sqrt_gpu_free(prodinfo->gpu);
+				prodinfo->gpu = NULL;
+			}
+			else {
+				double r = (tg > 1e-9) ? tc / tg : 1.0;
+
+				if (prodinfo->gpu_speedup <= 0 ||
+					r < prodinfo->gpu_speedup)
+					prodinfo->gpu_speedup = r;
+				logprintf(prodinfo->obj, "product tree: GPU "
+					"verified against CPU at %.2lf Mbit, "
+					"%.1lfx one CPU multiply, so levels "
+					"up to %u nodes\n",
+					(double)bits / 1e6,
+					prodinfo->gpu_speedup,
+					(uint32)prodinfo->gpu_speedup);
+			}
+		}
+		if (bad) {
+			for (i = 0; i <= a.degree; i++)
+				mpz_set(prod1->coeff[i], a.coeff[i]);
+			prod1->degree = a.degree;
+		}
+		mpz_poly_free(&a);
+		mpz_poly_free(&b);
 	}
 
 	/* the CPU version consumes prod2; so does the card's, in the sense
 	   that nothing reads it afterwards, but it does not free it */
 
 	if (status == 0) {
-		uint32 i;
-
 		for (i = 0; i <= prod2->degree; i++)
 			mpz_realloc2(prod2->coeff[i], 1);
 	}
@@ -1123,7 +1214,8 @@ void alg_square_root(msieve_obj *obj, mpz_poly_t *alg_poly,
 	prodinfo.obj = obj;
 	prodinfo.gpu = NULL;
 	prodinfo.gpu_tried = 0;
-	prodinfo.gpu_checked = 0;
+	prodinfo.gpu_calib = 0;
+	prodinfo.gpu_speedup = 0;
 
 	memset(&sqrt_prof, 0, sizeof(sqrt_prof));
 	sqrt_prof.on = (obj->nfs_args != NULL &&

@@ -47,8 +47,10 @@ static INLINE int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1,
 	return -1;
 }
 static INLINE int sqrt_gpu_poly_mul(void *ctx, mpz_poly_t *p1,
-			mpz_poly_t *p2, mpz_poly_t *alg) {
+			mpz_poly_t *p2, mpz_poly_t *alg,
+			uint64 *need_bits) {
 	(void)ctx; (void)p1; (void)p2; (void)alg;
+	if (need_bits != NULL) *need_bits = 0;
 	return -1;
 }
 
@@ -97,7 +99,7 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
    caller then runs mpz_poly_mul as before. NOT thread safe */
 
 int sqrt_gpu_poly_mul(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
-			mpz_poly_t *alg);
+			mpz_poly_t *alg, uint64 *need_bits);
 
 int sqrt_gpu_mod_q(void *ctx, mpz_poly_t *p, mpz_t q, mpz_poly_t *res);
 
