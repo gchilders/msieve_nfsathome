@@ -994,6 +994,49 @@ static void trace_val(gctx *c, const char *who, uint32 col,
 	mpz_clear(t);
 }
 
+/* mod(x)'s coefficients, uploaded once per context. Both the relation
+   product tree and the lift reduce against the same polynomial, so
+   whichever gets there first pays for it */
+
+static int load_mod(gctx *c, mpz_poly_t *alg)
+{
+	uint32 d = alg->degree, i;
+
+	if (c->have_mod)
+		return 0;
+
+	for (i = 0; i <= d; i++) {
+		uint64 nd = (mpz_sizeinbase(alg->coeff[i], 2) +
+				DIGIT_BITS - 1) / DIGIT_BITS;
+
+		if (mpz_sgn(alg->coeff[i]) == 0) {
+			c->modlen[i] = 0;
+			c->modneg[i] = 0;
+			continue;
+		}
+		if (nd > SMALL_MAX) {
+			c->ok = 0;	/* cannot change: the algebraic
+					   polynomial is fixed */
+			logprintf(c->obj, (char *)"square root: mod(x) "
+					"coefficient too large for the GPU, "
+					"using CPU\n");
+			return -1;
+		}
+		if (cudaMemcpy(c->modc[i].d,
+				(const void *)mpz_limbs_read(alg->coeff[i]),
+				nd * sizeof(uint16),
+				cudaMemcpyHostToDevice) != cudaSuccess)
+			return -1;
+		c->modlen[i] = (uint32)nd;
+		c->modneg[i] = (mpz_sgn(alg->coeff[i]) < 0);
+	}
+	c->have_mod = 1;
+	logprintf(c->obj, (char *)"square root: mod(x) has degree %u and "
+			"is %s\n", d, mpz_cmp_ui(alg->coeff[d], 1) == 0 ?
+				(char *)"monic" : (char *)"not monic");
+	return 0;
+}
+
 /*------------------- Horner -------------------*/
 
 /* mpz_poly_mul's loop, kept line for line, because it is the version
@@ -1010,18 +1053,20 @@ static void trace_val(gctx *c, const char *who, uint32 col,
    one accumulator, tmp[d], which the bubble spreads over all of them
    by the next column. */
 
-static int horner(gctx *c, mpz_poly_t *p1, mpz_poly_t *p2, mpz_poly_t *alg)
+/* w is the width every accumulator is carried at, and reduce_pd says
+   whether there is a modulus to reduce the overflow coefficient by.
+   The lift has one and needs it, or the row climbs past the b^(2k)
+   that Barrett takes. The relation product tree has no modulus at
+   all -- nothing there is reduced, the coefficients simply grow --
+   so its w is the whole product rather than twice a modulus. */
+
+static int horner(gctx *c, mpz_poly_t *p1, mpz_poly_t *p2,
+			mpz_poly_t *alg, uint64 w, int reduce_pd)
 {
 	uint32 d = alg->degree, d1 = p1->degree, d2 = p2->degree;
 	uint32 pd, i, j;
-	uint64 w, wch;
+	uint64 wch;
 
-	/* the transform already follows this step's q rather than the
-	   largest the lift reaches; so should everything beside it. Two
-	   operands below q multiply to under b^(2k-1) and the row stays
-	   there, mod(x)'s coefficients being applied to a reduced one */
-
-	w = 2 * c->k + 4;
 	if (w > c->nc)
 		w = c->nc;
 	wch = (w + CARRY_CHUNK - 1) / CARRY_CHUNK;
@@ -1135,11 +1180,13 @@ static int horner(gctx *c, mpz_poly_t *p1, mpz_poly_t *p2, mpz_poly_t *alg)
 			trace_val(c, "gpu", i, "prebar", pd, v, c->qprev);
 			mpz_clear(v);
 		}
-		if (barrett(c, &c->tmp[pd], &c->tmp[pd]))
-			GFAIL(c);
-		if (c->tmp[pd].ndig == 0) {
-			pd--;
-			continue;
+		if (reduce_pd) {
+			if (barrett(c, &c->tmp[pd], &c->tmp[pd]))
+				GFAIL(c);
+			if (c->tmp[pd].ndig == 0) {
+				pd--;
+				continue;
+			}
 		}
 
 		for (j = 0; j <= d; j++) {
@@ -1349,6 +1396,11 @@ static int reference_mul_mod(mpz_poly_t *out, mpz_poly_t *p1,
 /* below this the card loses to the host: the lift's first steps have a
    q of a few hundred bits, where a transform is all launch overhead */
 #define GPU_MIN_Q_BITS 1000000
+
+/* the product tree's operands multiply rather than reduce, so the test
+   is on the two of them together rather than on a modulus */
+
+#define GPU_TREE_MIN_BITS 2000000
 
 static uint64 next_pow2(uint64 x)
 {
@@ -1576,6 +1628,95 @@ int sqrt_gpu_ok(void *ctx)
 	return c != NULL && c->ok;
 }
 
+/*------------------- what the product tree calls -------------------*/
+
+/* p1 *= p2 mod alg(x), with no integer modulus anywhere: the relation
+   product tree reduces nothing, its coefficients simply grow, and the
+   whole product has to fit the transform rather than twice a modulus.
+
+   This is where the tree's time is. Measured on rsa120 at one thread,
+   the six levels whose coefficients clear a megabit are half of all the
+   multiply time in the tree, and they are also the levels that will not
+   thread -- the root is a single multiply spread over d1+1 coefficients
+   with splitting deliberately off.
+
+   Not thread safe, and cannot be: one context, one set of scratch
+   buffers. The caller serialises, which costs nothing at the only
+   levels big enough to come here. */
+
+static uint64 poly_max_digits(mpz_poly_t *p)
+{
+	uint64 m = 0;
+	uint32 i;
+
+	for (i = 0; i <= p->degree; i++) {
+		uint64 nd = (mpz_sizeinbase(p->coeff[i], 2) +
+				DIGIT_BITS - 1) / DIGIT_BITS;
+
+		if (nd > m)
+			m = nd;
+	}
+	return m;
+}
+
+int sqrt_gpu_poly_mul(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
+			mpz_poly_t *alg)
+{
+	gctx *c = (gctx *)ctx;
+	uint64 an, bn, w;
+	uint32 i, pd;
+
+	if (c == NULL || !c->ok)
+		return -1;
+
+	an = poly_max_digits(p1);
+	bn = poly_max_digits(p2);
+	if (an == 0 || bn == 0)
+		return -1;
+	if ((an + bn) * DIGIT_BITS < GPU_TREE_MIN_BITS)
+		return -1;	/* below here it is all launch overhead */
+
+	/* the row gains mod(x)'s coefficients once a column, and they are
+	   a few hundred bits each, so leave a little above the product */
+
+	w = an + bn + 1 + (uint64)(alg->degree + 2) * SMALL_MAX + 16;
+	if (w > c->nc)
+		return -1;	/* sized for a different level; the caller
+				   has a perfectly good multiply of its own */
+
+	c->failat = 0;
+	c->fa = c->fb = 0;
+	if (set_transform(c, w) || load_mod(c, alg))
+		return -1;
+
+	if (horner(c, p1, p2, alg, w, 0)) {
+		logprintf(c->obj, (char *)"square root: GPU tree multiply "
+				"failed at line %u, using CPU from here\n",
+				c->failat);
+		c->ok = 0;
+		return -1;
+	}
+
+	/* horner leaves the answer in tmp[0..p1->degree] and nothing to
+	   reduce it by, so it comes straight back */
+
+	pd = p1->degree;
+	for (i = 0; i <= pd; i++) {
+		if (gnum_get(c, p1->coeff[i], &c->tmp[i])) {
+			logprintf(c->obj, (char *)"square root: GPU tree "
+					"readback failed, using CPU from "
+					"here\n");
+			c->ok = 0;
+			return -1;
+		}
+	}
+	i = pd;
+	while (i && mpz_sgn(p1->coeff[i]) == 0)
+		i--;
+	p1->degree = i;
+	return 0;
+}
+
 /*------------------- what the lift calls -------------------*/
 
 static int usable(gctx *c, mpz_t q)
@@ -1660,38 +1801,8 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 		return -1;
 	}
 
-	if (!c->have_mod) {
-		for (i = 0; i <= d; i++) {
-			uint64 nd = (mpz_sizeinbase(alg->coeff[i], 2) +
-					DIGIT_BITS - 1) / DIGIT_BITS;
-
-			if (mpz_sgn(alg->coeff[i]) == 0) {
-				c->modlen[i] = 0;
-				c->modneg[i] = 0;
-				continue;
-			}
-			if (nd > SMALL_MAX)
-				{
-					c->ok = 0;	/* cannot change: the
-									   algebraic poly is fixed */
-					logprintf(c->obj, (char *)"square root: mod(x) coefficient "
-							"too large for the GPU, using CPU\n");
-					return -1;
-				}
-			if (cudaMemcpy(c->modc[i].d,
-					(const void *)mpz_limbs_read(
-							alg->coeff[i]),
-					nd * sizeof(uint16),
-					cudaMemcpyHostToDevice) != cudaSuccess)
-				return -1;
-			c->modlen[i] = (uint32)nd;
-			c->modneg[i] = (mpz_sgn(alg->coeff[i]) < 0);
-		}
-		c->have_mod = 1;
-		logprintf(c->obj, (char *)"square root: mod(x) has degree %u and is %s\n",
-				d, mpz_cmp_ui(alg->coeff[d], 1) == 0 ?
-					(char *)"monic" : (char *)"not monic");
-	}
+	if (load_mod(c, alg))
+		return -1;
 
 	/* the first couple of times, keep what went in so the answer can
 	   be checked against GMP doing the same loop */
@@ -1713,7 +1824,7 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 		save.degree = p1->degree;
 	}
 
-	if (horner(c, p1, p2, alg)) {
+	if (horner(c, p1, p2, alg, 2 * c->k + 4, 1)) {
 		c->ok = 0;
 		logprintf(c->obj, (char *)"square root: GPU multiply failed "
 				"at line %u (%" PRIu64 ", %" PRIu64 "), "

@@ -46,6 +46,12 @@ static INLINE int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1,
 	(void)ctx; (void)p1; (void)p2; (void)alg; (void)q;
 	return -1;
 }
+static INLINE int sqrt_gpu_poly_mul(void *ctx, mpz_poly_t *p1,
+			mpz_poly_t *p2, mpz_poly_t *alg) {
+	(void)ctx; (void)p1; (void)p2; (void)alg;
+	return -1;
+}
+
 static INLINE int sqrt_gpu_mod_q(void *ctx, mpz_poly_t *p, mpz_t q,
 				mpz_poly_t *res) {
 	(void)ctx; (void)p; (void)q; (void)res;
@@ -84,6 +90,14 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 			mpz_poly_t *alg, mpz_t q);
 
 /* res <- p mod q, coefficient by coefficient. Same contract. */
+
+/* p1 *= p2 mod alg(x), with no integer modulus: what the relation
+   product tree does at every node. Declines when the operands are too
+   small to be worth a transform or too large for the context, and the
+   caller then runs mpz_poly_mul as before. NOT thread safe */
+
+int sqrt_gpu_poly_mul(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
+			mpz_poly_t *alg);
 
 int sqrt_gpu_mod_q(void *ctx, mpz_poly_t *p, mpz_t q, mpz_poly_t *res);
 

@@ -70,6 +70,11 @@ $Id$
 
 #define SQRT_PROF_DEPTH 16
 
+/* below this the transform is all launch overhead; it is the same
+   number sqrt_gpu.cu uses, and the two should move together */
+
+#define SQRT_GPU_TREE_BITS 2000000
+
 static struct {
 	int on;
 	uint32 count[SQRT_PROF_DEPTH];
@@ -112,6 +117,18 @@ typedef struct {
 	mpz_poly_t *monic_poly;
 	abpair_t *rlist;
 	mpz_t c;
+
+	/* the card, if the top of the tree is worth its trouble. It is
+	   made on first use rather than up front, because its size is
+	   the root's product and only a node partway up knows that:
+	   at depth d a node's own product doubles d more times. The
+	   lift inherits the same context -- it wants exactly the same
+	   width, the final modulus being half the root's product */
+
+	msieve_obj *obj;
+	void *gpu;
+	int gpu_tried;
+	int gpu_checked;
 } relation_prod_t;
 
 /*-------------------------------------------------------------------*/
@@ -510,6 +527,135 @@ static void relation_to_poly(abpair_t *abpair, mpz_t c,
 }
 
 /*-------------------------------------------------------------------*/
+/* Hand one node to the card, or say why not. Returns 0 if the card did
+   it and prod1 holds the answer.
+
+   Everything here is under one lock: the context has a single set of
+   scratch buffers and several threads are inside this tree at once. That
+   costs nothing where it matters -- the levels big enough to qualify
+   have one, two, four nodes, and one GPU multiply beats several CPU ones
+   running side by side.
+
+   The size is the one thing a node cannot read off itself. A node at
+   depth d sits d doublings below the root, so the root's product is this
+   node's shifted left by d, and the context wants half of that in bits
+   (its own nc is twice what it is told). Five percent of slack, because
+   the lift afterwards wants the same buffers for a modulus that is half
+   the root product and the two must not be one digit apart. */
+
+static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
+			mpz_poly_t *prod2, uint32 depth) {
+
+	int status = -1;
+	uint64 bits;
+
+	if (prodinfo->obj == NULL)
+		return -1;
+	if (prodinfo->gpu_tried && prodinfo->gpu == NULL)
+		return -1;
+
+	bits = (uint64)mpz_sizeinbase(prod1->coeff[0], 2) +
+	       (uint64)mpz_sizeinbase(prod2->coeff[0], 2);
+	if (bits < SQRT_GPU_TREE_BITS)
+		return -1;
+
+#pragma omp critical(sqrt_gpu)
+	{
+		if (!prodinfo->gpu_tried) {
+			uint64 root = bits << depth;
+			void *g;
+
+			/* the flag goes up only once the context exists. Setting
+			   it first leaves a window as long as a cudaMalloc of
+			   several hundred megabytes, and every node that looks
+			   during it reads "tried, and there is none" and goes to
+			   the CPU. That cost nine of sixteen nodes at the first
+			   level that qualified. Threads that arrive meanwhile
+			   simply wait on this lock and then use the context. */
+
+			g = sqrt_gpu_init(prodinfo->obj,
+					root / 2 + root / 40,
+					(uint32)prodinfo->monic_poly->degree);
+			prodinfo->gpu = g;
+			prodinfo->gpu_tried = 1;
+		}
+
+		if (prodinfo->gpu != NULL) {
+
+			/* check the first one against the multiply that
+			   ships, on the real operands, before trusting the
+			   rest of the tree to it */
+
+			if (!prodinfo->gpu_checked) {
+				mpz_poly_t a, b;
+				uint32 i;
+
+				mpz_poly_init(&a);
+				mpz_poly_init(&b);
+				for (i = 0; i <= prod1->degree; i++)
+					mpz_set(a.coeff[i], prod1->coeff[i]);
+				a.degree = prod1->degree;
+				for (i = 0; i <= prod2->degree; i++)
+					mpz_set(b.coeff[i], prod2->coeff[i]);
+				b.degree = prod2->degree;
+
+				status = sqrt_gpu_poly_mul(prodinfo->gpu,
+						prod1, prod2,
+						prodinfo->monic_poly);
+				if (status == 0) {
+					int bad;
+
+					mpz_poly_mul(&a, &b,
+						prodinfo->monic_poly, 1, 0);
+					bad = (a.degree != prod1->degree);
+					for (i = 0; !bad && i <= a.degree; i++)
+						if (mpz_cmp(a.coeff[i],
+							prod1->coeff[i]) != 0)
+							bad = 1;
+					if (bad) {
+						logprintf(prodinfo->obj,
+							"product tree: GPU and "
+							"CPU disagree, using "
+							"CPU for the tree\n");
+						for (i = 0; i <= a.degree; i++)
+							mpz_set(prod1->coeff[i],
+								a.coeff[i]);
+						prod1->degree = a.degree;
+						sqrt_gpu_free(prodinfo->gpu);
+						prodinfo->gpu = NULL;
+					}
+					else {
+						logprintf(prodinfo->obj,
+							"product tree: GPU "
+							"verified against CPU "
+							"at %.2lf Mbit\n",
+							(double)bits / 1e6);
+					}
+				}
+				prodinfo->gpu_checked = 1;
+				mpz_poly_free(&a);
+				mpz_poly_free(&b);
+			}
+			else {
+				status = sqrt_gpu_poly_mul(prodinfo->gpu,
+						prod1, prod2,
+						prodinfo->monic_poly);
+			}
+		}
+	}
+
+	/* the CPU version consumes prod2; so does the card's, in the sense
+	   that nothing reads it afterwards, but it does not free it */
+
+	if (status == 0) {
+		uint32 i;
+
+		for (i = 0; i <= prod2->degree; i++)
+			mpz_realloc2(prod2->coeff[i], 1);
+	}
+	return status;
+}
+
 static void multiply_relations(relation_prod_t *prodinfo,
 			uint32 index1, uint32 index2,
 			mpz_poly_t *prod, uint32 depth) {
@@ -569,7 +715,10 @@ static void multiply_relations(relation_prod_t *prodinfo,
 	   memory peak of the whole square root. One multiply out of a
 	   tree of millions is not worth several GB there. */
 
-	if (!sqrt_prof.on) {
+	if (!try_gpu_mul(prodinfo, &prod1, &prod2, depth)) {
+		/* done on the card */
+	}
+	else if (!sqrt_prof.on) {
 		mpz_poly_mul(&prod1, &prod2, prodinfo->monic_poly, 1, 0);
 	}
 	else {
@@ -660,7 +809,7 @@ static uint32 get_initial_inv_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 /*-------------------------------------------------------------------*/
 static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 			mpz_poly_t *prod, mpz_poly_t *isqrt_mod_q, 
-			mpz_t q) {
+			mpz_t q, void *gpu_in) {
 
 	/* the main q-adic Newton iteration. On input, isqrt_mod_q
 	   contains the starting value of the reciprocal square
@@ -678,7 +827,8 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	uint32 i, j;
 	uint64 prod_bits, prod_max_bits;
 	uint32 num_iter;
-	void *gpu = NULL;
+	void *gpu = gpu_in;
+	int own_gpu = 0;
 
 	/* initialize */
 
@@ -696,11 +846,17 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 
 	/* q is at its final size here, before being wound back to the
 	   seed, so this is where the GPU can be told how big the lift
-	   will get. A NULL context means every call below declines and
-	   the CPU path runs exactly as it did; it is not an error */
+	   will get -- if the product tree has not already made one the
+	   right size, which it will have whenever it used the card: the
+	   final modulus is half the root product by construction. A NULL
+	   context means every call below declines and the CPU path runs
+	   exactly as it did; it is not an error */
 
-	gpu = sqrt_gpu_init(obj, (uint64)mpz_sizeinbase(q, 2),
-				alg_poly->degree);
+	if (gpu == NULL) {
+		gpu = sqrt_gpu_init(obj, (uint64)mpz_sizeinbase(q, 2),
+					alg_poly->degree);
+		own_gpu = 1;
+	}
 
 	mpz_poly_mod_q(prod, q, prod);
 	mpz_set_ui(q, (unsigned long)i);
@@ -777,7 +933,8 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 		}
 		mpz_poly_free(&tmp_poly);
 	}
-	sqrt_gpu_free(gpu);
+	if (own_gpu)
+		sqrt_gpu_free(gpu);
 
 	/* attempt to compute the square root. 
 	   First multiply R(x) by prod(x), deleting prod(x) 
@@ -921,6 +1078,10 @@ void alg_square_root(msieve_obj *obj, mpz_poly_t *alg_poly,
 	prodinfo.monic_poly = alg_poly;
 	prodinfo.rlist = rlist;
 	mpz_init_set(prodinfo.c, c);
+	prodinfo.obj = obj;
+	prodinfo.gpu = NULL;
+	prodinfo.gpu_tried = 0;
+	prodinfo.gpu_checked = 0;
 
 	memset(&sqrt_prof, 0, sizeof(sqrt_prof));
 	sqrt_prof.on = (obj->nfs_args != NULL &&
@@ -1009,10 +1170,12 @@ void alg_square_root(msieve_obj *obj, mpz_poly_t *alg_poly,
 
 	/* compute the actual square root */
 
-	if (get_final_sqrt(obj, alg_poly, &prod, &alg_sqrt, q))
+	if (get_final_sqrt(obj, alg_poly, &prod, &alg_sqrt, q,
+				prodinfo.gpu))
 		convert_to_integer(&alg_sqrt, n, c, m1, m0, sqrt_a);
 
 finished:
+	sqrt_gpu_free(prodinfo.gpu);
 	mpz_poly_free(&prod);
 	mpz_poly_free(&alg_sqrt);
 	mpz_poly_free(&d_alg_poly);
