@@ -767,10 +767,26 @@ static int gnum_add_signed(gctx *c, gnum *r, gnum *a, gnum *b, uint64 width)
 		return gnum_copy(c, r, b, width);
 	if (b->ndig == 0)
 		return gnum_copy(c, r, a, width);
+	/* A length is eight bytes off the card and the call blocks for
+	   them. Measured, they were 38% of all GPU time here -- nearly
+	   what the transforms themselves cost -- because this runs
+	   twice per signed add and Horner does twenty of those per
+	   multiply. Nothing downstream needs the exact figure: ndig
+	   bounds the reads, a few leading zeros cost a little work and
+	   no correctness, and the transform size comes from gnum_put's
+	   exact lengths rather than from these. So bound it.
+
+	   Barrett is the exception and keeps its measurements: one
+	   decides whether the input is small enough to reduce at all,
+	   and one has to tell zero from merely small. */
+
 	if (a->neg == b->neg) {
+		uint64 bound = (a->ndig > b->ndig ?
+				a->ndig : b->ndig) + 1;
+
 		if (gnum_add_mag(c, r, a, b, width)) return -1;
 		r->neg = a->neg;
-		if (gnum_len(c, r, width, &r->ndig)) return -1;
+		r->ndig = bound < width ? bound : width;
 		return 0;
 	}
 	if (gnum_cmp_mag(c, a, b, width, &cmp)) return -1;
@@ -782,15 +798,22 @@ static int gnum_add_signed(gctx *c, gnum *r, gnum *a, gnum *b, uint64 width)
 		r->neg = 0;
 		return 0;
 	}
-	if (cmp > 0) {
-		if (gnum_sub_mag(c, r, a, b, width)) return -1;
-		r->neg = a->neg;
+	{
+		/* taken before the subtract, which may write through r
+		   into whichever of a and b it aliases */
+
+		uint64 bound = a->ndig > b->ndig ? a->ndig : b->ndig;
+
+		if (cmp > 0) {
+			if (gnum_sub_mag(c, r, a, b, width)) return -1;
+			r->neg = a->neg;
+		}
+		else {
+			if (gnum_sub_mag(c, r, b, a, width)) return -1;
+			r->neg = b->neg;
+		}
+		r->ndig = bound < width ? bound : width;
 	}
-	else {
-		if (gnum_sub_mag(c, r, b, a, width)) return -1;
-		r->neg = b->neg;
-	}
-	if (gnum_len(c, r, width, &r->ndig)) return -1;
 	return 0;
 }
 
@@ -1013,7 +1036,7 @@ static int barrett(gctx *c, gnum *r, gnum *x)
 		}
 		CUDA_OK(cudaMemset(r->d + x->ndig, 0,
 				(w - x->ndig) * sizeof(uint16)));
-		if (gnum_len(c, r, w, &r->ndig)) GFAIL(c);
+		r->ndig = xlen;	/* a copy cannot grow */
 	}
 	else {
 		if (gmul_raw(c, &c->t1, x->d + (k - 1), x->ndig - (k - 1),
@@ -1030,7 +1053,7 @@ static int barrett(gctx *c, gnum *r, gnum *x)
 			c->t2.ndig = 0;
 		}
 		if (gnum_sub_mag(c, r, x, &c->t2, w)) GFAIL(c);
-		if (gnum_len(c, r, w, &r->ndig)) GFAIL(c);
+		r->ndig = w;		/* Barrett leaves r below 3q */
 	}
 
 	for (guard = 0; guard < 4; guard++) {
@@ -1040,7 +1063,7 @@ static int barrett(gctx *c, gnum *r, gnum *x)
 		if (cmp < 0)
 			break;
 		if (gnum_sub_mag(c, r, r, &c->q, w)) GFAIL(c);
-		if (gnum_len(c, r, w, &r->ndig)) GFAIL(c);
+		r->ndig = w;
 	}
 	if (guard >= 4) {
 		c->fa = (uint64)guard;
@@ -1048,11 +1071,16 @@ static int barrett(gctx *c, gnum *r, gnum *x)
 		GFAIL(c);
 	}
 
+	/* the one measurement a bound cannot replace: what follows has
+	   to know whether r is zero, and q - 0 is not 0 */
+
+	if (gnum_len(c, r, w, &r->ndig)) GFAIL(c);
+
 	/* fdiv_r semantics: a negative value lands in [0, q) */
 
 	if (neg && r->ndig != 0) {
 		if (gnum_sub_mag(c, r, &c->q, r, w)) GFAIL(c);
-		if (gnum_len(c, r, w, &r->ndig)) GFAIL(c);
+		r->ndig = w;		/* q - r is below q */
 	}
 	r->neg = 0;
 	return 0;
@@ -1176,8 +1204,8 @@ static int newton_half(gctx *c, gnum *x, int sub3)
 	k_shr1<<<(unsigned)blocks, THREADS>>>(x->d, c->t2.d, x->ndig);
 	CUDA_OK(cudaMemcpy(x->d, c->t2.d, x->ndig * sizeof(uint16),
 				cudaMemcpyDeviceToDevice));
-	if (gnum_len(c, x, x->ndig, &x->ndig))
-		GFAIL(c);
+	/* a shift right cannot make it longer */
+
 	return 0;
 }
 
@@ -1375,8 +1403,12 @@ static int horner(gctx *c, mpz_poly_t *p1, mpz_poly_t *p2,
 					if (!any) break;
 					if (++passes > 16) GFAIL(c);
 				}
-				if (gnum_len(c, &c->hs1, w, &c->hs1.ndig))
-					GFAIL(c);
+				{
+					uint64 b = c->tmp[pd].ndig +
+							c->modlen[j] + 1;
+
+					c->hs1.ndig = b < w ? b : w;
+				}
 			}
 			/* subtract, so the product's sign is flipped */
 			c->hs1.neg = !(c->tmp[pd].neg ^ c->modneg[j]);
