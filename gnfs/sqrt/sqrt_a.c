@@ -81,6 +81,15 @@ static struct {
 	double time[SQRT_PROF_DEPTH];
 	uint64 bits[SQRT_PROF_DEPTH];
 	double wall;
+
+	/* and the lift that follows, split the one way that matters:
+	   the three multiplies run on the card, the reduction of
+	   prod(x) does not and cannot until Barrett learns to chunk */
+
+	double lift_modq;
+	double lift_mul;
+	uint32 lift_steps;
+	uint32 lift_modq_gpu;
 } sqrt_prof;
 
 /* NOT read_clock(): on gcc x86 that is a raw rdtsc, so the numbers come
@@ -827,6 +836,8 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	uint32 i, j;
 	uint64 prod_bits, prod_max_bits;
 	uint32 num_iter;
+	double t0 = 0, t1 = 0, prev_modq = 0, prev_mul = 0;
+	uint32 prev_gpu = 0;
 	void *gpu = gpu_in;
 	int own_gpu = 0;
 
@@ -881,8 +892,16 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 		   itself off for the rest of the lift */
 
 		mpz_poly_init(&tmp_poly);
+		t0 = sqrt_prof.on ? prof_now() : 0;
 		if (sqrt_gpu_mod_q(gpu, prod, q, &tmp_poly))
 			mpz_poly_mod_q(prod, q, &tmp_poly);
+		else if (sqrt_prof.on)
+			sqrt_prof.lift_modq_gpu++;
+		if (sqrt_prof.on) {
+			t1 = prof_now();
+			sqrt_prof.lift_modq += t1 - t0;
+			t0 = t1;
+		}
 
 		if (sqrt_gpu_mul_mod_q(gpu, &tmp_poly, isqrt_mod_q,
 					alg_poly, q)) {
@@ -931,10 +950,33 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 					tmp_poly.coeff[j]);
 			isqrt_mod_q->degree = tmp_poly.degree;
 		}
+		if (sqrt_prof.on) {
+			sqrt_prof.lift_mul += prof_now() - t0;
+			sqrt_prof.lift_steps++;
+			logprintf(obj, "  lift step %2u: q %8.3lf Mbit, prod mod q %7.2lf s%s, multiplies %7.2lf s\n",
+					i, (double)mpz_sizeinbase(q, 2) / 1e6,
+					sqrt_prof.lift_modq - prev_modq,
+					(sqrt_prof.lift_modq_gpu > prev_gpu) ?
+						" (gpu)" : "",
+					sqrt_prof.lift_mul - prev_mul);
+			prev_modq = sqrt_prof.lift_modq;
+			prev_mul = sqrt_prof.lift_mul;
+			prev_gpu = sqrt_prof.lift_modq_gpu;
+		}
 		mpz_poly_free(&tmp_poly);
 	}
 	if (own_gpu)
 		sqrt_gpu_free(gpu);
+
+	if (sqrt_prof.on) {
+		double tot = sqrt_prof.lift_modq + sqrt_prof.lift_mul;
+
+		logprintf(obj, "lift: %u steps, prod mod q %.2lf s (%.1lf%%, %u on the card), multiplies %.2lf s (%.1lf%%)\n",
+				sqrt_prof.lift_steps, sqrt_prof.lift_modq,
+				100.0 * sqrt_prof.lift_modq / (tot + 1e-9),
+				sqrt_prof.lift_modq_gpu, sqrt_prof.lift_mul,
+				100.0 * sqrt_prof.lift_mul / (tot + 1e-9));
+	}
 
 	/* attempt to compute the square root. 
 	   First multiply R(x) by prod(x), deleting prod(x) 
