@@ -395,6 +395,19 @@ __global__ void k_diff(const uint16 *a, const uint16 *b, uint64 n,
 		atomicMax(idx, (unsigned long long)(i + 1));
 }
 
+/* r = d >> 1 over the magnitude, truncating, which is what the sign
+   and magnitude form needs for a divide by two that rounds toward
+   zero. Out of place because thread i reads the digit above it */
+
+__global__ void k_shr1(const uint16 *d, uint16 *r, uint64 n)
+{
+	uint64 i = (uint64)blockIdx.x * blockDim.x + threadIdx.x;
+
+	if (i < n)
+		r[i] = (uint16)((d[i] >> 1) |
+				((i + 1 < n ? d[i + 1] : 0) << 15));
+}
+
 __global__ void k_zero(uint16 *p, uint64 n)
 {
 	uint64 i = (uint64)blockIdx.x * blockDim.x + threadIdx.x;
@@ -1034,6 +1047,60 @@ static int load_mod(gctx *c, mpz_poly_t *alg)
 	logprintf(c->obj, (char *)"square root: mod(x) has degree %u and "
 			"is %s\n", d, mpz_cmp_ui(alg->coeff[d], 1) == 0 ?
 				(char *)"monic" : (char *)"not monic");
+	return 0;
+}
+
+/* (3 - x) / 2 mod q, on a coefficient the reduction has just left
+   resident. The host does this with four passes over the whole
+   polynomial -- negate, test, add q, shift -- spread over however many
+   threads the degree gives it, which is five or six, and it sits
+   between two multiplies that are already on the card. Here it costs
+   nothing extra: the operand has not moved and the answer leaves in the
+   transfer that was going to happen anyway.
+
+   Sign and magnitude makes each piece cheap. The negate is a flag. The
+   parity is the bottom digit, one byte off the card. Adding q when it
+   is odd is the signed add that already exists, and the shift keeps the
+   sign, which is the truncation toward zero that mpz_tdiv_q_2exp does.
+   t2 and t3 are free here -- barrett has finished with them. */
+
+static int newton_half(gctx *c, gnum *x, int sub3)
+{
+	uint64 w = c->k + 1, blocks;
+	uint16 low = 0;
+
+	if (sub3) {
+		uint16 three = 3;
+
+		CUDA_OK(cudaMemcpy(c->t3.d, &three, sizeof(uint16),
+					cudaMemcpyHostToDevice));
+		c->t3.ndig = 1;
+		c->t3.neg = 1;
+		if (gnum_add_signed(c, x, x, &c->t3, w))
+			GFAIL(c);
+	}
+
+	/* the host skips a coefficient that is zero, and so does this */
+
+	if (x->ndig == 0)
+		return 0;
+
+	x->neg = !x->neg;
+	CUDA_OK(cudaMemcpy(&low, x->d, sizeof(uint16),
+				cudaMemcpyDeviceToHost));
+	if (low & 1) {
+		if (gnum_add_signed(c, x, x, &c->q, w))
+			GFAIL(c);
+	}
+	if (x->ndig == 0)
+		return 0;
+
+	blocks = (x->ndig + THREADS - 1) / THREADS;
+	k_shr1<<<(unsigned)blocks, THREADS>>>(x->d, c->t2.d, x->ndig);
+	CUDA_OK(cudaMemcpy(x->d, c->t2.d, x->ndig * sizeof(uint16),
+				cudaMemcpyDeviceToDevice));
+	if (gnum_len(c, x, x->ndig, &x->ndig))
+		GFAIL(c);
 	return 0;
 }
 
@@ -1790,7 +1857,7 @@ int sqrt_gpu_mod_q(void *ctx, mpz_poly_t *p, mpz_t q, mpz_poly_t *res)
 }
 
 int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
-			mpz_poly_t *alg, mpz_t q)
+			mpz_poly_t *alg, mpz_t q, int half)
 {
 	gctx *c = (gctx *)ctx;
 	uint32 i;
@@ -1820,7 +1887,7 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 	/* the first couple of times, keep what went in so the answer can
 	   be checked against GMP doing the same loop */
 
-	check = (c->checked < 2);
+	check = (c->checked < 2 && !half);
 	/* the column by column trace is what found the one bug this
 	   check has caught so far; it stays, behind a flag, because it
 	   costs a readback per accumulator per column when it is on */
@@ -1858,6 +1925,7 @@ int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
 
 	for (i = 0; i <= p1->degree; i++) {
 		if (barrett(c, &c->tmp[i], &c->tmp[i]) ||
+		    (half && newton_half(c, &c->tmp[i], i == 0)) ||
 		    gnum_get(c, p1->coeff[i], &c->tmp[i])) {
 			c->ok = 0;
 			logprintf(c->obj, (char *)"square root: GPU reduction "

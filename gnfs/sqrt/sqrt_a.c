@@ -94,6 +94,7 @@ static struct {
 	   prod(x) does not and cannot until Barrett learns to chunk */
 
 	double lift_modq;
+	double lift_chain;
 	double lift_mul;
 	uint32 lift_steps;
 	uint32 lift_modq_gpu;
@@ -554,7 +555,7 @@ static void relation_to_poly(abpair_t *abpair, mpz_t c,
    every one. The caller holds the lock. */
 
 static int gpu_mul_grow(relation_prod_t *prodinfo, mpz_poly_t *prod1,
-			mpz_poly_t *prod2, uint32 depth) {
+			mpz_poly_t *prod2) {
 
 	uint64 need = 0;
 	int status;
@@ -564,12 +565,23 @@ static int gpu_mul_grow(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 	if (status == 0 || need == 0)
 		return status;
 
-	need *= (depth < 2) ? 2 : 4;
-	logprintf(prodinfo->obj, "product tree: growing the GPU context "
-			"to %.2lf Gbit\n", (double)need / 1e9);
+	/* Room for one more level if the card has it, and exactly what
+	   this node asked for if it does not. Growing by four looks
+	   cheap at rsa120 sizes and asked a 40 GB A100 for 44.9 GB on
+	   a C209, which declined and left the top of the tree on the
+	   CPU -- the levels the card was there for. Regrowing once a
+	   level costs a free and an allocate, seconds against the
+	   minutes those levels take. */
+
 	sqrt_gpu_free(prodinfo->gpu);
-	prodinfo->gpu = sqrt_gpu_init(prodinfo->obj, need,
+	logprintf(prodinfo->obj, "product tree: growing the GPU context to %.2lf Gbit\n", (double)(2 * need) / 1e9);
+	prodinfo->gpu = sqrt_gpu_init(prodinfo->obj, 2 * need,
 				(uint32)prodinfo->monic_poly->degree);
+	if (prodinfo->gpu == NULL) {
+		logprintf(prodinfo->obj, "product tree: retrying at %.2lf Gbit\n", (double)need / 1e9);
+		prodinfo->gpu = sqrt_gpu_init(prodinfo->obj, need,
+					(uint32)prodinfo->monic_poly->degree);
+	}
 	if (prodinfo->gpu == NULL)
 		return -1;
 
@@ -672,7 +684,7 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 			prodinfo->gpu_calib++;
 			checking = 1;
 			tg = prof_now();
-			status = gpu_mul_grow(prodinfo, prod1, prod2, depth);
+			status = gpu_mul_grow(prodinfo, prod1, prod2);
 			tg = prof_now() - tg;
 			if (status != 0) {
 				mpz_poly_free(&a);
@@ -680,17 +692,21 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 				checking = 0;
 			}
 		}
-		else if (prodinfo->gpu_speedup > 0 &&
+		else if (prodinfo->gpu_speedup <= 0 ||
 				(double)nodes >= prodinfo->gpu_speedup) {
 
-			/* the gate outside the lock was read before the ratio
-			   existed; now it does, so honour it rather than push
-			   a level's worth through for having arrived early */
+			/* Either the ratio is not known yet or it is and this
+			   level does not clear it. The first case matters as
+			   much as the second: the calibration multiplies run
+			   outside this lock, and every node arriving in that
+			   window used to find no ratio to fail and went over
+			   the card anyway. On a C209 that put seventy nodes
+			   of a two thousand node level through it. */
 
 			status = -1;
 		}
 		else {
-			status = gpu_mul_grow(prodinfo, prod1, prod2, depth);
+			status = gpu_mul_grow(prodinfo, prod1, prod2);
 		}
 	}
 
@@ -929,7 +945,11 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	uint32 num_iter;
 	double t0 = 0, t1 = 0, prev_modq = 0, prev_mul = 0;
 	uint32 prev_gpu = 0;
+	int halved = 0;
 	mpz_poly_t *chain = NULL;
+	mpz_t *qs = NULL;
+	mpz_poly_t tmp_poly;
+	uint32 qs_alloc = 0;
 	void *gpu = gpu_in;
 	int own_gpu = 0;
 
@@ -941,10 +961,23 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	   cut the memory use in half by changing prod(x) to this.
 	   Remember final_k as well */
 
+	/* Squaring q up to its final size is not cheap at the top --
+	   the last one is a multiply the size of the modulus itself,
+	   single threaded inside GMP, and it is the gap between two
+	   bursts of work on the card. It was being paid three times
+	   over: here to find the count, again to build the chain of
+	   residues, and again in the iteration. Keep the sequence. */
+
 	i = mpz_get_ui(q);
 	for (num_iter = 0; mpz_sizeinbase(q, 2) < 
 				prod_max_bits / 2 + 4000; num_iter++) {
+		if (num_iter == qs_alloc) {
+			qs_alloc = qs_alloc ? 2 * qs_alloc : 16;
+			qs = (mpz_t *)xrealloc(qs, qs_alloc *
+						sizeof(mpz_t));
+		}
 		mpz_mul(q, q, q);
+		mpz_init_set(qs[num_iter], q);
 	}
 
 	/* q is at its final size here, before being wound back to the
@@ -978,53 +1011,55 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	   the peak is here at the bottom rather than at the top where
 	   the square root's own peak is. */
 
+	t0 = prof_now();
 	if (num_iter > 1 && (obj->nfs_args == NULL ||
 			strstr(obj->nfs_args, "no_sqrt_chain") == NULL)) {
-		mpz_t qj;
 		uint32 cj;
 		uint64 kept = 0;
 
 		chain = (mpz_poly_t *)xcalloc((size_t)num_iter - 1,
 					sizeof(mpz_poly_t));
 
-		/* the moduli, forward from the seed, since a modulus
-		   cannot be halved; the residues then run backward */
-
-		mpz_init_set_ui(qj, (unsigned long)i);
-		for (cj = 0; cj < num_iter - 1; cj++) {
-			mpz_mul(qj, qj, qj);
+		for (cj = 0; cj < num_iter - 1; cj++)
 			mpz_poly_init(chain + cj);
-			mpz_set(chain[cj].coeff[0], qj);
-		}
 
 		/* r[n-1] is prod itself, already reduced against the
 		   modulus the lift ends at, so start from it */
 
 		for (cj = num_iter - 1; cj-- > 0; ) {
-			mpz_set(qj, chain[cj].coeff[0]);
 			mpz_poly_mod_q(cj + 1 < num_iter - 1 ?
 					chain + (cj + 1) : prod,
-					qj, chain + cj);
-			kept += (uint64)mpz_sizeinbase(qj, 2) *
+					qs[cj], chain + cj);
+			kept += (uint64)mpz_sizeinbase(qs[cj], 2) *
 					(chain[cj].degree + 1);
 		}
-		mpz_clear(qj);
-		logprintf(obj, "square root: prod mod q chained over %u steps, %.2lf GB\n",
-				num_iter - 1, (double)kept / 8e9);
+		sqrt_prof.lift_chain = prof_now() - t0;
+		logprintf(obj, "square root: prod mod q chained over %u steps, %.2lf GB, %.1lf s\n",
+				num_iter - 1, (double)kept / 8e9,
+				sqrt_prof.lift_chain);
 	}
 
 	mpz_set_ui(q, (unsigned long)i);
 	mpz_realloc2(q, 33);
 
-	/* do the main iteration */
+	/* do the main iteration.
+
+	   tmp_poly lives across it rather than inside. Built and torn
+	   down every step it is several gigabytes of mmap, munmap and
+	   first touch faulting per iteration at the sizes this reaches,
+	   all of it between two bursts of work on the card. Nothing
+	   here reads it before writing it: every path either swaps a
+	   residue in or reduces prod(x) into it, and sets the degree */
+
+	mpz_poly_init(&tmp_poly);
 
 	for (i = 0; i < num_iter; i++) {
 
-		mpz_poly_t tmp_poly;
+		/* the next modulus, computed once when the count was
+		   taken. Swapped rather than copied, and the slot is
+		   not wanted again */
 
-		/* square the previous modulus */
-
-		mpz_mul(q, q, q);
+		mpz_swap(q, qs[i]);
 
 		/* compute prod(x) * (previous R)^2 */
 
@@ -1034,7 +1069,6 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 		   and a context that has failed its own check turns
 		   itself off for the rest of the lift */
 
-		mpz_poly_init(&tmp_poly);
 		t0 = sqrt_prof.on ? prof_now() : 0;
 		if (chain != NULL && i + 1 < num_iter) {
 
@@ -1058,18 +1092,29 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 		}
 
 		if (sqrt_gpu_mul_mod_q(gpu, &tmp_poly, isqrt_mod_q,
-					alg_poly, q)) {
+					alg_poly, q, 0)) {
 			mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 0, 1);
 			mpz_poly_mod_q(&tmp_poly, q, &tmp_poly);
 		}
+
+		/* the second one carries (3 - x) / 2 mod q out with it:
+		   the result is resident when the reduction finishes, and
+		   the host would otherwise take four passes over the whole
+		   polynomial on as many threads as it has coefficients */
+
+		halved = 0;
 		if (sqrt_gpu_mul_mod_q(gpu, &tmp_poly, isqrt_mod_q,
-					alg_poly, q)) {
+					alg_poly, q, 1)) {
 			mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 0, 1);
 			mpz_poly_mod_q(&tmp_poly, q, &tmp_poly);
+		}
+		else {
+			halved = 1;
 		}
 
 		/* compute ( (3 - that) / 2 ) mod q */
 
+		if (!halved) {
 		mpz_sub_ui(tmp_poly.coeff[0], tmp_poly.coeff[0], 
 				(unsigned long)3);
 
@@ -1085,6 +1130,7 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 				mpz_tdiv_q_2exp(*c, *c, (unsigned long)1);
 			}
 		}
+		}
 
 		/* finally, compute the new R(x) by multiplying the
 		   result above by the old R(x) */
@@ -1094,7 +1140,7 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 		   as it consumes it */
 
 		if (sqrt_gpu_mul_mod_q(gpu, &tmp_poly, isqrt_mod_q,
-					alg_poly, q)) {
+					alg_poly, q, 0)) {
 			mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 1, 1);
 			mpz_poly_mod_q(&tmp_poly, q, isqrt_mod_q);
 		}
@@ -1117,8 +1163,8 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 			prev_mul = sqrt_prof.lift_mul;
 			prev_gpu = sqrt_prof.lift_modq_gpu;
 		}
-		mpz_poly_free(&tmp_poly);
 	}
+	mpz_poly_free(&tmp_poly);
 	if (own_gpu)
 		sqrt_gpu_free(gpu);
 
@@ -1127,12 +1173,18 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	   the array itself. free(NULL) if it was never built */
 
 	free(chain);
+	for (j = 0; j < num_iter; j++)
+		mpz_clear(qs[j]);
+	free(qs);
 
 	if (sqrt_prof.on) {
-		double tot = sqrt_prof.lift_modq + sqrt_prof.lift_mul;
+		double tot = sqrt_prof.lift_modq + sqrt_prof.lift_mul +
+				sqrt_prof.lift_chain;
 
-		logprintf(obj, "lift: %u steps, prod mod q %.2lf s (%.1lf%%, %u on the card), multiplies %.2lf s (%.1lf%%)\n",
-				sqrt_prof.lift_steps, sqrt_prof.lift_modq,
+		logprintf(obj, "lift: %u steps, chain %.1lf s (%.1lf%%), prod mod q %.1lf s (%.1lf%%, %u on the card), multiplies %.1lf s (%.1lf%%)\n",
+				sqrt_prof.lift_steps, sqrt_prof.lift_chain,
+				100.0 * sqrt_prof.lift_chain / (tot + 1e-9),
+				sqrt_prof.lift_modq,
 				100.0 * sqrt_prof.lift_modq / (tot + 1e-9),
 				sqrt_prof.lift_modq_gpu, sqrt_prof.lift_mul,
 				100.0 * sqrt_prof.lift_mul / (tot + 1e-9));

@@ -42,8 +42,9 @@ static INLINE void *sqrt_gpu_init(msieve_obj *obj, uint64 max_q_bits,
 static INLINE void sqrt_gpu_free(void *ctx) { (void)ctx; }
 
 static INLINE int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1,
-				mpz_poly_t *p2, mpz_poly_t *alg, mpz_t q) {
-	(void)ctx; (void)p1; (void)p2; (void)alg; (void)q;
+				mpz_poly_t *p2, mpz_poly_t *alg, mpz_t q,
+				int half) {
+	(void)ctx; (void)p1; (void)p2; (void)alg; (void)q; (void)half;
 	return -1;
 }
 static INLINE int sqrt_gpu_poly_mul(void *ctx, mpz_poly_t *p1,
@@ -88,8 +89,15 @@ void sqrt_gpu_free(void *ctx);
    would serve. Passing a q that is not the square of the last one is
    allowed and simply falls back to computing it the slow way. */
 
+/* half also folds (3 - result) / 2 mod q into the readback, which is the
+   step the Newton iteration takes between its second and third multiply.
+   The operand is resident by then and the answer leaves in the transfer
+   that was going to happen anyway, so it costs nothing extra; done as a
+   call of its own it would cost an upload and a download to save a few
+   passes over host memory, which is a loss */
+
 int sqrt_gpu_mul_mod_q(void *ctx, mpz_poly_t *p1, mpz_poly_t *p2,
-			mpz_poly_t *alg, mpz_t q);
+			mpz_poly_t *alg, mpz_t q, int half);
 
 /* res <- p mod q, coefficient by coefficient. Same contract. */
 
