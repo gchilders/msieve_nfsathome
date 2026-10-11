@@ -929,6 +929,7 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	uint32 num_iter;
 	double t0 = 0, t1 = 0, prev_modq = 0, prev_mul = 0;
 	uint32 prev_gpu = 0;
+	mpz_poly_t *chain = NULL;
 	void *gpu = gpu_in;
 	int own_gpu = 0;
 
@@ -961,6 +962,57 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	}
 
 	mpz_poly_mod_q(prod, q, prod);
+
+	/* The loop below wants prod(x) mod q at every step, and q is
+	   squared each time, so every modulus divides the next and
+	   prod mod q[j] is (prod mod q[j+1]) mod q[j]. Reducing the
+	   same fixed prod(x) by each modulus from scratch -- which is
+	   what this did -- is a full width division every step, and on
+	   rsa120 that was 38.8% of the lift. A chain built downward is
+	   balanced divisions of halving size instead: a geometric
+	   series costing about twice the first one.
+
+	   It costs another prod(x) in memory, give or take, which is
+	   why no_sqrt_chain turns it off. The memory comes back as the
+	   loop climbs, since each residue is handed over and freed, so
+	   the peak is here at the bottom rather than at the top where
+	   the square root's own peak is. */
+
+	if (num_iter > 1 && (obj->nfs_args == NULL ||
+			strstr(obj->nfs_args, "no_sqrt_chain") == NULL)) {
+		mpz_t qj;
+		uint32 cj;
+		uint64 kept = 0;
+
+		chain = (mpz_poly_t *)xcalloc((size_t)num_iter - 1,
+					sizeof(mpz_poly_t));
+
+		/* the moduli, forward from the seed, since a modulus
+		   cannot be halved; the residues then run backward */
+
+		mpz_init_set_ui(qj, (unsigned long)i);
+		for (cj = 0; cj < num_iter - 1; cj++) {
+			mpz_mul(qj, qj, qj);
+			mpz_poly_init(chain + cj);
+			mpz_set(chain[cj].coeff[0], qj);
+		}
+
+		/* r[n-1] is prod itself, already reduced against the
+		   modulus the lift ends at, so start from it */
+
+		for (cj = num_iter - 1; cj-- > 0; ) {
+			mpz_set(qj, chain[cj].coeff[0]);
+			mpz_poly_mod_q(cj + 1 < num_iter - 1 ?
+					chain + (cj + 1) : prod,
+					qj, chain + cj);
+			kept += (uint64)mpz_sizeinbase(qj, 2) *
+					(chain[cj].degree + 1);
+		}
+		mpz_clear(qj);
+		logprintf(obj, "square root: prod mod q chained over %u steps, %.2lf GB\n",
+				num_iter - 1, (double)kept / 8e9);
+	}
+
 	mpz_set_ui(q, (unsigned long)i);
 	mpz_realloc2(q, 33);
 
@@ -984,7 +1036,18 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 
 		mpz_poly_init(&tmp_poly);
 		t0 = sqrt_prof.on ? prof_now() : 0;
-		if (sqrt_gpu_mod_q(gpu, prod, q, &tmp_poly))
+		if (chain != NULL && i + 1 < num_iter) {
+
+			/* handed over rather than copied, and freed here:
+			   the chain is read once, bottom to top */
+
+			for (j = 0; j <= chain[i].degree; j++)
+				mpz_swap(tmp_poly.coeff[j],
+						chain[i].coeff[j]);
+			tmp_poly.degree = chain[i].degree;
+			mpz_poly_free(chain + i);
+		}
+		else if (sqrt_gpu_mod_q(gpu, prod, q, &tmp_poly))
 			mpz_poly_mod_q(prod, q, &tmp_poly);
 		else if (sqrt_prof.on)
 			sqrt_prof.lift_modq_gpu++;
@@ -1058,6 +1121,12 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	}
 	if (own_gpu)
 		sqrt_gpu_free(gpu);
+
+	/* the loop hands each residue over and frees it as it climbs,
+	   and has no way out before the top, so what is left here is
+	   the array itself. free(NULL) if it was never built */
+
+	free(chain);
 
 	if (sqrt_prof.on) {
 		double tot = sqrt_prof.lift_modq + sqrt_prof.lift_mul;
