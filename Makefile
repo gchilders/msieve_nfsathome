@@ -293,7 +293,8 @@ CUB_DEPS := $(call rwildcard,cub/cub/,*.cuh)
 # by an earlier CUDA build even when CUDA is not specified on the clean command.
 CUDA_ENGINE_OBJS = \
 	cub/sort_engine.o \
-	cub/spmv_engine.o
+	cub/spmv_engine.o \
+	gnfs/sqrt/sqrt_gpu.o
 
 CUDA_EMBED_OBJS = \
 	stage1_core_fatbin_embed.o \
@@ -509,6 +510,18 @@ cub/spmv_engine.o: cub/spmv_engine.cu cub/spmv_engine.h $(CUB_DEPS) \
 		cub/.build_config
 	$(NVCC) $(CUDA_FATBIN_GENCODE) $(CUDA_HOST_FLAGS) -O3 -DVBITS=$(VBITS) \
 		-I. -Icub -I"$(CUDA_ROOT)/include" -c -o $@ $<
+
+# The square root's lift. HAVE_CUDA is what the header keys off: without
+# it every entry point is an inline that declines, and the caller runs
+# the code it always did, so this object exists only in a CUDA build.
+
+gnfs/sqrt/sqrt_gpu.o: gnfs/sqrt/sqrt_gpu.cu gnfs/sqrt/sqrt_gpu.h \
+		gnfs/sqrt/sqrt.h gnfs/gnfs.h include/msieve.h
+	$(NVCC) $(CUDA_FATBIN_GENCODE) $(CUDA_HOST_FLAGS) -O3 \
+		-D_FILE_OFFSET_BITS=64 -DNDEBUG -D_LARGEFILE64_SOURCE \
+		-DVBITS=$(VBITS) -DHAVE_CUDA \
+		-I. -Iinclude -Icommon -Ignfs -Ignfs/sqrt \
+		-I"$(CUDA_ROOT)/include" -c -o $@ $<
 
 $(BIN2C): tools/bin2c.c
 	$(HOSTCC) -O2 -o $@ $<

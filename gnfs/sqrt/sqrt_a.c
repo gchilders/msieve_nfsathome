@@ -13,6 +13,7 @@ $Id$
 --------------------------------------------------------------------*/
 
 #include "sqrt.h"
+#include "sqrt_gpu.h"
 
 	/* This code computes the algebraic square root by
 	   brute force. Given a collection of relations, each
@@ -596,6 +597,7 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	uint32 i, j;
 	uint64 prod_bits, prod_max_bits;
 	uint32 num_iter;
+	void *gpu = NULL;
 
 	/* initialize */
 
@@ -610,6 +612,14 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 				prod_max_bits / 2 + 4000; num_iter++) {
 		mpz_mul(q, q, q);
 	}
+
+	/* q is at its final size here, before being wound back to the
+	   seed, so this is where the GPU can be told how big the lift
+	   will get. A NULL context means every call below declines and
+	   the CPU path runs exactly as it did; it is not an error */
+
+	gpu = sqrt_gpu_init(obj, (uint64)mpz_sizeinbase(q, 2),
+				alg_poly->degree);
 
 	mpz_poly_mod_q(prod, q, prod);
 	mpz_set_ui(q, (unsigned long)i);
@@ -627,12 +637,26 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 
 		/* compute prod(x) * (previous R)^2 */
 
+		/* each of these runs on the card when it can and on the
+		   CPU when it cannot, decided per call rather than once:
+		   the early steps are too small to be worth a transform,
+		   and a context that has failed its own check turns
+		   itself off for the rest of the lift */
+
 		mpz_poly_init(&tmp_poly);
-		mpz_poly_mod_q(prod, q, &tmp_poly);
-		mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 0, 1);
-		mpz_poly_mod_q(&tmp_poly, q, &tmp_poly);
-		mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 0, 1);
-		mpz_poly_mod_q(&tmp_poly, q, &tmp_poly);
+		if (sqrt_gpu_mod_q(gpu, prod, q, &tmp_poly))
+			mpz_poly_mod_q(prod, q, &tmp_poly);
+
+		if (sqrt_gpu_mul_mod_q(gpu, &tmp_poly, isqrt_mod_q,
+					alg_poly, q)) {
+			mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 0, 1);
+			mpz_poly_mod_q(&tmp_poly, q, &tmp_poly);
+		}
+		if (sqrt_gpu_mul_mod_q(gpu, &tmp_poly, isqrt_mod_q,
+					alg_poly, q)) {
+			mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 0, 1);
+			mpz_poly_mod_q(&tmp_poly, q, &tmp_poly);
+		}
 
 		/* compute ( (3 - that) / 2 ) mod q */
 
@@ -655,10 +679,24 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 		/* finally, compute the new R(x) by multiplying the
 		   result above by the old R(x) */
 
-		mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 1, 1);
-		mpz_poly_mod_q(&tmp_poly, q, isqrt_mod_q);
+		/* this one cannot fuse: it writes somewhere other than
+		   its first operand, and the CPU version also frees p2
+		   as it consumes it */
+
+		if (sqrt_gpu_mul_mod_q(gpu, &tmp_poly, isqrt_mod_q,
+					alg_poly, q)) {
+			mpz_poly_mul(&tmp_poly, isqrt_mod_q, alg_poly, 1, 1);
+			mpz_poly_mod_q(&tmp_poly, q, isqrt_mod_q);
+		}
+		else {
+			for (j = 0; j <= tmp_poly.degree; j++)
+				mpz_set(isqrt_mod_q->coeff[j],
+					tmp_poly.coeff[j]);
+			isqrt_mod_q->degree = tmp_poly.degree;
+		}
 		mpz_poly_free(&tmp_poly);
 	}
+	sqrt_gpu_free(gpu);
 
 	/* attempt to compute the square root. 
 	   First multiply R(x) by prod(x), deleting prod(x) 
