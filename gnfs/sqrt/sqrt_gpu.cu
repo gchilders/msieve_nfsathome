@@ -529,6 +529,17 @@ typedef struct {
 	int prof;
 	double t_put, t_get, t_xform, t_carry, t_len, t_add;
 	uint64 n_prod;
+
+	/* the transform broken down. A pass over the array is the unit
+	   that matters: time it, count it, and count the bytes it had
+	   to move, and the three candidates separate. Near the card's
+	   bandwidth means fusing levels is the lever; far below it with
+	   long passes means the modular multiply chain is; far below it
+	   with short ones means the launches are. */
+
+	double t_expand, t_bfly, t_point;
+	uint64 n_bfly, n_maxn;
+	double bytes_bfly;
 } gctx;
 
 #endif /* HAVE_CUDA */
@@ -825,23 +836,38 @@ static void transform(gctx *c, uint64 *buf, int forward)
 	uint64 bh = ((c->n >> 1) + THREADS - 1) / THREADS;
 	uint64 *t1 = forward ? c->twf1 : c->twi1;
 	uint64 *t0 = forward ? c->twf0 : c->twi0;
-	uint32 ll, ln = c->ln;
+	uint32 ll, ln = c->ln, passes = 0;
+	double t = PTIC(c);
 
 	if (forward) {
-		for (ll = ln; ll >= 2; ll -= 2)
+		for (ll = ln; ll >= 2; ll -= 2, passes++)
 			k_dif4<<<(unsigned)bq, THREADS>>>(buf, c->n, ll,
 					ln - ll, t1, t0);
-		if (ln & 1)
+		if (ln & 1) {
 			k_dif2<<<(unsigned)bh, THREADS>>>(buf, c->n, 1,
 					ln - 1, t1, t0);
+			passes++;
+		}
 	}
 	else {
-		if (ln & 1)
+		if (ln & 1) {
 			k_dit2<<<(unsigned)bh, THREADS>>>(buf, c->n, 1,
 					ln - 1, t1, t0);
-		for (ll = (ln & 1) ? 2 : 1; ll <= ln - 1; ll += 2)
+			passes++;
+		}
+		for (ll = (ln & 1) ? 2 : 1; ll <= ln - 1; ll += 2, passes++)
 			k_dit4<<<(unsigned)bq, THREADS>>>(buf, c->n, ll,
 					ln - ll, t1, t0);
+	}
+	PTOC(c, t_bfly, t);
+	if (c->prof) {
+
+		/* every pass reads the array and writes it back */
+
+		c->n_bfly += passes;
+		c->bytes_bfly += (double)passes * 2.0 *
+				(double)c->n * sizeof(uint64);
+		if (c->n > c->n_maxn) c->n_maxn = c->n;
 	}
 }
 
@@ -890,14 +916,21 @@ static int gmul_raw(gctx *c, gnum *r, const uint16 *ad, uint64 an,
 	{
 		double t = PTIC(c);
 
+		double te = PTIC(c);
+
 		k_expand<<<(unsigned)bn_blk, THREADS>>>(ad, an,
 					c->A, c->n);
+		PTOC(c, t_expand, te);
 		transform(c, c->A, 1);
+		te = PTIC(c);
 		k_expand<<<(unsigned)bn_blk, THREADS>>>(bd, bn,
 					c->B, c->n);
+		PTOC(c, t_expand, te);
 		transform(c, c->B, 1);
+		te = PTIC(c);
 		k_pointwise<<<(unsigned)bn_blk, THREADS>>>(c->A, c->B,
 					c->n, c->ninv);
+		PTOC(c, t_point, te);
 		transform(c, c->A, 0);
 		PTOC(c, t_xform, t);
 		if (c->prof) c->n_prod++;
@@ -1578,6 +1611,14 @@ static int reference_mul_mod(mpz_poly_t *out, mpz_poly_t *p1,
 
 #define GPU_TREE_MIN_BITS 2000000
 
+static uint32 lg2(uint64 x)
+{
+	uint32 b = 0;
+
+	while (x > 1) { x >>= 1; b++; }
+	return b;
+}
+
 static uint64 next_pow2(uint64 x)
 {
 	uint64 p = 1;
@@ -1786,6 +1827,16 @@ void sqrt_gpu_free(void *ctx)
 				c->t_len, 100.0 * c->t_len / (tot + 1e-9),
 				c->t_put, 100.0 * c->t_put / (tot + 1e-9),
 				c->t_get, 100.0 * c->t_get / (tot + 1e-9));
+
+		if (c->n_bfly) {
+			logprintf(c->obj, (char *)"square root: GPU transform: expand %.2lf s, butterflies %.2lf s over %" PRIu64 " passes (%.1lf GB, %.0lf GB/s, %.0lf us/pass), pointwise %.2lf s, largest n 2^%u\n",
+					c->t_expand, c->t_bfly, c->n_bfly,
+					c->bytes_bfly / 1e9,
+					c->bytes_bfly / 1e9 / (c->t_bfly + 1e-9),
+					1e6 * c->t_bfly / (double)c->n_bfly,
+					c->t_point,
+					lg2(c->n_maxn));
+		}
 	}
 	for (i = 0; i < MAX_POLY_DEGREE + 1; i++) {
 		gnum_free(&c->p1[i]);
