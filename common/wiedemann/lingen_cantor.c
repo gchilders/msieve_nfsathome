@@ -641,14 +641,30 @@ void bmp_mul_fft_set_budget(msieve_obj *obj) {
 	    (tmp = strstr(obj->nfs_args, "bw_mem_mb=")) != NULL) {
 		fft_budget_mb = (double)strtoul(tmp + 10, NULL, 10);
 		if (obj != NULL) {
+			uint32 local = bmp_ranks_per_node();
+
+			/* per rank, because that is what the budget governs.
+			   Say what it comes to on the machine too, since that
+			   is the number that actually has to fit */
+
 			logprintf(obj, "lingen: transforms limited to "
-					"%.0f MB\n", fft_budget_mb);
+					"%.0f MB per rank, %.0f MB over "
+					"%u rank(s) here\n", fft_budget_mb,
+					fft_budget_mb * local, local);
 		}
 		return;
 	}
 
 	ram = get_ram_size();
 	fft_budget_mb = (double)ram / 1048576.0 / LINGEN_FFT_MEM_FRACTION;
+
+	/* get_ram_size reports the machine, and ranks on one machine
+	   all report the same figure. Eight of them each taking half
+	   of it is four times what the machine has, and the kill
+	   arrives hours into a product rather than at startup. The
+	   budget is per rank, so divide it by the ranks sharing. */
+
+	fft_budget_mb /= (double)bmp_ranks_per_node();
 
 	/* Taken from this machine, so on hosts that are not identical
 	   the ranks would disagree -- and the budget decides whether a
@@ -663,8 +679,9 @@ void bmp_mul_fft_set_budget(msieve_obj *obj) {
 		double before = fft_budget_mb;
 
 		bmp_combine_min_double(&fft_budget_mb);
-		logprintf(obj, "lingen: %.0f MB RAM, transforms may use "
-				"%.0f MB\n", (double)ram / 1048576.0,
+		logprintf(obj, "lingen: %.0f MB RAM, %u rank(s) here, "
+				"transforms may use %.0f MB each\n",
+				(double)ram / 1048576.0, bmp_ranks_per_node(),
 				fft_budget_mb);
 		if (fft_budget_mb < before) {
 			logprintf(obj, "lingen: capped to the smallest "

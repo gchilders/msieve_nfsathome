@@ -276,6 +276,7 @@ uint32 bw_sequence_ncols(msieve_obj *obj);
 
 void bmp_mul_set_mpi(msieve_obj *obj);
 uint32 bmp_mpi_size(void);
+uint32 bmp_ranks_per_node(void);
 uint32 bmp_mpi_rank(void);
 void bmp_combine(bmp_t *c);
 void bmp_combine_words(uint64 *buf, size_t n);

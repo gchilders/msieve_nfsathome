@@ -500,6 +500,7 @@ static MPI_Comm bmp_comm = MPI_COMM_NULL;
 #endif
 static uint32 bmp_size = 1;
 static uint32 bmp_rank;
+static uint32 bmp_local = 1;
 
 void bmp_mul_set_mpi(msieve_obj *obj) {
 
@@ -507,14 +508,43 @@ void bmp_mul_set_mpi(msieve_obj *obj) {
 	bmp_comm = MPI_COMM_WORLD;
 	bmp_size = obj->mpi_size;
 	bmp_rank = obj->mpi_rank;
+
+	/* and how many of those ranks are this machine. A product is
+	   split by work and not by storage -- every rank ends up with
+	   all of c, which is what bmp_combine arranges -- so ranks
+	   sharing a machine share its RAM between copies of the same
+	   data. Whatever decides how much memory to take has to know
+	   how many ways it is being divided. */
+
+	{
+		char me[MPI_MAX_PROCESSOR_NAME], *all;
+		int len = 0, i;
+
+		memset(me, 0, sizeof(me));
+		MPI_TRY(MPI_Get_processor_name(me, &len))
+		all = (char *)xcalloc((size_t)bmp_size, sizeof(me));
+		MPI_TRY(MPI_Allgather(me, sizeof(me), MPI_CHAR,
+				all, sizeof(me), MPI_CHAR, bmp_comm))
+		bmp_local = 0;
+		for (i = 0; i < (int)bmp_size; i++) {
+			if (memcmp(all + (size_t)i * sizeof(me), me,
+					sizeof(me)) == 0)
+				bmp_local++;
+		}
+		free(all);
+		if (bmp_local < 1)
+			bmp_local = 1;
+	}
 	if (bmp_size > 1) {
 		logprintf(obj, "lingen: splitting each product over %u "
-				"machines\n", bmp_size);
+				"ranks, %u of them on this machine\n",
+				bmp_size, bmp_local);
 	}
 #endif
 }
 
 uint32 bmp_mpi_size(void) { return bmp_size; }
+uint32 bmp_ranks_per_node(void) { return bmp_local; }
 uint32 bmp_mpi_rank(void) { return bmp_rank; }
 
 /* Put every rank's band of c into every rank. The bands are disjoint
