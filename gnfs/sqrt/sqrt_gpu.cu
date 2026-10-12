@@ -907,9 +907,17 @@ static int gmul_raw(gctx *c, gnum *r, const uint16 *ad, uint64 an,
 
 	/* an accumulate settles across the wider of the product and what is
 	   already in r: the digits above the product are still r's own, and
-	   a carry out of the product has to be able to reach them */
+	   a carry out of the product has to be able to reach them.
 
-	width = (acc && r->ndig > nc) ? r->ndig : nc;
+	   nc already holds a carry out of the product, which reaches an +
+	   bn digits. The sum reaches one past the longer of the two, so
+	   once r is as long as nc the wider of them is still a digit
+	   short: at r->ndig == nc the sum wants nc + 1, and above it
+	   r->ndig + 1. Only r->ndig < nc is covered by nc alone. */
+
+	width = (acc && r->ndig >= nc) ? r->ndig + 1 : nc;
+	if (width > c->nc)
+		GFAIL(c);
 	nch = (width + CARRY_CHUNK - 1) / CARRY_CHUNK;
 	bc = (nch + THREADS - 1) / THREADS;
 
