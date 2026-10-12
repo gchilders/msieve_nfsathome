@@ -238,6 +238,141 @@ __global__ void k_dit4(uint64 *a, uint64 n, uint32 ll, uint32 ls,
 	a[i0 + L + q] = subm(x1, r);
 }
 
+/* The low levels, all of them, in one pass.
+
+   A butterfly at level ll touches elements 2^ll apart and no further,
+   so a contiguous span of 2^F elements holds every element every
+   butterfly at levels F and below will touch. Put that span in shared
+   memory, run the levels there, write it back once. Six passes over the
+   array become one, and those passes were the cheapest arithmetic and
+   the largest share of the traffic: measured at 483 GB/s of an A10's
+   600, which is to say the transform waits on memory and nothing else.
+
+   F has to match ln's parity, because the pass sequence steps by two
+   and must land exactly on level 1. For ln even the radix-4 passes run
+   at ll = F, F-2, ... 2; for ln odd they run down to 3 with a radix-2
+   at the bottom, so F is odd too and the same sequence works. */
+
+#define FUSE_LOG   12
+#define FUSE_N     (1 << FUSE_LOG)
+#define FUSE_THR   256
+
+__global__ void k_dif_low(uint64 *a, uint64 n, uint32 ln, uint32 flog,
+			const uint64 *t1, const uint64 *t0)
+{
+	__shared__ uint64 sh[FUSE_N];
+	uint64 base = (uint64)blockIdx.x << flog;
+	uint32 i, ll, span = 1u << flog;
+
+	for (i = threadIdx.x; i < span; i += FUSE_THR)
+		sh[i] = a[base + i];
+	__syncthreads();
+
+	for (ll = flog; ll >= 2; ll -= 2) {
+		uint32 lq = ll - 2;
+		uint32 q = 1u << lq, h = 1u << (ll - 1);
+		uint32 ls = ln - ll;
+
+		for (i = threadIdx.x; i < (span >> 2); i += FUSE_THR) {
+			uint32 j = i & (q - 1);
+			uint32 i0 = ((i >> lq) << ll) | j;
+			uint64 u0, u1, u2, u3, x0, x1, x2, x3, wa, wb, wc;
+
+			wa = twiddle(t1, t0, (uint64)j << ls);
+			wb = twiddle(t1, t0, ((uint64)j << ls) + (n >> 2));
+			wc = twiddle(t1, t0, (uint64)j << (ls + 1));
+			u0 = sh[i0]; u1 = sh[i0 + q];
+			u2 = sh[i0 + h]; u3 = sh[i0 + h + q];
+			x0 = addm(u0, u2);
+			x2 = mulm(subm(u0, u2), wa);
+			x1 = addm(u1, u3);
+			x3 = mulm(subm(u1, u3), wb);
+			sh[i0]         = addm(x0, x1);
+			sh[i0 + q]     = mulm(subm(x0, x1), wc);
+			sh[i0 + h]     = addm(x2, x3);
+			sh[i0 + h + q] = mulm(subm(x2, x3), wc);
+		}
+		__syncthreads();
+	}
+
+	/* level one carries no twiddle: its half is a single element,
+	   so j is always zero and the root is one */
+
+	if (flog & 1) {
+		for (i = threadIdx.x; i < (span >> 1); i += FUSE_THR) {
+			uint32 idx = i << 1;
+			uint64 u = sh[idx], v = sh[idx + 1];
+
+			sh[idx] = addm(u, v);
+			sh[idx + 1] = subm(u, v);
+		}
+		__syncthreads();
+	}
+
+	for (i = threadIdx.x; i < span; i += FUSE_THR)
+		a[base + i] = sh[i];
+}
+
+__global__ void k_dit_low(uint64 *a, uint64 n, uint32 ln, uint32 flog,
+			const uint64 *t1, const uint64 *t0)
+{
+	__shared__ uint64 sh[FUSE_N];
+	uint64 base = (uint64)blockIdx.x << flog;
+	uint32 i, ll, span = 1u << flog, first;
+
+	for (i = threadIdx.x; i < span; i += FUSE_THR)
+		sh[i] = a[base + i];
+	__syncthreads();
+
+	/* and the same on the way back */
+
+	if (flog & 1) {
+		for (i = threadIdx.x; i < (span >> 1); i += FUSE_THR) {
+			uint32 idx = i << 1;
+			uint64 u = sh[idx], v = sh[idx + 1];
+
+			sh[idx] = addm(u, v);
+			sh[idx + 1] = subm(u, v);
+		}
+		__syncthreads();
+	}
+
+	first = (flog & 1) ? 2 : 1;
+	for (ll = first; ll + 1 <= flog; ll += 2) {
+		uint32 lq = ll - 1;
+		uint32 q = 1u << lq, L = 1u << ll;
+		uint32 ls = ln - ll;
+
+		for (i = threadIdx.x; i < (span >> 2); i += FUSE_THR) {
+			uint32 j = i & (q - 1);
+			uint32 i0 = ((i >> lq) << (ll + 1)) | j;
+			uint64 u0, v0, u1, v1, x0, x1, x2, x3, pp, r;
+			uint64 wa, wb, wc;
+
+			wa = twiddle(t1, t0, (uint64)j << ls);
+			wb = twiddle(t1, t0, (uint64)j << (ls - 1));
+			wc = twiddle(t1, t0, ((uint64)j << (ls - 1)) +
+					(n >> 2));
+			u0 = sh[i0];
+			v0 = mulm(sh[i0 + q], wa);
+			u1 = sh[i0 + L];
+			v1 = mulm(sh[i0 + L + q], wa);
+			x0 = addm(u0, v0); x1 = subm(u0, v0);
+			x2 = addm(u1, v1); x3 = subm(u1, v1);
+			pp = mulm(x2, wb);
+			r = mulm(x3, wc);
+			sh[i0]         = addm(x0, pp);
+			sh[i0 + L]     = subm(x0, pp);
+			sh[i0 + q]     = addm(x1, r);
+			sh[i0 + L + q] = subm(x1, r);
+		}
+		__syncthreads();
+	}
+
+	for (i = threadIdx.x; i < span; i += FUSE_THR)
+		a[base + i] = sh[i];
+}
+
 __global__ void k_dif2(uint64 *a, uint64 n, uint32 ll, uint32 ls,
 			const uint64 *t1, const uint64 *t0)
 {
@@ -837,25 +972,43 @@ static void transform(gctx *c, uint64 *buf, int forward)
 	uint64 *t1 = forward ? c->twf1 : c->twi1;
 	uint64 *t0 = forward ? c->twf0 : c->twi0;
 	uint32 ll, ln = c->ln, passes = 0;
+	uint32 flog = (ln & 1) ? (FUSE_LOG - 1) : FUSE_LOG;
+	uint32 fused = (ln > flog + 1) ? flog : 0;
+	uint64 fb = c->n >> flog;
 	double t = PTIC(c);
 
+	/* the fused pass covers levels 1..flog; the loops below stop
+	   where it starts. Not worth it when the whole transform would
+	   be one block, which is small enough not to matter */
+
 	if (forward) {
-		for (ll = ln; ll >= 2; ll -= 2, passes++)
+		for (ll = ln; ll >= fused + 2; ll -= 2, passes++)
 			k_dif4<<<(unsigned)bq, THREADS>>>(buf, c->n, ll,
 					ln - ll, t1, t0);
-		if (ln & 1) {
+		if (fused) {
+			k_dif_low<<<(unsigned)fb, FUSE_THR>>>(buf, c->n,
+					ln, flog, t1, t0);
+			passes++;
+		}
+		else if (ln & 1) {
 			k_dif2<<<(unsigned)bh, THREADS>>>(buf, c->n, 1,
 					ln - 1, t1, t0);
 			passes++;
 		}
 	}
 	else {
-		if (ln & 1) {
+		if (fused) {
+			k_dit_low<<<(unsigned)fb, FUSE_THR>>>(buf, c->n,
+					ln, flog, t1, t0);
+			passes++;
+		}
+		else if (ln & 1) {
 			k_dit2<<<(unsigned)bh, THREADS>>>(buf, c->n, 1,
 					ln - 1, t1, t0);
 			passes++;
 		}
-		for (ll = (ln & 1) ? 2 : 1; ll <= ln - 1; ll += 2, passes++)
+		for (ll = fused ? fused + 1 : ((ln & 1) ? 2 : 1);
+				ll <= ln - 1; ll += 2, passes++)
 			k_dit4<<<(unsigned)bq, THREADS>>>(buf, c->n, ll,
 					ln - ll, t1, t0);
 	}
