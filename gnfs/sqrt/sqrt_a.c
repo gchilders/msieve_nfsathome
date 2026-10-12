@@ -787,31 +787,54 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 			else {
 				double r = (tg > 1e-9) ? tc / tg : 1.0;
 
-				if (prodinfo->gpu_speedup <= 0 ||
-					r < prodinfo->gpu_speedup)
+				/* The first multiply on the card pays for what the
+				   card only pays for once: the context's first
+				   allocations, the first launch of each kernel. A
+				   minimum then remembers that for the rest of the
+				   run. On a C330 it read 42 ms against well under
+				   one for the two samples after it, and the gate
+				   shut on an eighteen minute tree over a cost paid
+				   before the tree had started.
+
+				   So let the first sample prove the answer is right,
+				   which is the other half of its job and the half
+				   that cannot be skipped, and let the ones after it
+				   say how fast the card is. The minimum stays: it is
+				   there for the spread between warm multiplies, and
+				   that spread is real. */
+
+				if ((mysample > 1 || SQRT_GPU_CALIB < 2) &&
+					(prodinfo->gpu_speedup <= 0 ||
+					 r < prodinfo->gpu_speedup))
 					prodinfo->gpu_speedup = r;
 
-				/* this sample, not the running worst the line
-				   below reports: one slow multiply pins the
-				   gate shut and all three lines then read the
-				   same. Both times, because a ratio alone does
-				   not say whether the card was slow or the
-				   host was busy. */
+				/* this sample, not the running minimum the line
+				   below reports, so the spread is visible and
+				   the first one can be seen for what it is.
+				   Both times, because a ratio alone does not
+				   say whether the card was slow or the host
+				   was quick, and on an SNFS polynomial with
+				   tiny coefficients it is the latter: the
+				   reduction the CPU does is nearly free. */
 
 				logprintf(prodinfo->obj, "product tree: GPU "
 					"sample %u of %u at %.2lf Mbit "
-					"(widest %.2lf): GPU %.3lf s, "
-					"CPU %.3lf s, %.2lfx\n",
+					"(widest %.2lf): GPU %.1lf ms, "
+					"CPU %.1lf ms, %.2lfx\n",
 					mysample, (uint32)SQRT_GPU_CALIB,
 					(double)bits / 1e6, (double)wide / 1e6,
-					tg, tc, r);
-				logprintf(prodinfo->obj, "product tree: GPU "
-					"verified against CPU at %.2lf Mbit, "
-					"%.1lfx one CPU multiply, so levels "
-					"up to %u nodes\n",
-					(double)bits / 1e6,
-					prodinfo->gpu_speedup,
-					(uint32)prodinfo->gpu_speedup);
+					1e3 * tg, 1e3 * tc, r);
+
+				/* no verdict until there is one to pass */
+
+				if (prodinfo->gpu_speedup > 0)
+					logprintf(prodinfo->obj, "product tree: GPU "
+						"verified against CPU at %.2lf Mbit, "
+						"%.1lfx one CPU multiply, so "
+						"levels up to %u nodes\n",
+						(double)bits / 1e6,
+						prodinfo->gpu_speedup,
+						(uint32)prodinfo->gpu_speedup);
 			}
 		}
 		if (bad) {
