@@ -578,9 +578,31 @@ static int gpu_mul_grow(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 	prodinfo->gpu = sqrt_gpu_init(prodinfo->obj, 2 * need,
 				(uint32)prodinfo->monic_poly->degree);
 	if (prodinfo->gpu == NULL) {
-		logprintf(prodinfo->obj, "product tree: retrying at %.2lf Gbit\n", (double)need / 1e9);
-		prodinfo->gpu = sqrt_gpu_init(prodinfo->obj, need,
+
+		/* with the same five percent the first sizing takes,
+		   and for the same reason. What this node asks for is
+		   half the root product, and so is the lift's last
+		   modulus -- but the lift arrives there by squaring,
+		   so its q is not half of anything in particular and
+		   lands just the wrong side. On a C209 it landed
+		   368200 bits over a 3.45 Gbit context, a hundredth of
+		   one percent, and the last and largest steps of the
+		   lift went back to the CPU for want of it. The slack
+		   costs a twentieth of the digit buffers and usually
+		   nothing at all of the transform, which is a power of
+		   two either way. Exactly what was asked for is still
+		   worth trying below it, being better than nothing. */
+
+		uint64 slack = need + need / 20;
+
+		logprintf(prodinfo->obj, "product tree: retrying at %.2lf Gbit\n", (double)slack / 1e9);
+		prodinfo->gpu = sqrt_gpu_init(prodinfo->obj, slack,
 					(uint32)prodinfo->monic_poly->degree);
+		if (prodinfo->gpu == NULL) {
+			logprintf(prodinfo->obj, "product tree: retrying at %.2lf Gbit\n", (double)need / 1e9);
+			prodinfo->gpu = sqrt_gpu_init(prodinfo->obj, need,
+						(uint32)prodinfo->monic_poly->degree);
+		}
 	}
 	if (prodinfo->gpu == NULL)
 		return -1;
