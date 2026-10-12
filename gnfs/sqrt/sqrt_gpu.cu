@@ -675,6 +675,14 @@ typedef struct {
 	double t_expand, t_bfly, t_point;
 	uint64 n_bfly, n_maxn;
 	double bytes_bfly;
+
+	/* and the fused pass apart from the rest. It is one pass in six
+	   at ln 22, so its share of the bytes is fixed and known; its
+	   share of the time is the question, and the two stopped being
+	   the same number when the kernel stopped waiting on memory. */
+
+	double t_fuse, bytes_fuse;
+	uint64 n_fuse;
 } gctx;
 
 #endif /* HAVE_CUDA */
@@ -971,7 +979,7 @@ static void transform(gctx *c, uint64 *buf, int forward)
 	uint64 bh = ((c->n >> 1) + THREADS - 1) / THREADS;
 	uint64 *t1 = forward ? c->twf1 : c->twi1;
 	uint64 *t0 = forward ? c->twf0 : c->twi0;
-	uint32 ll, ln = c->ln, passes = 0;
+	uint32 ll, ln = c->ln, passes = 0, nfuse = 0;
 	uint32 flog = (ln & 1) ? (FUSE_LOG - 1) : FUSE_LOG;
 	uint32 fused = (ln > flog + 1) ? flog : 0;
 	uint64 fb = c->n >> flog;
@@ -986,9 +994,16 @@ static void transform(gctx *c, uint64 *buf, int forward)
 			k_dif4<<<(unsigned)bq, THREADS>>>(buf, c->n, ll,
 					ln - ll, t1, t0);
 		if (fused) {
+			double tf;
+
+			PTOC(c, t_bfly, t);
+			tf = PTIC(c);
 			k_dif_low<<<(unsigned)fb, FUSE_THR>>>(buf, c->n,
 					ln, flog, t1, t0);
+			PTOC(c, t_fuse, tf);
+			t = PTIC(c);
 			passes++;
+			nfuse = 1;
 		}
 		else if (ln & 1) {
 			k_dif2<<<(unsigned)bh, THREADS>>>(buf, c->n, 1,
@@ -998,9 +1013,16 @@ static void transform(gctx *c, uint64 *buf, int forward)
 	}
 	else {
 		if (fused) {
+			double tf;
+
+			PTOC(c, t_bfly, t);
+			tf = PTIC(c);
 			k_dit_low<<<(unsigned)fb, FUSE_THR>>>(buf, c->n,
 					ln, flog, t1, t0);
+			PTOC(c, t_fuse, tf);
+			t = PTIC(c);
 			passes++;
+			nfuse = 1;
 		}
 		else if (ln & 1) {
 			k_dit2<<<(unsigned)bh, THREADS>>>(buf, c->n, 1,
@@ -1017,9 +1039,12 @@ static void transform(gctx *c, uint64 *buf, int forward)
 
 		/* every pass reads the array and writes it back */
 
-		c->n_bfly += passes;
-		c->bytes_bfly += (double)passes * 2.0 *
-				(double)c->n * sizeof(uint64);
+		double b1 = 2.0 * (double)c->n * sizeof(uint64);
+
+		c->n_bfly += passes - nfuse;
+		c->bytes_bfly += (double)(passes - nfuse) * b1;
+		c->n_fuse += nfuse;
+		c->bytes_fuse += (double)nfuse * b1;
 		if (c->n > c->n_maxn) c->n_maxn = c->n;
 	}
 }
@@ -1997,6 +2022,12 @@ void sqrt_gpu_free(void *ctx)
 					1e6 * c->t_bfly / (double)c->n_bfly,
 					c->t_point,
 					lg2(c->n_maxn));
+		}
+		if (c->n_fuse) {
+			logprintf(c->obj, (char *)"square root: GPU transform: fused %.2lf s over %" PRIu64 " passes (%.1lf GB, %.0lf GB/s, %.0lf us/pass)\n",
+					c->t_fuse, c->n_fuse, c->bytes_fuse / 1e9,
+					c->bytes_fuse / 1e9 / (c->t_fuse + 1e-9),
+					1e6 * c->t_fuse / (double)c->n_fuse);
 		}
 	}
 	for (i = 0; i < MAX_POLY_DEGREE + 1; i++) {
