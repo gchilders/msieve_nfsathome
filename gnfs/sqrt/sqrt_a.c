@@ -82,6 +82,30 @@ $Id$
 
 #define SQRT_GPU_CALIB 3
 
+/* A level's worth of timings, indexed by depth below the root, so
+   0 is the root itself. Twenty-four covers every level the gate can
+   ever say yes to -- past about six the nodes outnumber the cores by
+   more than any card is going to make up. */
+
+#define SQRT_GATE_DEPTH 24
+
+/* A level has to be this wide before one node is spent finding out
+   what the card does with it, since the probe is one node of the
+   level whichever way it goes. Sixteen puts the cost at a sixteenth
+   of a level that the other fifteen nodes are running through in
+   parallel anyway, and still lands within a few doublings of the
+   narrow levels at the top that it is there to inform. */
+
+#define SQRT_GATE_MIN_NODES 16
+
+/* and not at all if the card is already known to be this much worse
+   than the host, since the probe would then cost several nodes to
+   confirm something the level below already said. A quarter still
+   lets a card that reads badly at two megabits -- where it is all
+   fixed cost -- prove itself at two hundred. */
+
+#define SQRT_GATE_PROBE_MIN 0.25
+
 static struct {
 	int on;
 	uint32 count[SQRT_PROF_DEPTH];
@@ -148,6 +172,21 @@ typedef struct {
 	int gpu_calib;		/* samples claimed so far */
 	int gpu_nratio;		/* and how many came back */
 	double gpu_ratio[SQRT_GPU_CALIB];
+
+	/* what one node of each level actually cost, each way. The
+	   calibration at the bottom of the tree answers a question
+	   nobody asked: it measures two megabit operands and the gate
+	   then rules on six gigabit ones, three thousand times larger,
+	   where the card's fixed costs have long since amortised. A
+	   level's own nodes are all the same size, so sending one to
+	   the card and letting one go to the host measures both at the
+	   size being decided, for the price of work that had to happen
+	   anyway. */
+
+	double lvl_gpu[SQRT_GATE_DEPTH];
+	double lvl_cpu[SQRT_GATE_DEPTH];
+	uint64 lvl_bits[SQRT_GATE_DEPTH];
+	uint8 lvl_wait[SQRT_GATE_DEPTH];	/* a host probe in flight */
 	double gpu_speedup;	/* the median of those */
 } relation_prod_t;
 
@@ -613,6 +652,131 @@ static int gpu_mul_grow(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 					prodinfo->monic_poly, &need);
 }
 
+/* Whether this level still owes one node to the card. A level wide
+   enough to carry the cost gets one multiply done each way so that it,
+   and the narrow expensive levels above it, are judged on their own
+   size rather than on the bottom of the tree. A narrow level pays too
+   much for the answer and takes the one from below instead. */
+
+/* What the card is worth at this level, measured as near to it as
+   anything has been measured. A level that has been seen both ways
+   answers for itself; otherwise the nearest level below it does, each
+   step down being half the operand and a little less favourable to the
+   card, so an answer from there is a conservative one. Failing that,
+   the calibration from the bottom of the tree, which is the figure this
+   is trying to get away from and is only a starting point.
+
+   Caller holds the lock. */
+
+static double gate_ratio(relation_prod_t *prodinfo, uint32 depth)
+{
+	uint32 d;
+
+	for (d = depth; d < depth + 4 && d < SQRT_GATE_DEPTH; d++) {
+		if (prodinfo->lvl_gpu[d] > 0 && prodinfo->lvl_cpu[d] > 0)
+			return prodinfo->lvl_cpu[d] / prodinfo->lvl_gpu[d];
+	}
+	return prodinfo->gpu_speedup;
+}
+
+/* how wide the level really is, which is what decides whether it
+   can afford to spend a node finding out. Not the figure the gate
+   compares against: that one is capped at the thread count, because
+   beyond that the cores stop being able to take the work in one
+   round, and a level of a million nodes can still only spare one. */
+
+static uint64 level_width(uint32 depth)
+{
+	return (depth < 40) ? ((uint64)1 << depth) : ((uint64)1 << 40);
+}
+
+/* 1 to send this node to the card, -1 to keep it on the host, 0 for
+   neither: the level has been seen both ways and the gate decides.
+
+   A level wide enough to carry the cost spends one node each way, so
+   that it and the narrow expensive levels above it are judged on
+   their own size rather than on the bottom of the tree. Both halves
+   are needed: a level the gate likes sends every node to the card
+   and never learns what the host would have charged, which is the
+   number the level above is about to be judged on. */
+
+static int owes_probe(relation_prod_t *prodinfo, uint32 depth)
+{
+	if (depth >= SQRT_GATE_DEPTH ||
+			level_width(depth) < SQRT_GATE_MIN_NODES)
+		return 0;
+	if (prodinfo->lvl_gpu[depth] == 0) {
+		double r = gate_ratio(prodinfo, depth + 1);
+
+		return (r <= 0 || r >= SQRT_GATE_PROBE_MIN) ? 1 : 0;
+	}
+	if (prodinfo->lvl_cpu[depth] == 0 && !prodinfo->lvl_wait[depth])
+		return -1;
+	return 0;
+}
+
+/* Say what the level cost each way as soon as both are in, since this
+   is the number the levels above are about to be judged on and there is
+   no other way to see it. Caller holds the lock. */
+
+static uint64 level_nodes(relation_prod_t *prodinfo, uint32 depth)
+{
+	uint64 nodes = (depth < 40) ? ((uint64)1 << depth)
+					: ((uint64)1 << 40);
+
+	if (prodinfo->obj->num_threads > 1 &&
+			nodes > prodinfo->obj->num_threads)
+		nodes = prodinfo->obj->num_threads;
+	return nodes;
+}
+
+static void note_level(relation_prod_t *prodinfo, uint32 depth)
+{
+	double g = prodinfo->lvl_gpu[depth];
+	double c = prodinfo->lvl_cpu[depth];
+	uint64 nodes = level_nodes(prodinfo, depth);
+
+	if (g <= 0 || c <= 0)
+		return;
+	logprintf(prodinfo->obj, (char *)"product tree: level %u "
+		"(%" PRIu64 " nodes, %.1lf Mbit): GPU %.2lf s, "
+		"CPU %.2lf s, %.2lfx, card %s here\n",
+		depth, nodes,
+		(double)prodinfo->lvl_bits[depth] / 1e6, g, c, c / g,
+		(c / g > (double)nodes) ? "wins" : "loses");
+}
+
+
+/* The host's side of the measurement. Every node the gate turns away is
+   one the host times for nothing, so the level it belongs to has a cost
+   to compare against as soon as one node of it has gone the other way.
+   The first figure stands: later ones are measured against a machine
+   with fewer cores left to spare and say less about the node. */
+
+static void sqrt_note_cpu_mul(relation_prod_t *prodinfo,
+			uint32 depth, double sec)
+{
+	if (prodinfo == NULL || depth >= SQRT_GATE_DEPTH)
+		return;
+
+	/* Every node in the tree comes through here and there are
+	   tens of millions of them, so the lock is taken only for
+	   the one node a level that still needs pricing. The read
+	   races with the thread recording it and the worst that
+	   comes of losing the race is a second node taking the
+	   lock to find the work already done. */
+
+	if (prodinfo->lvl_cpu[depth] != 0)
+		return;
+#pragma omp critical(sqrt_gpu)
+	{
+		if (prodinfo->lvl_cpu[depth] == 0) {
+			prodinfo->lvl_cpu[depth] = sec;
+			note_level(prodinfo, depth);
+		}
+	}
+}
+
 /* Hand one node to the card, or say why not. Returns 0 if the card did
    it and prod1 holds the answer.
 
@@ -727,14 +891,22 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 	   while forty-six cores idled, and cost a C209 four minutes
 	   against not using the card at all. */
 
-	nodes = (depth < 40) ? ((uint64)1 << depth) : ((uint64)1 << 40);
-	if (prodinfo->obj->num_threads > 1 &&
-			nodes > prodinfo->obj->num_threads)
-		nodes = prodinfo->obj->num_threads;
+	nodes = level_nodes(prodinfo, depth);
+	/* Turned away before the lock, because the lock is held
+	   across a GPU multiply and a level can have thousands of
+	   nodes queueing behind it. The read races with another
+	   thread recording a level's cost, which is harmless: the
+	   worst of it is one node gated on the figure from a
+	   moment ago, and the decision is taken again under the
+	   lock before any work happens. */
+
 	if (prodinfo->gpu_calib >= SQRT_GPU_CALIB &&
-			prodinfo->gpu_speedup > 0 &&
-			(double)nodes >= prodinfo->gpu_speedup)
-		return -1;
+			owes_probe(prodinfo, depth) == 0) {
+		double r = gate_ratio(prodinfo, depth);
+
+		if (r <= 0 || (double)nodes >= r)
+			return -1;
+	}
 
 #pragma omp critical(sqrt_gpu)
 	{
@@ -786,8 +958,9 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 				checking = 0;
 			}
 		}
-		else if (prodinfo->gpu_speedup <= 0 ||
-				(double)nodes >= prodinfo->gpu_speedup) {
+		else {
+			int probe = owes_probe(prodinfo, depth);
+			double r = gate_ratio(prodinfo, depth);
 
 			/* Either the ratio is not known yet or it is and this
 			   level does not clear it. The first case matters as
@@ -795,12 +968,38 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 			   outside this lock, and every node arriving in that
 			   window used to find no ratio to fail and went over
 			   the card anyway. On a C209 that put seventy nodes
-			   of a two thousand node level through it. */
+			   of a two thousand node level through it.
 
-			status = -1;
-		}
-		else {
-			status = gpu_mul_grow(prodinfo, prod1, prod2);
+			   A level that owes a probe goes to the card whatever
+			   the ratio says, once. The lock is what makes that
+			   one node and not several: whoever gets here first
+			   holds it until the multiply is timed and recorded,
+			   and everyone behind reads the answer. */
+
+			if (probe < 0) {
+
+				/* one node held back so the host prices the level.
+				   Flagged until the answer comes in, or every node
+				   arriving before it would be held back too */
+
+				prodinfo->lvl_wait[depth] = 1;
+				status = -1;
+			}
+			else if (probe == 0 && (r <= 0 || (double)nodes >= r)) {
+				status = -1;
+			}
+			else {
+				double t = prof_now();
+
+				status = gpu_mul_grow(prodinfo, prod1, prod2);
+				t = prof_now() - t;
+				if (status == 0 && depth < SQRT_GATE_DEPTH &&
+						prodinfo->lvl_gpu[depth] == 0) {
+					prodinfo->lvl_gpu[depth] = t;
+					prodinfo->lvl_bits[depth] = bits;
+					note_level(prodinfo, depth);
+				}
+			}
 		}
 	}
 
@@ -969,7 +1168,17 @@ static void multiply_relations(relation_prod_t *prodinfo,
 		/* done on the card */
 	}
 	else if (!sqrt_prof.on) {
+
+		/* timed even with the profiler off, because this is the
+		   half of the gate's ratio the host provides: a node the
+		   gate turned away is a free measurement of what the level
+		   costs without the card. One clock read either side of a
+		   multiply that runs for seconds */
+
+		double el = prof_now();
+
 		mpz_poly_mul(&prod1, &prod2, prodinfo->monic_poly, 1, 0);
+		sqrt_note_cpu_mul(prodinfo, depth, prof_now() - el);
 	}
 	else {
 		uint32 L = (depth < SQRT_PROF_DEPTH) ?
@@ -979,6 +1188,7 @@ static void multiply_relations(relation_prod_t *prodinfo,
 
 		mpz_poly_mul(&prod1, &prod2, prodinfo->monic_poly, 1, 0);
 		el = prof_now() - el;
+		sqrt_note_cpu_mul(prodinfo, depth, el);
 		b = (uint64)mpz_sizeinbase(prod1.coeff[0], 2);
 
 #pragma omp atomic
@@ -1496,6 +1706,14 @@ void alg_square_root(msieve_obj *obj, mpz_poly_t *alg_poly,
 	prodinfo.gpu_calib = 0;
 	prodinfo.gpu_nratio = 0;
 	prodinfo.gpu_speedup = 0;
+
+	/* zero means never measured, and these are read before
+	   anything writes them */
+
+	memset(prodinfo.lvl_gpu, 0, sizeof(prodinfo.lvl_gpu));
+	memset(prodinfo.lvl_cpu, 0, sizeof(prodinfo.lvl_cpu));
+	memset(prodinfo.lvl_bits, 0, sizeof(prodinfo.lvl_bits));
+	memset(prodinfo.lvl_wait, 0, sizeof(prodinfo.lvl_wait));
 
 	memset(&sqrt_prof, 0, sizeof(sqrt_prof));
 	sqrt_prof.on = (obj->nfs_args != NULL &&
