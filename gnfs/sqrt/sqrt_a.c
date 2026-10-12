@@ -145,8 +145,10 @@ typedef struct {
 	msieve_obj *obj;
 	void *gpu;
 	int gpu_tried;
-	int gpu_calib;		/* samples taken so far */
-	double gpu_speedup;	/* measured, not guessed */
+	int gpu_calib;		/* samples claimed so far */
+	int gpu_nratio;		/* and how many came back */
+	double gpu_ratio[SQRT_GPU_CALIB];
+	double gpu_speedup;	/* the median of those */
 } relation_prod_t;
 
 /*-------------------------------------------------------------------*/
@@ -627,6 +629,52 @@ static int gpu_mul_grow(relation_prod_t *prodinfo, mpz_poly_t *prod1,
    the lift afterwards wants the same buffers for a modulus that is half
    the root product and the two must not be one digit apart. */
 
+/* The middle sample rather than the smallest.
+
+   A minimum is the wrong estimator here. Half of every sample is a CPU
+   multiply, and what that costs depends on how much of the machine is
+   busy at the time: on a C209 the three read 0.115, 1.051 and 1.752
+   seconds for the same work, the first having landed before the tree
+   had filled the cores. A minimum therefore picks the moment the
+   machine was idlest, which is the one moment unlike the levels this
+   gate rules on -- where every core is busy and a CPU multiply is
+   slow. It picks the card's first multiply too, which pays once for
+   the context's allocations and the first launch of each kernel.
+
+   The median drops both ends and needs no special case for either. On
+   those C209 samples it reads 6.6x where the minimum read 4.1x; on a
+   C330 that measured 0.11x, 15.11x and 13.19x it reads 13.19x where
+   the minimum read 0.11x and kept the card out of an eighteen minute
+   tree altogether. */
+
+static double sqrt_gpu_median(const double *v, int k) {
+
+	double t[SQRT_GPU_CALIB];
+	int i, j;
+
+	if (k < 1)
+		return 0;
+	if (k > SQRT_GPU_CALIB)
+		k = SQRT_GPU_CALIB;
+	for (i = 0; i < k; i++)
+		t[i] = v[i];
+
+	/* k is three; anything cleverer would be longer than this */
+
+	for (i = 1; i < k; i++) {
+		double x = t[i];
+
+		for (j = i; j > 0 && t[j - 1] > x; j--)
+			t[j] = t[j - 1];
+		t[j] = x;
+	}
+
+	/* the lower middle of an even number, which only arises if a
+	   sample failed before it could be timed */
+
+	return t[(k - 1) / 2];
+}
+
 static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 			mpz_poly_t *prod2, uint32 depth) {
 
@@ -803,12 +851,14 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 				   there for the spread between warm multiplies, and
 				   that spread is real. */
 
-				if ((mysample > 1 || SQRT_GPU_CALIB < 2) &&
-					(prodinfo->gpu_speedup <= 0 ||
-					 r < prodinfo->gpu_speedup))
-					prodinfo->gpu_speedup = r;
+				if (prodinfo->gpu_nratio < SQRT_GPU_CALIB)
+					prodinfo->gpu_ratio[
+						prodinfo->gpu_nratio++] = r;
+				prodinfo->gpu_speedup = sqrt_gpu_median(
+						prodinfo->gpu_ratio,
+						prodinfo->gpu_nratio);
 
-				/* this sample, not the running minimum the line
+				/* this sample, not the running median the line
 				   below reports, so the spread is visible and
 				   the first one can be seen for what it is.
 				   Both times, because a ratio alone does not
@@ -1420,6 +1470,7 @@ void alg_square_root(msieve_obj *obj, mpz_poly_t *alg_poly,
 	prodinfo.gpu = NULL;
 	prodinfo.gpu_tried = 0;
 	prodinfo.gpu_calib = 0;
+	prodinfo.gpu_nratio = 0;
 	prodinfo.gpu_speedup = 0;
 
 	memset(&sqrt_prof, 0, sizeof(sqrt_prof));
