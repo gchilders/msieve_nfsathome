@@ -610,7 +610,8 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 
 	int status = -1, checking = 0;
 	uint64 bits, nodes;
-	uint32 i;
+	uint32 i, mysample = 0;
+	uint64 wide;
 	double tg = 0, tc = 0;
 	mpz_poly_t a, b;
 
@@ -621,6 +622,25 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 
 	bits = (uint64)mpz_sizeinbase(prod1->coeff[0], 2) +
 	       (uint64)mpz_sizeinbase(prod2->coeff[0], 2);
+
+	/* the constant term is what the threshold above has always
+	   been read against, but the card sizes its transform from
+	   the widest coefficient, and on a degree five row those are
+	   not the same number. Carry both so the log says which size
+	   the measured ratio belongs to */
+
+	wide = 0;
+	for (i = 0; i <= (uint32)prod1->degree; i++) {
+		uint64 b = (uint64)mpz_sizeinbase(prod1->coeff[i], 2);
+
+		if (b > wide) wide = b;
+	}
+	for (i = 0; i <= (uint32)prod2->degree; i++) {
+		uint64 b = (uint64)mpz_sizeinbase(prod2->coeff[i], 2);
+
+		if (b > wide) wide = b;
+	}
+	wide *= 2;
 	if (bits < SQRT_GPU_TREE_BITS)
 		return -1;
 
@@ -681,7 +701,11 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 				mpz_set(b.coeff[i], prod2->coeff[i]);
 			b.degree = prod2->degree;
 
-			prodinfo->gpu_calib++;
+			/* claimed here, not read back at the log: the gate
+			   lets SQRT_GPU_CALIB threads calibrate at once, so
+			   by then the counter has moved on */
+
+			mysample = ++prodinfo->gpu_calib;
 			checking = 1;
 			tg = prof_now();
 			status = gpu_mul_grow(prodinfo, prod1, prod2);
@@ -744,6 +768,21 @@ static int try_gpu_mul(relation_prod_t *prodinfo, mpz_poly_t *prod1,
 				if (prodinfo->gpu_speedup <= 0 ||
 					r < prodinfo->gpu_speedup)
 					prodinfo->gpu_speedup = r;
+
+				/* this sample, not the running worst the line
+				   below reports: one slow multiply pins the
+				   gate shut and all three lines then read the
+				   same. Both times, because a ratio alone does
+				   not say whether the card was slow or the
+				   host was busy. */
+
+				logprintf(prodinfo->obj, "product tree: GPU "
+					"sample %u of %u at %.2lf Mbit "
+					"(widest %.2lf): GPU %.3lf s, "
+					"CPU %.3lf s, %.2lfx\n",
+					mysample, (uint32)SQRT_GPU_CALIB,
+					(double)bits / 1e6, (double)wide / 1e6,
+					tg, tc, r);
 				logprintf(prodinfo->obj, "product tree: GPU "
 					"verified against CPU at %.2lf Mbit, "
 					"%.1lfx one CPU multiply, so levels "
