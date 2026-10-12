@@ -33,6 +33,70 @@ $Id$
 #endif
 
 /*-----------------------------------------------------------------------*/
+/* What m and n are is a property of the run that produced the files,
+   not of the command line that reads them. lingen has always taken
+   them from the sequence headers; the two stages after it can do the
+   same from what they are about to consume, and then only krylov --
+   which writes the sequences rather than reading any -- has to be told.
+
+   That matters most without MPI, where the default is one sequence: a
+   combine run that was not told bw_n would look for one partial of
+   eight and and find a solution that is not one. Under MPI the rank
+   count supplies the default, so this mainly removes an argument that
+   had to agree with the files to be of any use.
+
+   Quiet when there is nothing to read. The stage opens the same file
+   again in a moment and says so properly; failing here would only
+   turn a clear error into an obscure one. */
+
+static void bw_shape_from_files(msieve_obj *obj, bw_params_t *params) {
+
+	char buf[512];
+	FILE *fp;
+	uint32 m = 0, nn = 0;
+
+	if (params->stage == BW_STAGE_MKSOL) {
+		bw_gen_header_t h;
+
+		snprintf(buf, sizeof(buf), "%s.bw.f", obj->savefile.name);
+		if ((fp = fopen(buf, "rb")) == NULL)
+			return;
+		if (fread(&h, sizeof(h), 1, fp) == 1 &&
+		    h.magic == BW_GEN_MAGIC && h.vbits == VBITS) {
+			m = h.m;
+			nn = h.n;
+		}
+		fclose(fp);
+	}
+	else if (params->stage == BW_STAGE_COMBINE) {
+		bw_sol_header_t h;
+
+		snprintf(buf, sizeof(buf), "%s.bw.w.0",
+				obj->savefile.name);
+		if ((fp = fopen(buf, "rb")) == NULL)
+			return;
+		if (fread(&h, sizeof(h), 1, fp) == 1 &&
+		    h.magic == BW_SOL_MAGIC && h.vbits == VBITS) {
+			m = h.m;
+			nn = h.n;
+		}
+		fclose(fp);
+	}
+	else {
+		return;
+	}
+
+	if (m == 0 || nn == 0 || m % VBITS != 0 || nn % VBITS != 0)
+		return;
+
+	if (m != params->m_mult * VBITS || nn != params->n_mult * VBITS) {
+		logprintf(obj, "taking m = %u, n = %u from "
+				"%s\n", m, nn, buf);
+	}
+	params->m_mult = m / VBITS;
+	params->n_mult = nn / VBITS;
+}
+
 static int32 bw_stage_sync(msieve_obj *obj, int32 status) {
 
 	/* The stages hand work to each other through files, so a stage
@@ -121,6 +185,10 @@ static int32 parse_params(msieve_obj *obj, bw_params_t *params) {
 			return -1;
 		}
 	}
+
+	/* the stage is known now, so the files it reads can speak */
+
+	bw_shape_from_files(obj, params);
 
 	if (params->m_mult == 0 || params->n_mult == 0) {
 		logprintf(obj, "error: bw_m and bw_n must be nonzero\n");
