@@ -257,8 +257,7 @@ __global__ void k_dit4(uint64 *a, uint64 n, uint32 ll, uint32 ls,
 #define FUSE_N     (1 << FUSE_LOG)
 #define FUSE_THR   256
 
-__global__ void k_dif_low(uint64 *a, uint64 n, uint32 ln, uint32 flog,
-			const uint64 *t1, const uint64 *t0)
+__global__ void k_dif_low(uint64 *a, uint32 flog, const uint64 *tl)
 {
 	__shared__ uint64 sh[FUSE_N];
 	uint64 base = (uint64)blockIdx.x << flog;
@@ -271,16 +270,16 @@ __global__ void k_dif_low(uint64 *a, uint64 n, uint32 ln, uint32 flog,
 	for (ll = flog; ll >= 2; ll -= 2) {
 		uint32 lq = ll - 2;
 		uint32 q = 1u << lq, h = 1u << (ll - 1);
-		uint32 ls = ln - ll;
+		const uint64 *tw = tl + 3 * (q - 1);
 
 		for (i = threadIdx.x; i < (span >> 2); i += FUSE_THR) {
 			uint32 j = i & (q - 1);
 			uint32 i0 = ((i >> lq) << ll) | j;
 			uint64 u0, u1, u2, u3, x0, x1, x2, x3, wa, wb, wc;
 
-			wa = twiddle(t1, t0, (uint64)j << ls);
-			wb = twiddle(t1, t0, ((uint64)j << ls) + (n >> 2));
-			wc = twiddle(t1, t0, (uint64)j << (ls + 1));
+			wa = tw[j];
+			wb = tw[q + j];
+			wc = tw[2 * q + j];
 			u0 = sh[i0]; u1 = sh[i0 + q];
 			u2 = sh[i0 + h]; u3 = sh[i0 + h + q];
 			x0 = addm(u0, u2);
@@ -313,8 +312,7 @@ __global__ void k_dif_low(uint64 *a, uint64 n, uint32 ln, uint32 flog,
 		a[base + i] = sh[i];
 }
 
-__global__ void k_dit_low(uint64 *a, uint64 n, uint32 ln, uint32 flog,
-			const uint64 *t1, const uint64 *t0)
+__global__ void k_dit_low(uint64 *a, uint32 flog, const uint64 *tl)
 {
 	__shared__ uint64 sh[FUSE_N];
 	uint64 base = (uint64)blockIdx.x << flog;
@@ -341,7 +339,7 @@ __global__ void k_dit_low(uint64 *a, uint64 n, uint32 ln, uint32 flog,
 	for (ll = first; ll + 1 <= flog; ll += 2) {
 		uint32 lq = ll - 1;
 		uint32 q = 1u << lq, L = 1u << ll;
-		uint32 ls = ln - ll;
+		const uint64 *tw = tl + 3 * (q - 1);
 
 		for (i = threadIdx.x; i < (span >> 2); i += FUSE_THR) {
 			uint32 j = i & (q - 1);
@@ -349,10 +347,9 @@ __global__ void k_dit_low(uint64 *a, uint64 n, uint32 ln, uint32 flog,
 			uint64 u0, v0, u1, v1, x0, x1, x2, x3, pp, r;
 			uint64 wa, wb, wc;
 
-			wa = twiddle(t1, t0, (uint64)j << ls);
-			wb = twiddle(t1, t0, (uint64)j << (ls - 1));
-			wc = twiddle(t1, t0, ((uint64)j << (ls - 1)) +
-					(n >> 2));
+			wa = tw[j];
+			wb = tw[q + j];
+			wc = tw[2 * q + j];
 			u0 = sh[i0];
 			v0 = mulm(sh[i0 + q], wa);
 			u1 = sh[i0 + L];
@@ -632,6 +629,7 @@ typedef struct {
 	uint64 nchunk;
 	uint64 *A, *B;
 	uint64 *twf1, *twf0, *twi1, *twi0;
+	uint64 *lowf, *lowi;
 	uint64 *dc0, *dc1;
 	int *dany;
 	int *dovf;		/* a settle carried out of its width */
@@ -998,8 +996,8 @@ static void transform(gctx *c, uint64 *buf, int forward)
 
 			PTOC(c, t_bfly, t);
 			tf = PTIC(c);
-			k_dif_low<<<(unsigned)fb, FUSE_THR>>>(buf, c->n,
-					ln, flog, t1, t0);
+			k_dif_low<<<(unsigned)fb, FUSE_THR>>>(buf, flog,
+					forward ? c->lowf : c->lowi);
 			PTOC(c, t_fuse, tf);
 			t = PTIC(c);
 			passes++;
@@ -1017,8 +1015,8 @@ static void transform(gctx *c, uint64 *buf, int forward)
 
 			PTOC(c, t_bfly, t);
 			tf = PTIC(c);
-			k_dit_low<<<(unsigned)fb, FUSE_THR>>>(buf, c->n,
-					ln, flog, t1, t0);
+			k_dit_low<<<(unsigned)fb, FUSE_THR>>>(buf, flog,
+					forward ? c->lowf : c->lowi);
 			PTOC(c, t_fuse, tf);
 			t = PTIC(c);
 			passes++;
@@ -1842,6 +1840,156 @@ static int build_tables(uint64 w, uint64 n, uint64 **d1, uint64 **d0)
 	return err;
 }
 
+/* The fused levels want their twiddles flat.
+
+   The general table is two levels deep -- a root is mulm(t1[t >> 14],
+   t0[t & 0x3fff]) -- which costs a multiply on every lookup. That was
+   invisible while the transform waited on memory. It is not invisible
+   now: the fused pass carries 18% of the bytes and 38% of the time,
+   and three of its seven multiplies per butterfly are these lookups.
+
+   A flat table is only possible because the fused levels do not depend
+   on n. At level ll the root is w_n^(j << (ln - ll)), and w_n is
+   g^((p-1)/n), so that is g^((p-1)/2^ll * j) -- the 2^ll-th root to
+   the j, whatever n happens to be. Six levels of those are a few
+   thousand values: 48 KB, built once, and small enough to sit in L2.
+
+   One layout serves both directions and every level. A level whose j
+   runs to q occupies 3q entries at offset 3(q-1), holding the level's
+   three roots in turn. q is already in hand in the kernel, so the
+   offset costs an add and a shift. */
+
+#define LOW_ENTRIES (3 * (1 << (FUSE_LOG - 1)))
+
+static int build_low(gctx *c)
+{
+	uint64 *hf, *hi;
+	uint32 ll;
+	int err = 0;
+
+	hf = (uint64 *)calloc(LOW_ENTRIES, sizeof(uint64));
+	hi = (uint64 *)calloc(LOW_ENTRIES, sizeof(uint64));
+	if (hf == NULL || hi == NULL) { free(hf); free(hi); return -1; }
+
+	/* forward, levels two and up: w_ll^j, the same times i, and
+	   w_(ll-1)^j. The middle one is the first scaled by w_n^(n/4),
+	   which is i whatever n is */
+
+	for (ll = 2; ll <= FUSE_LOG; ll++) {
+		uint64 wll = powm_host(GENERATOR, (PRIME - 1) >> ll);
+		uint64 wp = powm_host(GENERATOR, (PRIME - 1) >> (ll - 1));
+		uint64 ii = powm_host(GENERATOR, (PRIME - 1) >> 2);
+		uint64 *p = hf + 3 * ((1u << (ll - 2)) - 1);
+		uint32 q = 1u << (ll - 2), j;
+
+		p[0] = 1; p[q] = ii; p[2 * q] = 1;
+		for (j = 1; j < q; j++) {
+			p[j] = mulm_host(p[j - 1], wll);
+			p[q + j] = mulm_host(p[q + j - 1], wll);
+			p[2 * q + j] = mulm_host(p[2 * q + j - 1], wp);
+		}
+	}
+
+	/* inverse, levels one up to flog - 1: the same three with the
+	   roots inverted, and the scaled one is the second rather than
+	   the first */
+
+	for (ll = 1; ll < FUSE_LOG; ll++) {
+		uint64 wll = powm_host(GENERATOR, PRIME - 1 -
+					((PRIME - 1) >> ll));
+		uint64 wp = powm_host(GENERATOR, PRIME - 1 -
+					((PRIME - 1) >> (ll + 1)));
+		uint64 ii = powm_host(GENERATOR, PRIME - 1 -
+					((PRIME - 1) >> 2));
+		uint64 *p = hi + 3 * ((1u << (ll - 1)) - 1);
+		uint32 q = 1u << (ll - 1), j;
+
+		p[0] = 1; p[q] = 1; p[2 * q] = ii;
+		for (j = 1; j < q; j++) {
+			p[j] = mulm_host(p[j - 1], wll);
+			p[q + j] = mulm_host(p[q + j - 1], wp);
+			p[2 * q + j] = mulm_host(p[2 * q + j - 1], wp);
+		}
+	}
+
+	if (cudaMalloc((void **)&c->lowf,
+			LOW_ENTRIES * sizeof(uint64)) != cudaSuccess ||
+	    cudaMalloc((void **)&c->lowi,
+			LOW_ENTRIES * sizeof(uint64)) != cudaSuccess ||
+	    cudaMemcpy(c->lowf, hf, LOW_ENTRIES * sizeof(uint64),
+			cudaMemcpyHostToDevice) != cudaSuccess ||
+	    cudaMemcpy(c->lowi, hi, LOW_ENTRIES * sizeof(uint64),
+			cudaMemcpyHostToDevice) != cudaSuccess)
+		err = -1;
+	free(hf);
+	free(hi);
+	return err;
+}
+
+/* The flat table claims to be independent of n. That claim is the
+   whole basis for building it once, and it is exactly the kind of
+   thing that is true for the n you tested and false for the next one,
+   silently, in the low bits of a dependency nobody reads for hours.
+
+   So check it against the general table's own expression, at every n
+   the run actually uses, which is every time the tables are rebuilt.
+   A stride keeps it to a few dozen roots a level -- enough to catch a
+   wrong root or a wrong offset, cheap enough to leave on. */
+
+static int check_low(gctx *c, uint64 w, uint64 winv, uint64 n, uint32 ln)
+{
+	uint32 flog = (ln & 1) ? (FUSE_LOG - 1) : FUSE_LOG;
+	uint32 ll, first;
+	uint64 *hf, *hi;
+	int err = 0;
+
+	if (ln <= flog + 1)
+		return 0;
+
+	hf = (uint64 *)malloc(LOW_ENTRIES * sizeof(uint64));
+	hi = (uint64 *)malloc(LOW_ENTRIES * sizeof(uint64));
+	if (hf == NULL || hi == NULL) { free(hf); free(hi); return -1; }
+	if (cudaMemcpy(hf, c->lowf, LOW_ENTRIES * sizeof(uint64),
+			cudaMemcpyDeviceToHost) != cudaSuccess ||
+	    cudaMemcpy(hi, c->lowi, LOW_ENTRIES * sizeof(uint64),
+			cudaMemcpyDeviceToHost) != cudaSuccess)
+		err = -1;
+
+	for (ll = flog; !err && ll >= 2; ll -= 2) {
+		uint32 q = 1u << (ll - 2), ls = ln - ll, j;
+		uint32 step = (q + 31) / 32;
+		uint64 *p = hf + 3 * (q - 1);
+
+		for (j = 0; j < q; j += step) {
+			if (p[j] != powm_host(w, (uint64)j << ls) ||
+			    p[q + j] != powm_host(w,
+					((uint64)j << ls) + (n >> 2)) ||
+			    p[2 * q + j] != powm_host(w,
+					(uint64)j << (ls + 1)))
+				err = -1;
+		}
+	}
+
+	first = (flog & 1) ? 2 : 1;
+	for (ll = first; !err && ll + 1 <= flog; ll += 2) {
+		uint32 q = 1u << (ll - 1), ls = ln - ll, j;
+		uint32 step = (q + 31) / 32;
+		uint64 *p = hi + 3 * (q - 1);
+
+		for (j = 0; j < q; j += step) {
+			if (p[j] != powm_host(winv, (uint64)j << ls) ||
+			    p[q + j] != powm_host(winv,
+					(uint64)j << (ls - 1)) ||
+			    p[2 * q + j] != powm_host(winv,
+					((uint64)j << (ls - 1)) + (n >> 2)))
+				err = -1;
+		}
+	}
+	free(hf);
+	free(hi);
+	return err;
+}
+
 /* the transform follows q rather than the context: the buffers are
    sized for the largest modulus the lift will reach, but a step whose
    q is a sixteenth of that wants a sixteenth of the transform, not the
@@ -1872,6 +2020,15 @@ static int set_transform(gctx *c, uint64 need_digits)
 	c->ln = 0;
 	if (build_tables(w, n, &c->twf1, &c->twf0)) return -1;
 	if (build_tables(winv, n, &c->twi1, &c->twi0)) return -1;
+	if (check_low(c, w, winv, n, ln)) {
+		/* say which failure this is. The caller's own message
+		   blames the modulus, which would send anyone reading
+		   the log after a memory problem that is not there */
+
+		logprintf(c->obj, (char *)"square root: fused twiddles disagree with the general table at n = 2^%u, using CPU\n",
+				ln);
+		return -1;
+	}
 	c->n = n;
 	c->ln = ln;
 	c->ninv = powm_host(n % PRIME, PRIME - 2);
@@ -1959,6 +2116,11 @@ void *sqrt_gpu_init(msieve_obj *obj, uint64 max_q_bits, uint32 degree)
 	if (gnum_alloc(c, &c->t2)) goto fail;
 	if (gnum_alloc(c, &c->t3)) goto fail;
 	if (gnum_alloc(c, &c->hs1)) goto fail;
+
+	/* the fused levels' roots do not follow n, so unlike the
+	   general tables these are built once */
+
+	if (build_low(c)) goto fail;
 
 	/* mod(x)'s coefficients are the algebraic poly's scaled by powers
 	   of its leading coefficient: a few hundred bits at the most, so
@@ -2051,6 +2213,8 @@ void sqrt_gpu_free(void *ctx)
 	if (c->twf0) cudaFree(c->twf0);
 	if (c->twi1) cudaFree(c->twi1);
 	if (c->twi0) cudaFree(c->twi0);
+	if (c->lowf) cudaFree(c->lowf);
+	if (c->lowi) cudaFree(c->lowi);
 	if (c->hstage) cudaFreeHost(c->hstage);
 	if (c->have_mu || mpz_sgn(c->qprev) != 0) mpz_clear(c->qprev);
 	free(c);
