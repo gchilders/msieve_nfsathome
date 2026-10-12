@@ -2220,6 +2220,15 @@ void sqrt_gpu_free(void *ctx)
 	free(c);
 }
 
+uint64 sqrt_gpu_max_q(void *ctx)
+{
+	gctx *c = (gctx *)ctx;
+
+	if (c == NULL)
+		return 0;
+	return c->max_digits * DIGIT_BITS;
+}
+
 int sqrt_gpu_ok(void *ctx)
 {
 	gctx *c = (gctx *)ctx;

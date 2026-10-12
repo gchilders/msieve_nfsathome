@@ -61,6 +61,7 @@ static INLINE int sqrt_gpu_mod_q(void *ctx, mpz_poly_t *p, mpz_t q,
 	return -1;
 }
 static INLINE int sqrt_gpu_ok(void *ctx) { (void)ctx; return 0; }
+static INLINE uint64 sqrt_gpu_max_q(void *ctx) { (void)ctx; return 0; }
 
 #else
 
@@ -118,6 +119,14 @@ int sqrt_gpu_mod_q(void *ctx, mpz_poly_t *p, mpz_t q, mpz_poly_t *res);
    itself off and everything after it runs on the CPU. */
 
 int sqrt_gpu_ok(void *ctx);
+
+/* The largest modulus this context was built for. The lift's last
+   step is the largest thing the card is asked to hold, and the
+   context it inherits was sized for something else -- the product
+   tree's root, guessed from a node partway up -- so the lift has to
+   be able to ask whether what it was handed is big enough. */
+
+uint64 sqrt_gpu_max_q(void *ctx);
 
 #endif /* HAVE_CUDA */
 

@@ -1059,7 +1059,7 @@ static uint32 get_initial_inv_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 /*-------------------------------------------------------------------*/
 static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 			mpz_poly_t *prod, mpz_poly_t *isqrt_mod_q, 
-			mpz_t q, void *gpu_in) {
+			mpz_t q, void **gpu_io) {
 
 	/* the main q-adic Newton iteration. On input, isqrt_mod_q
 	   contains the starting value of the reciprocal square
@@ -1084,8 +1084,7 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	mpz_t *qs = NULL;
 	mpz_poly_t tmp_poly;
 	uint32 qs_alloc = 0;
-	void *gpu = gpu_in;
-	int own_gpu = 0;
+	void *gpu = *gpu_io;
 
 	/* initialize */
 
@@ -1115,17 +1114,44 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 	}
 
 	/* q is at its final size here, before being wound back to the
-	   seed, so this is where the GPU can be told how big the lift
-	   will get -- if the product tree has not already made one the
-	   right size, which it will have whenever it used the card: the
-	   final modulus is half the root product by construction. A NULL
-	   context means every call below declines and the CPU path runs
-	   exactly as it did; it is not an error */
+	   seed, so this is where the card can be told how big the lift
+	   will get -- and it is the only place that knows. Whatever
+	   context the product tree left behind was sized for something
+	   else: either a guess at the root product made from one node
+	   partway up the tree, or whatever a node later asked it to
+	   grow to. Neither is this.
 
-	if (gpu == NULL) {
-		gpu = sqrt_gpu_init(obj, (uint64)mpz_sizeinbase(q, 2),
-					alg_poly->degree);
-		own_gpu = 1;
+	   The guess is low on a C209 by about a quarter, and the tree
+	   only corrects it by growing when it actually sends a node to
+	   the card. So a tree that declines every node -- which is what
+	   a gate reading under one node does -- leaves the lift holding
+	   a context too small for its last and largest step, and that
+	   step is two thirds of the lift. Measured: 683 seconds on the
+	   CPU where the step before it, half the size, took 178 on the
+	   card.
+
+	   Free the old one before building the new one rather than
+	   after. They do not both fit: on that C209 the tree's was
+	   19.3 GB and the lift wants 23.2 of a 39.1 GB card. A NULL
+	   context means every call below declines and the CPU path
+	   runs exactly as it did; it is not an error */
+
+	{
+		uint64 want = (uint64)mpz_sizeinbase(q, 2);
+
+		if (gpu != NULL && sqrt_gpu_max_q(gpu) < want) {
+			logprintf(obj, "square root: lift needs %.0lf Mbit, "
+					"the tree left %.0lf, rebuilding\n",
+					(double)want / 1e6,
+					(double)sqrt_gpu_max_q(gpu) / 1e6);
+			sqrt_gpu_free(gpu);
+			gpu = NULL;
+			*gpu_io = NULL;
+		}
+		if (gpu == NULL) {
+			gpu = sqrt_gpu_init(obj, want, alg_poly->degree);
+			*gpu_io = gpu;
+		}
 	}
 
 	mpz_poly_mod_q(prod, q, prod);
@@ -1299,8 +1325,6 @@ static uint32 get_final_sqrt(msieve_obj *obj, mpz_poly_t *alg_poly,
 		}
 	}
 	mpz_poly_free(&tmp_poly);
-	if (own_gpu)
-		sqrt_gpu_free(gpu);
 
 	/* the loop hands each residue over and frees it as it climbs,
 	   and has no way out before the top, so what is left here is
@@ -1561,7 +1585,7 @@ void alg_square_root(msieve_obj *obj, mpz_poly_t *alg_poly,
 	/* compute the actual square root */
 
 	if (get_final_sqrt(obj, alg_poly, &prod, &alg_sqrt, q,
-				prodinfo.gpu))
+				&prodinfo.gpu))
 		convert_to_integer(&alg_sqrt, n, c, m1, m0, sqrt_a);
 
 finished:
